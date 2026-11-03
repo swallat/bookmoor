@@ -28,6 +28,7 @@ clarity, craft, and the "AI slop" tells.
   Now 2 px in the master and full-bleed in the small variant. The small variant
   drops detail that cannot survive 16 px.
 - Slop tells: no gradients, glow, drop shadows, or generic sparkle. Three flat colors.
-- Contrast: cream on green is about 9:1, amber on cream is the weak pair, so the eye
-  is always ringed by green or sits on it.
+- Contrast: cream on green is about 9:1, amber on cream is the weak pair (about 2:1). The master
+  ringed the eye in green for that reason. The small variant drops the ring and
+  relies on hue and size, so it is a known compromise at 16 px.
 - Not done: a wordmark lockup. It needs a font decision and outlined text.
