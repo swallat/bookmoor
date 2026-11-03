@@ -9,6 +9,7 @@ pub enum Change {
         kind: Kind,
         title: String,
         url: Option<String>,
+        position: String,
     },
     Removed {
         id: NodeId,
@@ -25,12 +26,19 @@ pub enum Change {
         id: NodeId,
         new_parent: NodeId,
     },
+    /// The node's fractional position among its siblings changed. A move to
+    /// another folder that also changes the position yields `Moved` and
+    /// `Reordered`.
+    Reordered {
+        id: NodeId,
+        position: String,
+    },
 }
 
 /// Compute what changed from `base` to `current`.
 ///
 /// `Added` changes are ordered parent-first so they can be applied in sequence.
-/// Reordering among siblings is not reported yet.
+/// Sibling order is compared by `position`, not by index in `children`.
 pub fn diff(base: &Tree, current: &Tree) -> Vec<Change> {
     let b = base.flatten();
     let c = current.flatten();
@@ -58,6 +66,7 @@ pub fn diff(base: &Tree, current: &Tree) -> Vec<Change> {
                         kind: now.kind,
                         title: now.title.clone(),
                         url: now.url.clone(),
+                        position: now.position.clone(),
                     },
                 ));
             }
@@ -84,6 +93,12 @@ pub fn diff(base: &Tree, current: &Tree) -> Vec<Change> {
                         });
                     }
                 }
+                if before.position != now.position && now.parent.is_some() {
+                    changes.push(Change::Reordered {
+                        id: id.clone(),
+                        position: now.position.clone(),
+                    });
+                }
             }
         }
     }
@@ -104,16 +119,18 @@ mod tests {
     use super::*;
     use crate::model::{Bookmark, Folder, Node};
 
-    fn bm(id: &str, title: &str, url: &str) -> Node {
+    fn bm(id: &str, pos: &str, title: &str, url: &str) -> Node {
         Node::Bookmark(Bookmark {
             id: id.into(),
+            position: pos.into(),
             title: title.into(),
             url: url.into(),
         })
     }
-    fn folder(id: &str, title: &str, children: Vec<Node>) -> Node {
+    fn folder(id: &str, pos: &str, title: &str, children: Vec<Node>) -> Node {
         Node::Folder(Folder {
             id: id.into(),
+            position: pos.into(),
             title: title.into(),
             children,
         })
@@ -124,10 +141,14 @@ mod tests {
         t
     }
 
+    fn gh() -> Node {
+        bm("b1", "V", "GitHub", "https://github.com")
+    }
+
     fn base() -> Tree {
         tree(vec![
-            folder("f1", "Dev", vec![bm("b1", "GitHub", "https://github.com")]),
-            folder("f2", "News", vec![]),
+            folder("f1", "V", "Dev", vec![gh()]),
+            folder("f2", "W", "News", vec![]),
         ])
     }
 
@@ -141,10 +162,11 @@ mod tests {
         let cur = tree(vec![
             folder(
                 "f1",
+                "V",
                 "Dev",
-                vec![bm("b1", "GH", "https://github.com/explore")],
+                vec![bm("b1", "V", "GH", "https://github.com/explore")],
             ),
-            folder("f2", "News", vec![]),
+            folder("f2", "W", "News", vec![]),
         ]);
         let d = diff(&base(), &cur);
         assert!(d.contains(&Change::Renamed {
@@ -161,8 +183,8 @@ mod tests {
     #[test]
     fn detects_removal() {
         let cur = tree(vec![
-            folder("f1", "Dev", vec![]),
-            folder("f2", "News", vec![]),
+            folder("f1", "V", "Dev", vec![]),
+            folder("f2", "W", "News", vec![]),
         ]);
         assert_eq!(
             diff(&base(), &cur),
@@ -173,8 +195,8 @@ mod tests {
     #[test]
     fn detects_move_between_folders() {
         let cur = tree(vec![
-            folder("f1", "Dev", vec![]),
-            folder("f2", "News", vec![bm("b1", "GitHub", "https://github.com")]),
+            folder("f1", "V", "Dev", vec![]),
+            folder("f2", "W", "News", vec![gh()]),
         ]);
         assert_eq!(
             diff(&base(), &cur),
@@ -186,15 +208,98 @@ mod tests {
     }
 
     #[test]
-    fn added_nodes_are_ordered_parent_first() {
+    fn move_with_new_position_reports_both() {
         let cur = tree(vec![
-            folder("f1", "Dev", vec![bm("b1", "GitHub", "https://github.com")]),
-            folder("f2", "News", vec![]),
+            folder("f1", "V", "Dev", vec![]),
+            folder(
+                "f2",
+                "W",
+                "News",
+                vec![bm("b1", "a", "GitHub", "https://github.com")],
+            ),
+        ]);
+        let d = diff(&base(), &cur);
+        assert_eq!(
+            d,
+            vec![
+                Change::Moved {
+                    id: "b1".into(),
+                    new_parent: "f2".into()
+                },
+                Change::Reordered {
+                    id: "b1".into(),
+                    position: "a".into()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn detects_reorder_within_folder() {
+        let before = tree(vec![folder(
+            "f1",
+            "V",
+            "Dev",
+            vec![
+                bm("b1", "V", "A", "https://a.example"),
+                bm("b2", "W", "B", "https://b.example"),
+            ],
+        )]);
+        // b2 moves in front of b1: only b2 changes position.
+        let after = tree(vec![folder(
+            "f1",
+            "V",
+            "Dev",
+            vec![
+                bm("b2", "G", "B", "https://b.example"),
+                bm("b1", "V", "A", "https://a.example"),
+            ],
+        )]);
+        assert_eq!(
+            diff(&before, &after),
+            vec![Change::Reordered {
+                id: "b2".into(),
+                position: "G".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn child_order_in_vec_is_irrelevant_to_diff() {
+        let a = tree(vec![
+            folder("f1", "V", "Dev", vec![]),
+            folder("f2", "W", "News", vec![]),
+        ]);
+        let b = tree(vec![
+            folder("f2", "W", "News", vec![]),
+            folder("f1", "V", "Dev", vec![]),
+        ]);
+        assert!(diff(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn sort_orders_by_position_then_id() {
+        let mut t = tree(vec![
+            bm("b3", "W", "C", "https://c.example"),
+            bm("b2", "V", "B", "https://b.example"),
+            bm("b1", "V", "A", "https://a.example"),
+        ]);
+        t.sort();
+        let ids: Vec<&str> = t.root.children.iter().map(Node::id).collect();
+        assert_eq!(ids, ["b1", "b2", "b3"]);
+    }
+
+    #[test]
+    fn added_nodes_carry_position_and_are_ordered_parent_first() {
+        let cur = tree(vec![
+            folder("f1", "V", "Dev", vec![gh()]),
+            folder("f2", "W", "News", vec![]),
             // child id sorts before parent id on purpose
             folder(
                 "z9",
+                "X",
                 "New",
-                vec![bm("a1", "HN", "https://news.ycombinator.com")],
+                vec![bm("a1", "V", "HN", "https://news.ycombinator.com")],
             ),
         ]);
         let d = diff(&base(), &cur);
@@ -204,5 +309,9 @@ mod tests {
                 .unwrap()
         };
         assert!(pos("z9") < pos("a1"));
+        assert!(matches!(
+            &d[pos("z9")],
+            Change::Added { position, .. } if position == "X"
+        ));
     }
 }
