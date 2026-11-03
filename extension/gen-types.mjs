@@ -14,7 +14,8 @@ const ts = await compileFromFile(fileURLToPath(new URL("../schema/wire.schema.js
   style: { singleQuote: false },
 });
 if (process.argv.includes("--check")) {
-  if (readFileSync(out, "utf8") !== ts) {
+  // Windows checkouts may use CRLF line endings.
+  if (readFileSync(out, "utf8").replace(/\r\n/g, "\n") !== ts) {
     console.error("src/wire.ts is stale; run `npm run gen:types`");
     process.exit(1);
   }
