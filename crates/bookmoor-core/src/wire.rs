@@ -131,7 +131,10 @@ mod tests {
             std::fs::create_dir_all(std::path::Path::new(SCHEMA_PATH).parent().unwrap()).unwrap();
             std::fs::write(SCHEMA_PATH, &fresh).unwrap();
         }
-        let on_disk = std::fs::read_to_string(SCHEMA_PATH).unwrap_or_default();
+        // Git on Windows may check the file out with CRLF line endings.
+        let on_disk = std::fs::read_to_string(SCHEMA_PATH)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         assert_eq!(
             on_disk, fresh,
             "schema/wire.schema.json is stale; run: BOOKMOOR_UPDATE_SCHEMA=1 cargo test -p bookmoor-core schema_is_up_to_date"
