@@ -12,4 +12,5 @@ await build({
 });
 cpSync("manifest.json", "dist/manifest.json");
 cpSync("src/options.html", "dist/options.html");
+cpSync("icons", "dist/icons", { recursive: true });
 console.log("built -> dist/ (load it via chrome://extensions > Load unpacked)");
