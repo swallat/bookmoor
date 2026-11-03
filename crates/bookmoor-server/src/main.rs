@@ -83,12 +83,15 @@ async fn main() {
         "bookmoor-server {} listening on {bind}",
         env!("CARGO_PKG_VERSION")
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .expect("server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    .expect("server error");
 }
 
 fn fail(msg: &str) -> ! {

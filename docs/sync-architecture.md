@@ -339,8 +339,14 @@ Token design
   maps to exactly one endpoint, which makes revocation = "stop this device".
 - Rotation: create a new token, update the device, revoke the old one. No
   automatic expiry in v0.1; `last_used_at` allows spotting stale ones.
-- Rate limiting per token and per IP, failed-auth throttling; auth failures
-  return a uniform `401`.
+- Rate limiting: a token bucket per token (burst 120, 10/s) and a separate
+  bucket per peer IP that only failed authentications draw from (burst 10,
+  then one per 5 s), so bad tokens get `429` with `Retry-After` while a valid
+  token behind the same address (a reverse proxy) is unaffected. Auth
+  failures otherwise return a uniform `401`. Buckets are in memory and
+  bounded. Behind a proxy the peer IP is the proxy's, so the failed-auth
+  bucket is then shared by all clients; `X-Forwarded-For` is deliberately not
+  trusted.
 - The extension stores the token in `chrome.storage.local`, not `sync`
   (already so in `settings.ts`). Chrome does not offer a secure secret store for
   extensions; the token is readable by anyone with access to the profile.
