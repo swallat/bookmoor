@@ -9,10 +9,12 @@ export interface Settings {
   token: string;
   /** Extra headers sent with every request, e.g. a Pangolin header-auth pair (outer auth layer). */
   headers: HeaderEntry[];
+  /** Extra query parameters sent with every request, e.g. a share-link token. */
+  query: HeaderEntry[];
 }
 
 const KEY = "settings";
-const EMPTY: Settings = { serverUrl: "", token: "", headers: [] };
+const EMPTY: Settings = { serverUrl: "", token: "", headers: [], query: [] };
 
 // Secrets stay in storage.local on purpose: storage.sync would copy them to
 // every device signed into the browser profile.
@@ -37,4 +39,19 @@ export function buildHeaders(s: Settings): Headers {
 export function originPattern(serverUrl: string): string {
   const u = new URL(serverUrl);
   return `${u.protocol}//${u.host}/*`;
+}
+
+/**
+ * URL of an API path below the configured server URL. A path prefix in the
+ * server URL (`https://host/bookmoor`, for a server mounted below a proxy
+ * path) is kept, and query parameters in the server URL and the configured
+ * extra ones are added to every request.
+ */
+export function endpointUrl(s: Pick<Settings, "serverUrl" | "query">, path: string): string {
+  const u = new URL(s.serverUrl);
+  u.pathname = u.pathname.replace(/\/+$/, "") + path;
+  for (const { name, value } of s.query ?? []) {
+    if (name.trim()) u.searchParams.set(name.trim(), value);
+  }
+  return u.toString();
 }

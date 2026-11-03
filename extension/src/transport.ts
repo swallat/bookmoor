@@ -1,10 +1,10 @@
 import { HttpError, type Transport } from "./flow.ts";
-import { buildHeaders, type Settings } from "./settings.ts";
+import { buildHeaders, endpointUrl, type Settings } from "./settings.ts";
 import type { SyncRequest, SyncResponse, TreeResponse } from "./wire.ts";
 
 /** The server API over `fetch`. */
 export function httpTransport(settings: Settings, fetchImpl: typeof fetch = fetch): Transport {
-  const url = (path: string) => new URL(path, settings.serverUrl).toString();
+  const url = (path: string) => endpointUrl(settings, path);
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     const res = await fetchImpl(url(path), {
       method,

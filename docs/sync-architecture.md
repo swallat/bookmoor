@@ -317,7 +317,15 @@ Two layers, as in architecture.md:
 1. **Outer (optional):** a reverse proxy in front of the server (e.g. Pangolin
    header auth, Authelia, Cloudflare Access). The extension sends the
    user-configured static headers (`Settings.headers`). The server does
-   not interpret them; it must work with or without them.
+   not interpret them; it must work with or without them. Besides the
+   headers, the options page takes extra query parameters (for a token carried
+   in the URL, as share links do) that go on every request, and the server URL
+   may carry a path prefix and query of its own (`https://host/bookmoor?x=1`).
+   Examples: Cloudflare Access service tokens are two headers
+   (`CF-Access-Client-Id`, `CF-Access-Client-Secret`); a Cloudflare Tunnel or
+   Pangolin in front leaves the server on loopback; over a Netbird or other
+   WireGuard mesh the server binds the mesh address with `--insecure-http`
+   (the tunnel encrypts) and the extension is given the `http://` URL.
 2. **Inner (mandatory):** bookmoor API tokens.
 
 Token design
