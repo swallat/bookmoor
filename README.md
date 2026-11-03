@@ -19,7 +19,7 @@ Chrome / Firefox extension  <->  bookmoor server (canonical tree)  <->  adapters
 - Authentication has two layers: an optional reverse-proxy layer (custom
   headers, e.g. Pangolin header auth) and bookmoor's own per-device API tokens.
 
-See [docs/architecture.md](docs/architecture.md).
+See [docs/architecture.md](docs/architecture.md) and [docs/sync-architecture.md](docs/sync-architecture.md).
 
 ## Layout
 
