@@ -47,5 +47,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run check:types
+      # The end-to-end tests drive the real server binary.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p bookmoor-server --locked
+        working-directory: .
       - run: npm test
+        env:
+          BOOKMOOR_E2E_REQUIRED: "1"
       - run: npm run build
