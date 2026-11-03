@@ -135,6 +135,16 @@ Notes
 - A large first sync is chunked (`ops` max e.g. 500 per request; the client
   loops until it has sent everything, keeping `since_rev` of the last response).
 - Pulling without local changes is the same call with `ops: []`.
+- In a response, an `add` for an id the client already has is an **upsert**
+  of the full node (parent, position, title, url). The server uses it to
+  restore nodes after a conflict (edit wins over delete, revived folders,
+  re-parenting) and to re-assert nodes the client dropped together with a
+  subtree that others changed concurrently. Clients apply response ops in
+  order.
+- Fields are last-write-wins by arrival order at the server; the engine
+  tracks the endpoint and revision of the last change per field group of each
+  node and compares it with the request's `since_rev` for edit-vs-delete
+  decisions.
 - Server-side limits: body size, ops per request, tree size; reject with
   `413` / `422` rather than truncating.
 - HTTP status: `401/403` auth, `409` never (conflicts are resolved, not
