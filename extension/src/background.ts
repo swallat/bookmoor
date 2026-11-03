@@ -27,7 +27,7 @@ async function round(): Promise<void> {
     chromeBookmarks,
     chromeStateStore,
     httpTransport(settings),
-    `${settings.serverUrl}\n${settings.token}`,
+    `${settings.serverUrl}\n${settings.token}\n${JSON.stringify(settings.query)}`,
   );
   const stored = await chrome.storage.local.get(FAILURES);
   const failures = outcome === "retry" ? ((stored[FAILURES] as number | undefined) ?? 0) + 1 : 0;

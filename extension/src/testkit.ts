@@ -208,7 +208,7 @@ export async function startServer(bin: string): Promise<Server> {
     if (i > 100) throw new Error("server did not start");
     await new Promise((r) => setTimeout(r, 50));
   }
-  const settings = (token: string): Settings => ({ serverUrl: url, token, headers: [] });
+  const settings = (token: string): Settings => ({ serverUrl: url, token, headers: [], query: [] });
   return {
     url,
     admin,

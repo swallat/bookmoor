@@ -2,13 +2,13 @@ import { loadSettings, originPattern, saveSettings, type HeaderEntry } from "./s
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-function headerRow(entry: HeaderEntry = { name: "", value: "" }): HTMLDivElement {
+function pairRow(entry: HeaderEntry = { name: "", value: "" }, what = "Header"): HTMLDivElement {
   const row = document.createElement("div");
   row.className = "row";
-  const name = Object.assign(document.createElement("input"), { placeholder: "Header name", value: entry.name });
+  const name = Object.assign(document.createElement("input"), { placeholder: `${what} name`, value: entry.name });
   const value = Object.assign(document.createElement("input"), {
     type: "password",
-    placeholder: "Header value",
+    placeholder: `${what} value`,
     value: entry.value,
   });
   const remove = Object.assign(document.createElement("button"), { type: "button", textContent: "Remove" });
@@ -17,8 +17,8 @@ function headerRow(entry: HeaderEntry = { name: "", value: "" }): HTMLDivElement
   return row;
 }
 
-function readHeaders(): HeaderEntry[] {
-  return [...$("headers").querySelectorAll<HTMLDivElement>(".row")]
+function readPairs(container: string): HeaderEntry[] {
+  return [...$(container).querySelectorAll<HTMLDivElement>(".row")]
     .map((row) => {
       const [name, value] = row.querySelectorAll("input");
       return { name: name?.value ?? "", value: value?.value ?? "" };
@@ -30,8 +30,10 @@ async function init(): Promise<void> {
   const s = await loadSettings();
   $<HTMLInputElement>("url").value = s.serverUrl;
   $<HTMLInputElement>("token").value = s.token;
-  for (const h of s.headers) $("headers").append(headerRow(h));
-  $("add").addEventListener("click", () => $("headers").append(headerRow()));
+  for (const h of s.headers) $("headers").append(pairRow(h));
+  for (const q of s.query) $("query").append(pairRow(q, "Parameter"));
+  $("add").addEventListener("click", () => $("headers").append(pairRow()));
+  $("addq").addEventListener("click", () => $("query").append(pairRow(undefined, "Parameter")));
   $("save").addEventListener("click", async () => {
     const status = $("status");
     try {
@@ -39,7 +41,12 @@ async function init(): Promise<void> {
       // Must run inside the click handler: permission requests need a user gesture.
       const granted = await chrome.permissions.request({ origins: [originPattern(serverUrl)] });
       if (!granted) throw new Error("Permission for the server origin was denied.");
-      await saveSettings({ serverUrl, token: $<HTMLInputElement>("token").value, headers: readHeaders() });
+      await saveSettings({
+        serverUrl,
+        token: $<HTMLInputElement>("token").value,
+        headers: readPairs("headers"),
+        query: readPairs("query"),
+      });
       status.textContent = "Saved.";
     } catch (e) {
       status.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
