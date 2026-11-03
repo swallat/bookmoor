@@ -16,8 +16,11 @@ pub enum IdentityStrategy {
 
 impl IdentityStrategy {
     /// Default preference order: field, then comment, then fingerprint.
-    pub const DEFAULT_ORDER: [IdentityStrategy; 3] =
-        [IdentityStrategy::Field, IdentityStrategy::Comment, IdentityStrategy::Fingerprint];
+    pub const DEFAULT_ORDER: [IdentityStrategy; 3] = [
+        IdentityStrategy::Field,
+        IdentityStrategy::Comment,
+        IdentityStrategy::Fingerprint,
+    ];
 }
 
 /// Fingerprint of an entry: normalised group path, title and URL joined by

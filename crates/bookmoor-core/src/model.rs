@@ -56,7 +56,11 @@ pub struct FlatNode {
 impl Tree {
     pub fn new(root_id: impl Into<NodeId>, title: impl Into<String>) -> Self {
         Tree {
-            root: Folder { id: root_id.into(), title: title.into(), children: Vec::new() },
+            root: Folder {
+                id: root_id.into(),
+                title: title.into(),
+                children: Vec::new(),
+            },
         }
     }
 
@@ -65,7 +69,12 @@ impl Tree {
         let mut out = BTreeMap::new();
         out.insert(
             self.root.id.clone(),
-            FlatNode { parent: None, kind: Kind::Folder, title: self.root.title.clone(), url: None },
+            FlatNode {
+                parent: None,
+                kind: Kind::Folder,
+                title: self.root.title.clone(),
+                url: None,
+            },
         );
         flatten_children(&self.root, &mut out);
         out
