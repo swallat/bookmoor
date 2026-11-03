@@ -2,7 +2,7 @@
 // and produce ops. Events are only a trigger, so a missed event cannot lose
 // a change (docs/sync-architecture.md, 5.3).
 
-import { between, compareSiblings } from "./position.ts";
+import { between } from "./position.ts";
 import {
   type BaseNode,
   type LocalNode,
@@ -16,7 +16,6 @@ import {
 import type { Op, Op1 as OpBody } from "./wire.ts";
 
 interface Seen {
-  sid: string;
   parent: string;
   node: LocalNode;
 }
@@ -106,7 +105,7 @@ export function computeOps(state: SyncState, tree: LocalNode[]): Op[] {
         sid = newServerId();
         state.map[c.id] = sid;
       }
-      seen.set(sid, { sid, parent: parentSid, node: c });
+      seen.set(sid, { parent: parentSid, node: c });
       order.push(sid);
       const list = kids.get(parentSid) ?? [];
       list.push(sid);
@@ -115,13 +114,9 @@ export function computeOps(state: SyncState, tree: LocalNode[]): Op[] {
     }
   };
   // The role folders are fixed; their sids come from the map.
-  const roleSids: string[] = [];
   for (const c of root.children ?? []) {
     const sid = state.map[c.id];
-    if (sid && sid !== ROOT && !c.unmodifiable) {
-      roleSids.push(sid);
-      walk(c, sid);
-    }
+    if (sid && sid !== ROOT && !c.unmodifiable) walk(c, sid);
   }
 
   // Positions per folder.
@@ -209,6 +204,18 @@ export function computeOps(state: SyncState, tree: LocalNode[]): Op[] {
     bodies.push({ type: "remove", id: sid });
   }
   for (const b of bodies) if (b.type === "remove") applyToBase(state.base, b);
+
+  // Forget browser nodes that are gone, so the persisted state stays small.
+  const live = new Set<string>();
+  const collect = (n: LocalNode) => {
+    live.add(n.id);
+    n.children?.forEach(collect);
+  };
+  collect(root);
+  for (const [chrome, sid] of Object.entries(state.map)) {
+    if (!(sid in state.base) || !live.has(chrome)) delete state.map[chrome];
+  }
+  for (const chrome of Object.keys(state.ignored)) if (!live.has(chrome)) delete state.ignored[chrome];
 
   return bodies.map((body) => ({ op_id: nextOpId(state), ...body }) as Op);
 }

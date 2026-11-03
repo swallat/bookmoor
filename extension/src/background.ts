@@ -27,6 +27,7 @@ async function round(): Promise<void> {
     chromeBookmarks,
     chromeStateStore,
     httpTransport(settings),
+    `${settings.serverUrl}\n${settings.token}`,
   );
   const stored = await chrome.storage.local.get(FAILURES);
   const failures = outcome === "retry" ? ((stored[FAILURES] as number | undefined) ?? 0) + 1 : 0;
@@ -55,8 +56,9 @@ chrome.bookmarks.onImportEnded.addListener(schedulePush);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === PUSH || a.name === PULL) run();
 });
-chrome.runtime.onStartup.addListener(run);
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(PULL, { periodInMinutes: 5 });
-  run();
+// Alarms may be gone after a browser restart, so make sure on every start.
+void chrome.alarms.get(PULL).then((a) => {
+  if (!a) chrome.alarms.create(PULL, { periodInMinutes: 5 });
 });
+chrome.runtime.onStartup.addListener(run);
+chrome.runtime.onInstalled.addListener(run);

@@ -48,8 +48,12 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
     await add(b, "2", "Only on b", "https://b.example/");
     await sync(a, b);
     same(a, b);
-    const titles = JSON.stringify(a.api.shape());
-    assert.equal(titles.split("Same").length - 1 >= 1, true);
+    for (const x of [a, b]) {
+      const titles = [...x.api.nodes.values()].map((n) => n.title);
+      assert.equal(titles.filter((t) => t === "Same").length, 1);
+      assert.equal(titles.filter((t) => t === "Shared folder").length, 1);
+      assert.equal(titles.filter((t) => t === "Only on b").length, 1);
+    }
   });
 
   it("propagates renames, moves, reorders and deletes", async () => {
@@ -113,6 +117,34 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
     await sync(a, b);
     same(a, b);
     assert.equal(JSON.stringify(b.api.shape()).split("Twice").length - 1, 1);
+  });
+
+  it("recovers from conflicting moves that would form a cycle", async () => {
+    const a = await server.browser();
+    const b = await server.browser();
+    const x = await add(a, "1", "CycX");
+    const y = await add(a, "1", "CycY");
+    await sync(a, b);
+    const bx = [...b.api.nodes.values()].find((n) => n.title === "CycX")!.id;
+    const by = [...b.api.nodes.values()].find((n) => n.title === "CycY")!.id;
+    await a.api.move(x, { parentId: y });
+    await b.api.move(by, { parentId: bx });
+    await sync(a, b);
+    await sync(a, b);
+    same(a, b);
+  });
+
+  it("starts afresh when the token changes", async () => {
+    const a = await server.browser();
+    await add(a, "1", "Before", "https://before.example/");
+    a.identity = "one";
+    await sync(a);
+    const other = await server.browser();
+    a.transport = other.transport;
+    a.identity = "two";
+    await sync(a);
+    const titles = [...a.api.nodes.values()].map((n) => n.title);
+    assert.equal(titles.filter((t) => t === "Before").length, 1);
   });
 
   it("reports a bad token as auth", async () => {

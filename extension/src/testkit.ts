@@ -121,8 +121,9 @@ export class Browser {
   constructor(transport: Transport) {
     this.transport = transport;
   }
+  identity = "";
   flush(): Promise<Outcome> {
-    return flush(this.api, this.store, this.transport);
+    return flush(this.api, this.store, this.transport, this.identity);
   }
 }
 

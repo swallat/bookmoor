@@ -47,6 +47,8 @@ export interface SyncState {
   base: Record<string, BaseNode>;
   /** Sent (or about to be) but not yet acknowledged; resent as is. */
   pending: Op[];
+  /** Server and token this state belongs to; a change starts afresh. */
+  identity: string;
   /** Browser nodes the server refused (invalid); never offered again. */
   ignored: Record<string, true>;
 }
@@ -54,8 +56,8 @@ export interface SyncState {
 export const ROOT = "root";
 export const ROLES = ["toolbar", "other", "mobile"] as const;
 
-export function emptyState(endpointId: string): SyncState {
-  return { endpointId, rev: 0, counter: 0, map: {}, base: {}, pending: [], ignored: {} };
+export function emptyState(endpointId: string, identity = ""): SyncState {
+  return { endpointId, identity, rev: 0, counter: 0, map: {}, base: {}, pending: [], ignored: {} };
 }
 
 export function kindOf(n: LocalNode): Kind {
@@ -104,15 +106,4 @@ export function newServerId(): string {
 export function nextOpId(state: SyncState): string {
   state.counter += 1;
   return `${state.endpointId}-${state.counter}`;
-}
-
-/** Children of a base node, in sibling order. */
-export function baseChildren(base: Record<string, BaseNode>, parent: string): string[] {
-  return Object.keys(base)
-    .filter((id) => base[id]!.parent === parent)
-    .sort((a, b) => {
-      const pa = base[a]!.position;
-      const pb = base[b]!.position;
-      return pa < pb ? -1 : pa > pb ? 1 : a < b ? -1 : a > b ? 1 : 0;
-    });
 }
