@@ -1,3 +1,5 @@
-//! bookmoor server library: the sync engine and (later) storage and HTTP.
+//! bookmoor server library: sync engine, token auth and HTTP API.
 
+pub mod api;
+pub mod auth;
 pub mod engine;
