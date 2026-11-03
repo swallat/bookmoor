@@ -49,17 +49,68 @@ class Applier {
     return k;
   }
 
-  /** Index among the local children of `parent` for a node at `position`. */
-  private async indexFor(parent: string, sid: string, position: string): Promise<number> {
+  /**
+   * Where a node at `position` goes among the local children of `parent`:
+   * `pre` counts the node itself if it is already there (what Chrome's
+   * `move` expects when moving down), `final` is its index afterwards.
+   */
+  private async target(
+    parent: string,
+    sid: string,
+    position: string,
+    self?: string,
+  ): Promise<{ pre: number; final: number; same: boolean; selfIdx: number }> {
     const kids = await this.children(parent);
-    let idx = 0;
+    let pre = 0;
     kids.forEach((cid, i) => {
       const csid = this.state.map[cid];
       const b = csid ? this.state.base[csid] : undefined;
       if (!csid || csid === sid || !b) return;
-      if (compareSiblings([b.position, csid], [position, sid]) < 0) idx = i + 1;
+      if (compareSiblings([b.position, csid], [position, sid]) < 0) pre = i + 1;
     });
-    return Math.min(idx, kids.length);
+    pre = Math.min(pre, kids.length);
+    const selfIdx = self ? kids.indexOf(self) : -1;
+    const same = selfIdx >= 0;
+    return { pre, final: same && selfIdx < pre ? pre - 1 : pre, same, selfIdx };
+  }
+
+  /**
+   * Move within or into a folder. Browsers disagree on what `index` means
+   * when a node moves down inside its own folder (Chrome counts the node
+   * itself, Firefox does not), so the first such move is checked and the
+   * answer remembered.
+   */
+  private async moveTo(
+    chrome: string,
+    parent: string,
+    sid: string,
+    position: string,
+    oldParent?: string,
+  ) {
+    const t = await this.target(parent, sid, position, chrome);
+    // A real downward move, not one that leaves the node where it is.
+    const down = t.same && t.final !== t.pre && t.final !== t.selfIdx;
+    const index = down && this.state.preRemoval === true ? t.pre : t.final;
+    await this.api.move(chrome, { parentId: parent, index });
+    if (down && this.state.preRemoval === undefined) {
+      this.kids.clear();
+      const now = await this.children(parent);
+      if (now.indexOf(chrome) === t.final) {
+        this.state.preRemoval = false;
+      } else {
+        this.state.preRemoval = true;
+        await this.api.move(chrome, { parentId: parent, index: t.pre });
+        this.kids.clear();
+      }
+      return;
+    }
+    // Keep the cached sibling lists current instead of reloading them.
+    const from = this.kids.get(oldParent ?? parent);
+    if (from) {
+      const i = from.indexOf(chrome);
+      if (i >= 0) from.splice(i, 1);
+    }
+    this.kids.get(parent)?.splice(t.final, 0, chrome);
   }
 
   private async removeLocal(sid: string): Promise<void> {
@@ -115,16 +166,15 @@ class Applier {
         const parent = this.rev.get(op.parent);
         if (!parent) return; // parent unknown here; a later resync repairs it
         const have = this.rev.get(op.id);
-        const index = await this.indexFor(parent, op.id, op.position);
         const b = state.base[op.id];
         if (have && b) {
           // Upsert of a node we already have.
           await this.fields(have, b, op.title, op.url);
-          await api.move(have, { parentId: parent, index });
-          this.kids.clear();
+          await this.moveTo(have, parent, op.id, op.position, this.rev.get(b.parent ?? ""));
           b.parent = op.parent;
           b.position = op.position;
         } else {
+          const { pre: index } = await this.target(parent, op.id, op.position);
           const made = await api.create({
             parentId: parent,
             index,
@@ -156,9 +206,7 @@ class Applier {
         const parent = this.rev.get(op.parent);
         const b = state.base[op.id];
         if (!chrome || !parent || !b) return;
-        const index = await this.indexFor(parent, op.id, op.position);
-        await api.move(chrome, { parentId: parent, index });
-        this.kids.clear();
+        await this.moveTo(chrome, parent, op.id, op.position, this.rev.get(b.parent ?? ""));
         b.parent = op.parent;
         b.position = op.position;
         return;
