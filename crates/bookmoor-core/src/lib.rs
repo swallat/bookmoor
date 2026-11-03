@@ -4,10 +4,12 @@
 pub mod adapter;
 pub mod diff;
 pub mod identity;
+pub mod merge;
 pub mod model;
 pub mod position;
 
 pub use adapter::{Adapter, Capabilities, Direction, Error, Result};
 pub use diff::{diff, Change};
 pub use identity::{fingerprint, IdentityStrategy};
+pub use merge::{merge, Merged, Reason, Rejected, Side};
 pub use model::{Bookmark, Folder, Kind, Node, NodeId, Tree};
