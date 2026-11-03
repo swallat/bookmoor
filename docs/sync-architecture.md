@@ -341,11 +341,11 @@ Token design
 
 ## 7. Open questions
 
-1. **Fractional index library**: write a small implementation in core (shared
-   test vectors with the extension) or depend on an existing crate/npm
-   package?
-2. **Edit-vs-delete policy** is "edit wins" above. Should it be configurable
-   per endpoint?
+1. **Fractional index library** — *decided*: small own implementation in
+   `bookmoor-core`, with shared test vectors that the extension also runs.
+   No external dependency; Rust and TypeScript order identically.
+2. **Edit-vs-delete policy** — *decided*: "edit wins" is fixed, not
+   configurable per endpoint.
 3. **Store `base` per endpoint as a copy or derive it from the op log?**
    The copy is simpler; the log is smaller. Decide after measuring with a
    realistic 20k-bookmark tree.
@@ -353,8 +353,8 @@ Token design
    bookmarks have stable `guid`s that could replace the fingerprint
    matching entirely; Chrome has `syncing`-managed GUIDs internally but does
    not expose them in the extension API.
-5. **Wire schema**: generate JSON Schema from Rust (`schemars`) and TypeScript
-   types from it, or hand-write both and test against shared fixtures?
+5. **Wire schema** — *decided*: generate JSON Schema from Rust (`schemars`)
+   and derive the TypeScript types from it. One source of truth.
 6. **Real-time push** (SSE/WebSocket) as v0.2 follow-up; MV3 service workers
    make long-lived connections awkward, so polling stays the baseline.
 
