@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Protocol",
+  "description": "All wire types in one schema document (`$defs`), so one generation step\ncovers the whole protocol.",
+  "type": "object",
+  "properties": {
+    "sync_request": {
+      "$ref": "#/$defs/SyncRequest"
+    },
+    "sync_response": {
+      "$ref": "#/$defs/SyncResponse"
+    },
+    "tree_response": {
+      "$ref": "#/$defs/TreeResponse"
+    }
+  },
+  "required": [
+    "sync_request",
+    "sync_response",
+    "tree_response"
+  ],
+  "$defs": {
+    "Kind": {
+      "type": "string",
+      "enum": [
+        "folder",
+        "bookmark"
+      ]
+    },
+    "Op": {
+      "description": "One client operation. `op_id` makes retried requests idempotent.",
+      "type": "object",
+      "properties": {
+        "op_id": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/Kind"
+            },
+            "parent": {
+              "type": "string"
+            },
+            "position": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "add"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "parent",
+            "position",
+            "kind",
+            "title"
+          ]
+        },
+        {
+          "description": "Partial update: only the fields that are present change.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "update"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "parent": {
+              "type": "string"
+            },
+            "position": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "move"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "parent",
+            "position"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "remove"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        }
+      ],
+      "required": [
+        "op_id"
+      ]
+    },
+    "RejectReason": {
+      "type": "string",
+      "enum": [
+        "conflict_lost",
+        "invalid",
+        "gone"
+      ]
+    },
+    "RejectedOp": {
+      "type": "object",
+      "properties": {
+        "op_id": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/RejectReason"
+        }
+      },
+      "required": [
+        "op_id",
+        "reason"
+      ]
+    },
+    "SyncRequest": {
+      "type": "object",
+      "properties": {
+        "endpoint_id": {
+          "type": "string"
+        },
+        "ops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Op"
+          }
+        },
+        "since_rev": {
+          "description": "Last server revision this client has applied.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "endpoint_id",
+        "since_rev",
+        "ops"
+      ]
+    },
+    "SyncResponse": {
+      "type": "object",
+      "properties": {
+        "ops": {
+          "description": "Canonical changes in `(since_rev, rev]`, excluding the client's own.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Op"
+          }
+        },
+        "rejected": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RejectedOp"
+          }
+        },
+        "resync": {
+          "description": "`true`: discard the local base and call `GET /v1/tree`.",
+          "type": "boolean"
+        },
+        "rev": {
+          "description": "New cursor.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rev",
+        "ops",
+        "rejected",
+        "resync"
+      ]
+    },
+    "TreeResponse": {
+      "description": "`GET /v1/tree`: the full canonical tree, flattened, parent-first.",
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireNode"
+          }
+        },
+        "rev": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rev",
+        "nodes"
+      ]
+    },
+    "WireNode": {
+      "description": "A node of the canonical tree as sent over the wire.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        },
+        "parent": {
+          "description": "`null` only for the tree root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "position": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "description": "Required for bookmarks, absent for folders.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "position",
+        "kind",
+        "title"
+      ]
+    }
+  }
+}
