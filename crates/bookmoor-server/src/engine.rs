@@ -270,7 +270,7 @@ impl Engine {
                 && stamp_ok(&r.title_st)
                 && stamp_ok(&r.url_st)
                 && stamp_ok(&r.place_st)
-                && r.deleted.as_ref().map_or(true, stamp_ok)
+                && r.deleted.as_ref().is_none_or(stamp_ok)
         });
         if !stamps_ok
             || s.log.iter().any(|e| e.rev > s.rev)

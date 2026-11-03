@@ -1,0 +1,62 @@
+# Build tooling for bookmoor. Install mise (https://mise.jdx.dev), then:
+#
+#   mise install        # Rust and Node in the versions below
+#   mise run build      # server (release) and browser extension
+#   mise tasks          # everything else
+#
+# The tasks mirror the commands in .github/workflows/ci.yml; keep them in step.
+
+[tools]
+node = "22"
+# stable matches CI; the minimum supported version is rust-version in Cargo.toml.
+rust = { version = "stable", components = "rustfmt,clippy" }
+
+[tasks.install]
+description = "Install the extension's npm dependencies"
+dir = "extension"
+run = "npm ci"
+
+[tasks."build:server"]
+description = "Build the server (release) into target/release"
+run = "cargo build --release --locked -p bookmoor-server"
+
+[tasks."build:extension"]
+description = "Build the browser extension into extension/dist"
+depends = ["install"]
+dir = "extension"
+run = "npm run build"
+
+[tasks.build]
+description = "Build the server and the browser extension"
+depends = ["build:server", "build:extension"]
+
+[tasks.check]
+description = "Everything CI checks: formatting, lints, type checks, tests"
+depends = ["check:rust", "check:extension"]
+
+[tasks."check:rust"]
+description = "cargo fmt --check, clippy, tests"
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets --locked -- -D warnings",
+  "cargo test --workspace --locked",
+]
+
+[tasks."check:extension"]
+description = "Extension type checks and tests (the end-to-end tests need the server built)"
+depends = ["install"]
+dir = "extension"
+run = [
+  "cargo build --locked -p bookmoor-server",
+  "npm run typecheck",
+  "npm run check:types",
+  "npm test",
+]
+
+[tasks.server]
+description = "Run the server on 127.0.0.1:8787 with its state in ./state.json"
+run = "cargo run --release -p bookmoor-server -- --state state.json"
+
+[tasks."token:create"]
+description = "Create an API token: mise run token:create -- --name laptop --scope sync"
+run = "cargo run --release -p bookmoor-server -- token create --state state.json"

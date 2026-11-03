@@ -1,0 +1,73 @@
+//! `bookmoor-server token create`: mint a token without a running server or
+//! a working admin token (for example after losing it).
+//!
+//! Guarded against accidents: it needs an existing state file named
+//! explicitly, refuses while a server (or another token command) holds the
+//! file, asks to retype the token name unless `--yes` is given, and makes
+//! admin tokens require `--allow-admin`.
+
+use crate::auth::Scope;
+use crate::store::{Lock, Store};
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::Path;
+
+pub struct TokenRequest<'a> {
+    pub state: &'a Path,
+    pub name: &'a str,
+    pub scope: Scope,
+    pub allow_admin: bool,
+    /// Skip the confirmation prompt (required without a terminal).
+    pub yes: bool,
+}
+
+/// Create the token and return its text, shown only once.
+pub fn create_token(
+    req: &TokenRequest,
+    confirm: impl FnOnce(&str) -> Result<bool, String>,
+) -> Result<String, String> {
+    let name = req.name.trim();
+    if req.scope == Scope::Admin && !req.allow_admin {
+        return Err("an admin token can do everything; pass --allow-admin if you mean it".into());
+    }
+    if !req.state.exists() {
+        return Err(format!(
+            "{} does not exist; start the server once with --state to create it",
+            req.state.display()
+        ));
+    }
+    let _lock = Lock::acquire(req.state)?;
+    let mut state = crate::api::AppState::open(Store::new(req.state))?;
+    if !req.yes {
+        let what = format!(
+            "Create a token with scope {} named {name:?} in {}",
+            req.scope,
+            req.state.display()
+        );
+        if !confirm(&what)? {
+            return Err("not confirmed, nothing was changed".into());
+        }
+    }
+    let (token, _) = state.issue_token(name, req.scope)?;
+    state
+        .persist()
+        .map_err(|e| format!("cannot save the state: {e}"))?;
+    Ok(token)
+}
+
+/// Ask on the terminal to retype the name; without a terminal, refuse.
+pub fn confirm_on_terminal(name: &str) -> impl FnOnce(&str) -> Result<bool, String> + '_ {
+    move |what| {
+        if !std::io::stdin().is_terminal() {
+            return Err("no terminal to ask on; pass --yes to confirm".into());
+        }
+        eprintln!("{what}.");
+        eprint!("Type the token name ({name}) to confirm: ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
+        Ok(line.trim() == name.trim())
+    }
+}

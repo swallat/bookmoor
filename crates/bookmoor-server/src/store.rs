@@ -22,6 +22,38 @@ struct LoadFile {
     tokens: Vec<TokenRecord>,
 }
 
+/// An exclusive OS lock on `<state>.lock`, so the server and the token
+/// command never write the state at the same time. The kernel drops it when
+/// the process ends, however it ends; the empty file may stay behind.
+#[derive(Debug)]
+pub struct Lock {
+    _file: File,
+}
+
+impl Lock {
+    pub fn acquire(state: &Path) -> Result<Lock, String> {
+        let mut name = state.file_name().unwrap_or_default().to_os_string();
+        name.push(".lock");
+        let path = state.with_file_name(name);
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Lock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+                "{} is in use: another bookmoor-server or token command has this state open",
+                path.display()
+            )),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(format!("cannot lock {}: {e}", path.display()))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     path: PathBuf,

@@ -32,15 +32,38 @@ See [docs/architecture.md](docs/architecture.md) and [docs/sync-architecture.md]
 
 ## Development
 
-```bash
-cargo test
-```
+Tools and build commands run through [mise](https://mise.jdx.dev):
 
 ```bash
-cd extension && npm install && npm run build
+mise install          # Rust and Node
+mise run build        # server (target/release) and extension (extension/dist)
+mise run check        # what CI checks
+mise run server       # start the server, state in ./state.json
+mise tasks            # all tasks
 ```
 
-Then load `extension/dist` via `chrome://extensions` > Developer mode > Load unpacked.
+Without mise: `cargo test`, and `cd extension && npm ci && npm run build`.
+Load `extension/dist` via `chrome://extensions` > Developer mode > Load unpacked.
+
+### Tokens
+
+The first start with a new state file prints an admin token once. Only a hash
+is stored, so a lost token cannot be shown again. Device tokens come from
+`POST /v1/tokens` (admin token required) or, with the server stopped, from the
+command line:
+
+```bash
+mise run token:create -- --name laptop --scope sync
+# or: bookmoor-server token create --name laptop --scope sync --state state.json
+```
+
+The command refuses to run while a server holds the state file (an OS lock on
+`state.json.lock`, released by the system even after a crash; the empty file
+itself may stay), asks you to retype the name unless you pass `--yes`, and
+needs `--allow-admin` for an admin token. The token is printed once. To
+replace a lost admin token, start the server with `BOOKMOOR_ADMIN_TOKEN` set to
+a new `bkm_<id>_<64 hex characters>`, or use the command above with
+`--scope admin --allow-admin`.
 
 ## License
 
