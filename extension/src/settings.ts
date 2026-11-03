@@ -45,10 +45,13 @@ export function originPattern(serverUrl: string): string {
  * URL of an API path below the configured server URL. A path prefix in the
  * server URL (`https://host/bookmoor`, for a server mounted below a proxy
  * path) is kept, and query parameters in the server URL and the configured
- * extra ones are added to every request.
+ * extra ones are added to every request (a configured parameter replaces a
+ * same-named one from the URL). Parameters travel in the URL, so proxies and
+ * servers may log them; prefer headers where the proxy allows.
  */
 export function endpointUrl(s: Pick<Settings, "serverUrl" | "query">, path: string): string {
   const u = new URL(s.serverUrl);
+  u.hash = "";
   u.pathname = u.pathname.replace(/\/+$/, "") + path;
   for (const { name, value } of s.query ?? []) {
     if (name.trim()) u.searchParams.set(name.trim(), value);
