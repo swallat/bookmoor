@@ -7,6 +7,7 @@ pub mod identity;
 pub mod merge;
 pub mod model;
 pub mod position;
+pub mod wire;
 
 pub use adapter::{Adapter, Capabilities, Direction, Error, Result};
 pub use diff::{diff, Change};

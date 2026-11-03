@@ -50,7 +50,10 @@ pub struct Tree {
     pub root: Folder,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
     Folder,
     Bookmark,
