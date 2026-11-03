@@ -52,9 +52,10 @@ async fn main() {
             AppState::default()
         }
     };
-    let first_run = state.tokens.is_empty();
     match std::env::var("BOOKMOOR_ADMIN_TOKEN") {
         Ok(t) => {
+            // Rotating the variable replaces the old admin token.
+            state.tokens.remove_named("admin", Scope::Admin);
             if state
                 .tokens
                 .insert_known("admin", Scope::Admin, &t)
@@ -63,8 +64,8 @@ async fn main() {
                 fail("BOOKMOOR_ADMIN_TOKEN must look like bkm_<id>_<secret> (secret at least 32 characters)");
             }
         }
-        // Tokens loaded from the state file already include an admin.
-        Err(_) if first_run => {
+        // A state file that already holds an admin token needs no new one.
+        Err(_) if !state.tokens.has_admin() => {
             let (t, _) = state.tokens.create("admin", Scope::Admin, None);
             println!("admin token (shown once): {t}");
         }

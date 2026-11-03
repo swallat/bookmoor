@@ -152,14 +152,23 @@ impl Tokens {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
+    pub fn has_admin(&self) -> bool {
+        self.by_id.values().any(|r| r.scope == Scope::Admin)
+    }
+
+    /// Drop all tokens of `scope` called `name` (used when the admin token
+    /// from the environment is rotated).
+    pub fn remove_named(&mut self, name: &str, scope: Scope) {
+        self.by_id
+            .retain(|_, r| !(r.name == name && r.scope == scope));
     }
 
     /// Revoke every token bound to `endpoint_id`.
-    pub fn revoke_endpoint(&mut self, endpoint_id: &str) {
+    pub fn revoke_endpoint(&mut self, endpoint_id: &str) -> bool {
+        let before = self.by_id.len();
         self.by_id
             .retain(|_, r| r.endpoint_id.as_deref() != Some(endpoint_id));
+        self.by_id.len() != before
     }
 }
 

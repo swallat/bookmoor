@@ -246,15 +246,37 @@ impl Engine {
                 return Err(format!("snapshot lacks the well-known node {id}"));
             }
         }
-        for r in nodes.values() {
-            if r.alive()
-                && r.id != ROOT
-                && !r.parent.as_ref().is_some_and(|p| nodes.contains_key(p))
-            {
-                return Err(format!("node {} has no parent in the snapshot", r.id));
+        // Every live node must reach the root through live parents; this
+        // also rules out cycles, which the sync code would loop on.
+        for r in nodes.values().filter(|r| r.alive()) {
+            let mut cur = r;
+            let mut steps = 0;
+            while cur.id != ROOT {
+                steps += 1;
+                match cur.parent.as_ref().and_then(|p| nodes.get(p)) {
+                    Some(p) if p.alive() && steps <= nodes.len() => cur = p,
+                    _ => return Err(format!("node {} is not attached to the root", r.id)),
+                }
             }
         }
-        if s.log.iter().any(|e| e.rev > s.rev) || s.horizon > s.rev {
+        for id in ROLES {
+            if nodes[id].parent.as_deref() != Some(ROOT) {
+                return Err(format!("well-known node {id} is not below the root"));
+            }
+        }
+        let stamp_ok = |st: &Stamp| st.rev <= s.rev;
+        let stamps_ok = nodes.values().all(|r| {
+            stamp_ok(&r.created)
+                && stamp_ok(&r.title_st)
+                && stamp_ok(&r.url_st)
+                && stamp_ok(&r.place_st)
+                && r.deleted.as_ref().map_or(true, stamp_ok)
+        });
+        if !stamps_ok
+            || s.log.iter().any(|e| e.rev > s.rev)
+            || s.horizon > s.rev
+            || s.seen.len() > MAX_SEEN_OPS
+        {
             return Err("snapshot revisions are inconsistent".into());
         }
         let mut seen = HashMap::new();
@@ -283,10 +305,12 @@ impl Engine {
         self.endpoints.insert(id.to_string());
     }
 
-    pub fn remove_endpoint(&mut self, id: &str) {
-        self.endpoints.remove(id);
+    /// Whether the endpoint was registered.
+    pub fn remove_endpoint(&mut self, id: &str) -> bool {
+        let known = self.endpoints.remove(id);
         self.seen.retain(|(ep, _), _| ep != id);
         self.seen_order.retain(|(ep, _)| ep != id);
+        known
     }
 
     /// The canonical tree, alive nodes only, parent-first.

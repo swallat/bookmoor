@@ -55,8 +55,14 @@ impl Store {
         })
         .map_err(io::Error::other)?;
         let tmp = tmp_path(&self.path);
+        // A leftover temp file could carry other permissions or owners.
+        match fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
         let mut opts = OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -105,6 +111,30 @@ impl AppState {
             Some(s) => s.save(&self.engine, &self.tokens),
             None => Ok(()),
         }
+    }
+
+    /// Like [`persist`](Self::persist), but if saving fails the in-memory
+    /// state is replaced by what is on disk, so no client ever sees a change
+    /// the server would forget after a restart. If even that is impossible
+    /// the process exits rather than serve state it cannot vouch for.
+    pub fn persist_or_revert(&mut self) -> io::Result<()> {
+        let err = match self.persist() {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        if let Some(store) = &self.store {
+            match store.load() {
+                Ok(Some((engine, tokens))) => {
+                    self.engine = engine;
+                    self.tokens = tokens;
+                }
+                _ => {
+                    eprintln!("fatal: cannot save or reload state ({err}); exiting");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(err)
     }
 }
 
@@ -204,5 +234,53 @@ mod tests {
         fs::write(&path, file.to_string()).unwrap();
         let err = Store::new(&path).load().err().unwrap();
         assert!(err.contains("well-known"), "{err}");
+    }
+
+    #[test]
+    fn failed_save_rolls_back_memory() {
+        let path = tmp("rollback");
+        let mut st = AppState::open(Store::new(&path)).unwrap();
+        st.engine.register_endpoint("ep_a");
+        st.persist().unwrap();
+        let saved = st.engine.tree();
+        st.engine
+            .sync(&SyncRequest {
+                endpoint_id: "ep_a".into(),
+                since_rev: 0,
+                ops: vec![add(1)],
+            })
+            .unwrap();
+        assert_ne!(st.engine.tree(), saved);
+        // A directory in the way of the temp file makes the save fail.
+        fs::create_dir(tmp_path(&path)).unwrap();
+        assert!(st.persist_or_revert().is_err());
+        assert_eq!(st.engine.tree(), saved);
+    }
+
+    #[test]
+    fn cyclic_or_detached_state_is_refused() {
+        let path = tmp("cycle");
+        let mut st = AppState::default();
+        st.engine.register_endpoint("ep_a");
+        let ops = vec![add(1), add(2)];
+        st.engine
+            .sync(&SyncRequest {
+                endpoint_id: "ep_a".into(),
+                since_rev: 0,
+                ops,
+            })
+            .unwrap();
+        let mut snap = serde_json::to_value(st.engine.snapshot()).unwrap();
+        for n in snap["nodes"].as_array_mut().unwrap() {
+            match n["id"].as_str().unwrap() {
+                "n1" => n["parent"] = "n2".into(),
+                "n2" => n["parent"] = "n1".into(),
+                _ => {}
+            }
+        }
+        let file = serde_json::json!({ "engine": snap, "tokens": [] });
+        fs::write(&path, file.to_string()).unwrap();
+        let err = Store::new(&path).load().err().unwrap();
+        assert!(err.contains("not attached"), "{err}");
     }
 }
