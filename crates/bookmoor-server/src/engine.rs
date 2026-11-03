@@ -32,6 +32,12 @@ pub const ROOT: &str = "root";
 /// Well-known children of the root; the extension maps browser roots to these.
 pub const ROLES: [&str; 3] = ["toolbar", "other", "mobile"];
 pub const MAX_OPS_PER_REQUEST: usize = 500;
+/// Nodes (alive and tombstoned) the engine accepts; further adds are invalid.
+pub const MAX_NODES: usize = 100_000;
+/// Longest accepted id, op_id, title, url or position.
+pub const MAX_FIELD_BYTES: usize = 4096;
+/// Remembered op ids for idempotency; the oldest are forgotten first.
+const MAX_SEEN_OPS: usize = 200_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncError {
@@ -107,11 +113,41 @@ pub struct Engine {
     log: Vec<LogEntry>,
     endpoints: HashSet<String>,
     seen: HashMap<(String, String), Option<RejectReason>>,
+    seen_order: std::collections::VecDeque<(String, String)>,
 }
 
 impl Default for Engine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn op_too_long(b: &OpBody) -> bool {
+    let long = |s: &str| s.len() > MAX_FIELD_BYTES;
+    match b {
+        OpBody::Add {
+            id,
+            parent,
+            position,
+            title,
+            url,
+            ..
+        } => {
+            long(id)
+                || long(parent)
+                || long(position)
+                || long(title)
+                || url.as_deref().is_some_and(long)
+        }
+        OpBody::Update { id, title, url } => {
+            long(id) || title.as_deref().is_some_and(long) || url.as_deref().is_some_and(long)
+        }
+        OpBody::Move {
+            id,
+            parent,
+            position,
+        } => long(id) || long(parent) || long(position),
+        OpBody::Remove { id } => long(id),
     }
 }
 
@@ -136,6 +172,7 @@ impl Engine {
             log: Vec::new(),
             endpoints: HashSet::new(),
             seen: HashMap::new(),
+            seen_order: std::collections::VecDeque::new(),
         };
         let st = Stamp {
             rev: 0,
@@ -173,6 +210,7 @@ impl Engine {
     pub fn remove_endpoint(&mut self, id: &str) {
         self.endpoints.remove(id);
         self.seen.retain(|(ep, _), _| ep != id);
+        self.seen_order.retain(|(ep, _)| ep != id);
     }
 
     /// The canonical tree, alive nodes only, parent-first.
@@ -243,8 +281,18 @@ impl Engine {
                 }
                 continue;
             }
-            let res = self.apply(ep, req.since_rev, op);
-            self.seen.insert(key, res.err());
+            let res = if op.op_id.len() > MAX_FIELD_BYTES || op_too_long(&op.body) {
+                Err(RejectReason::Invalid)
+            } else {
+                self.apply(ep, req.since_rev, op)
+            };
+            self.seen.insert(key.clone(), res.err());
+            self.seen_order.push_back(key);
+            if self.seen_order.len() > MAX_SEEN_OPS {
+                if let Some(old) = self.seen_order.pop_front() {
+                    self.seen.remove(&old);
+                }
+            }
             if let Err(reason) = res {
                 rejected.push(RejectedOp {
                     op_id: op.op_id.clone(),
@@ -335,6 +383,7 @@ impl Engine {
             // same goes for nodes others changed in the meantime, since they
             // may have been moved out of a subtree the client deleted.
             let changed: Vec<String> = out.iter().map(|o| id_of(&o.body).to_string()).collect();
+            let index = self.children_index();
             let mut ids: HashSet<String> = HashSet::new();
             for id in last_own
                 .keys()
@@ -342,8 +391,8 @@ impl Engine {
                 .chain(touched.iter().copied())
                 .chain(changed.iter().map(String::as_str))
             {
-                if self.nodes.get(id).is_some_and(|r| r.alive()) {
-                    ids.extend(self.live_subtree(id));
+                if !ids.contains(id) && self.nodes.get(id).is_some_and(|r| r.alive()) {
+                    ids.extend(Self::subtree_in(&index, id));
                 }
             }
             let mut own: Vec<(usize, &Rec)> = ids
@@ -362,22 +411,33 @@ impl Engine {
         out
     }
 
+    /// Alive children per parent, built once per operation (O(nodes)).
+    fn children_index(&self) -> HashMap<&str, Vec<&str>> {
+        let mut idx: HashMap<&str, Vec<&str>> = HashMap::new();
+        for r in self.nodes.values().filter(|r| r.alive()) {
+            if let Some(p) = r.parent.as_deref() {
+                idx.entry(p).or_default().push(r.id.as_str());
+            }
+        }
+        idx
+    }
+
     /// `id` and its alive descendants, parent first.
-    fn live_subtree(&self, id: &str) -> Vec<String> {
+    fn subtree_in(index: &HashMap<&str, Vec<&str>>, id: &str) -> Vec<String> {
         let mut subtree = vec![id.to_string()];
         let mut i = 0;
         while i < subtree.len() {
-            let cur = subtree[i].clone();
-            let mut kids: Vec<String> = self
-                .nodes
-                .values()
-                .filter(|r| r.alive() && r.parent.as_deref() == Some(cur.as_str()))
-                .map(|r| r.id.clone())
-                .collect();
-            subtree.append(&mut kids);
+            if let Some(kids) = index.get(subtree[i].as_str()) {
+                let kids: Vec<String> = kids.iter().map(|k| (*k).to_string()).collect();
+                subtree.extend(kids);
+            }
             i += 1;
         }
         subtree
+    }
+
+    fn live_subtree(&self, id: &str) -> Vec<String> {
+        Self::subtree_in(&self.children_index(), id)
     }
 
     fn depth(&self, id: &str) -> usize {
@@ -532,6 +592,9 @@ impl Engine {
             (Kind::Bookmark, Some(u)) if valid_url(u) => {}
             (Kind::Folder, None) => {}
             _ => return Err(RejectReason::Invalid),
+        }
+        if self.nodes.len() >= MAX_NODES && !self.nodes.contains_key(id) {
+            return Err(RejectReason::Invalid);
         }
         if let Some(existing) = self.nodes.get(id) {
             // Retried add that already took effect is a no-op.
@@ -1347,6 +1410,46 @@ mod tests {
         assert_eq!(r.rejected.len(), 6);
         assert!(r.rejected.iter().all(|x| x.reason == RejectReason::Invalid));
         assert_eq!(e.rev(), rev);
+    }
+
+    #[test]
+    fn oversized_fields_and_full_trees_are_rejected() {
+        let mut e = Engine::new();
+        let mut a = Client::new(&mut e, "a");
+        let long = "x".repeat(MAX_FIELD_BYTES + 1);
+        let r = a.sync(&mut e, vec![add_bm("b1", "toolbar", "V", &long)]);
+        assert_eq!(r.rejected[0].reason, RejectReason::Invalid);
+        let r = a.sync(&mut e, vec![add_bm(&long, "toolbar", "V", "t")]);
+        assert_eq!(r.rejected[0].reason, RejectReason::Invalid);
+        // Fill the engine up to the limit with cheap direct inserts.
+        let template = e.nodes["toolbar"].clone();
+        for i in e.nodes.len()..MAX_NODES {
+            let mut n = template.clone();
+            n.id = format!("fill{i}");
+            e.nodes.insert(n.id.clone(), n);
+        }
+        let r = a.sync(&mut e, vec![add_bm("one-too-many", "toolbar", "V", "t")]);
+        assert_eq!(r.rejected[0].reason, RejectReason::Invalid);
+    }
+
+    #[test]
+    fn rejected_root_removal_is_cheap_on_a_big_tree() {
+        let mut e = Engine::new();
+        let mut a = Client::new(&mut e, "a");
+        let template = e.nodes["toolbar"].clone();
+        for i in 0..50_000 {
+            let mut n = template.clone();
+            n.id = format!("fill{i}");
+            e.nodes.insert(n.id.clone(), n);
+        }
+        let t = std::time::Instant::now();
+        let r = a.sync(&mut e, vec![rm("root")]);
+        assert_eq!(r.rejected[0].reason, RejectReason::Invalid);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     #[test]

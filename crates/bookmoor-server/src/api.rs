@@ -75,13 +75,36 @@ fn need(who: &TokenRecord, required: Scope) -> Result<(), ApiError> {
     }
 }
 
+/// Scope check that runs before any body is parsed, so a token without the
+/// right scope gets 403 whatever it sends.
+async fn scope_gate(required: Scope, req: Request, next: Next) -> Result<Response, ApiError> {
+    let who = req
+        .extensions()
+        .get::<TokenRecord>()
+        .ok_or(ApiError::Unauthorized)?;
+    need(who, required)?;
+    Ok(next.run(req).await)
+}
+
 pub fn router(state: Shared) -> Router {
+    let gate = |scope: Scope| {
+        middleware::from_fn(move |req: Request, next: Next| scope_gate(scope, req, next))
+    };
     let v1 = Router::new()
-        .route("/v1/tree", get(tree))
-        .route("/v1/sync", post(sync))
-        .route("/v1/endpoints", post(register_endpoint))
-        .route("/v1/endpoints/{id}", delete(delete_endpoint))
-        .route("/v1/tokens", post(create_token))
+        .route("/v1/tree", get(tree).route_layer(gate(Scope::Read)))
+        .route("/v1/sync", post(sync).route_layer(gate(Scope::Sync)))
+        .route(
+            "/v1/endpoints",
+            post(register_endpoint).route_layer(gate(Scope::Sync)),
+        )
+        .route(
+            "/v1/endpoints/{id}",
+            delete(delete_endpoint).route_layer(gate(Scope::Sync)),
+        )
+        .route(
+            "/v1/tokens",
+            post(create_token).route_layer(gate(Scope::Admin)),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
     Router::new()
         .route("/health", get(health))
@@ -303,6 +326,54 @@ mod tests {
             "/v1/sync",
             Some(&read),
             Some(serde_json::json!({"endpoint_id":"x","since_rev":0,"ops":[]})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn missing_scope_is_403_even_with_a_bad_body() {
+        let (s, admin) = setup();
+        let app = router(s);
+        let (dev, _) = new_device(&app, &admin).await;
+        // sync token + malformed body on an admin route
+        let (st, _) = call(
+            &app,
+            "POST",
+            "/v1/tokens",
+            Some(&dev),
+            Some(serde_json::json!({"nonsense": true})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/v1/tokens",
+            Some(&admin),
+            Some(serde_json::json!({"name":"dash","scope":"read"})),
+        )
+        .await;
+        let read = v["token"].as_str().unwrap().to_string();
+        let big = "x".repeat(MAX_BODY_BYTES + 1);
+        let (st, _) = call(
+            &app,
+            "POST",
+            "/v1/sync",
+            Some(&read),
+            Some(serde_json::json!({"pad": big})),
+        )
+        .await;
+        assert!(
+            st == StatusCode::FORBIDDEN || st == StatusCode::PAYLOAD_TOO_LARGE,
+            "{st}"
+        );
+        let (st, _) = call(
+            &app,
+            "POST",
+            "/v1/sync",
+            Some(&read),
+            Some(serde_json::json!({})),
         )
         .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
