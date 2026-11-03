@@ -45,7 +45,7 @@ export class FakeBookmarks implements BookmarkApi {
     [this.root, this.bar, this.other, this.mobile] = ids as [string, string, string, string];
     const kids = [this.bar, this.other, this.mobile];
     if (kind === "firefox") {
-      kids.splice(1, 0, "menu________");
+      kids.unshift("menu________");
       this.local.add("menu________");
     }
     this.nodes.set(this.root, { id: this.root, title: "", kids });

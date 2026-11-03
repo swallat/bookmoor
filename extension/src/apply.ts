@@ -29,8 +29,6 @@ class Applier {
   private rev: Map<string, string>;
   /** Child chrome ids per folder, loaded once and kept current for creates. */
   private kids = new Map<string, string[]>();
-  /** Whether `move` counts the moved node itself; learnt on first use. */
-  private preRemoval: boolean | null = null;
 
   private api: BookmarkApi;
   private state: SyncState;
@@ -61,7 +59,7 @@ class Applier {
     sid: string,
     position: string,
     self?: string,
-  ): Promise<{ pre: number; final: number; same: boolean }> {
+  ): Promise<{ pre: number; final: number; same: boolean; selfIdx: number }> {
     const kids = await this.children(parent);
     let pre = 0;
     kids.forEach((cid, i) => {
@@ -73,7 +71,7 @@ class Applier {
     pre = Math.min(pre, kids.length);
     const selfIdx = self ? kids.indexOf(self) : -1;
     const same = selfIdx >= 0;
-    return { pre, final: same && selfIdx < pre ? pre - 1 : pre, same };
+    return { pre, final: same && selfIdx < pre ? pre - 1 : pre, same, selfIdx };
   }
 
   /**
@@ -82,22 +80,37 @@ class Applier {
    * itself, Firefox does not), so the first such move is checked and the
    * answer remembered.
    */
-  private async moveTo(chrome: string, parent: string, sid: string, position: string) {
+  private async moveTo(
+    chrome: string,
+    parent: string,
+    sid: string,
+    position: string,
+    oldParent?: string,
+  ) {
     const t = await this.target(parent, sid, position, chrome);
-    const down = t.same && t.final !== t.pre;
-    const index = down && this.preRemoval === true ? t.pre : t.final;
+    // A real downward move, not one that leaves the node where it is.
+    const down = t.same && t.final !== t.pre && t.final !== t.selfIdx;
+    const index = down && this.state.preRemoval === true ? t.pre : t.final;
     await this.api.move(chrome, { parentId: parent, index });
-    this.kids.clear();
-    if (down && this.preRemoval === null) {
+    if (down && this.state.preRemoval === undefined) {
+      this.kids.clear();
       const now = await this.children(parent);
       if (now.indexOf(chrome) === t.final) {
-        this.preRemoval = false;
+        this.state.preRemoval = false;
       } else {
-        this.preRemoval = true;
+        this.state.preRemoval = true;
         await this.api.move(chrome, { parentId: parent, index: t.pre });
         this.kids.clear();
       }
+      return;
     }
+    // Keep the cached sibling lists current instead of reloading them.
+    const from = this.kids.get(oldParent ?? parent);
+    if (from) {
+      const i = from.indexOf(chrome);
+      if (i >= 0) from.splice(i, 1);
+    }
+    this.kids.get(parent)?.splice(t.final, 0, chrome);
   }
 
   private async removeLocal(sid: string): Promise<void> {
@@ -157,7 +170,7 @@ class Applier {
         if (have && b) {
           // Upsert of a node we already have.
           await this.fields(have, b, op.title, op.url);
-          await this.moveTo(have, parent, op.id, op.position);
+          await this.moveTo(have, parent, op.id, op.position, this.rev.get(b.parent ?? ""));
           b.parent = op.parent;
           b.position = op.position;
         } else {
@@ -193,7 +206,7 @@ class Applier {
         const parent = this.rev.get(op.parent);
         const b = state.base[op.id];
         if (!chrome || !parent || !b) return;
-        await this.moveTo(chrome, parent, op.id, op.position);
+        await this.moveTo(chrome, parent, op.id, op.position, this.rev.get(b.parent ?? ""));
         b.parent = op.parent;
         b.position = op.position;
         return;

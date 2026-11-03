@@ -117,7 +117,7 @@ export async function matchTree(
   const pairedChrome = new Map(Object.entries(state.map).map(([c, s]) => [s, c]));
   const walk = (sid: string, chrome: LocalNode) => {
     const used = new Set<string>();
-    const locals = (chrome.children ?? []).filter((c) => !c.unmodifiable && !(c.id in state.map));
+    const locals = (chrome.children ?? []).filter((c) => !c.unmodifiable && c.type !== "separator" && !(c.id in state.map));
     for (const kid of [...(kidsOf.get(sid) ?? [])].sort(bySibling)) {
       const s = server.get(kid)!;
       const already = pairedChrome.get(kid);

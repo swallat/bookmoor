@@ -99,7 +99,7 @@ export function computeOps(state: SyncState, tree: LocalNode[]): Op[] {
 
   const walk = (n: LocalNode, parentSid: string) => {
     for (const c of n.children ?? []) {
-      if (c.unmodifiable || state.ignored[c.id]) continue;
+      if (c.unmodifiable || c.type === "separator" || state.ignored[c.id]) continue;
       let sid = state.map[c.id];
       if (!sid) {
         sid = newServerId();

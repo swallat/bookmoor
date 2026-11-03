@@ -13,6 +13,8 @@ export interface LocalNode {
   url?: string;
   children?: LocalNode[];
   unmodifiable?: string;
+  /** Set by Firefox; separators have no counterpart on the server. */
+  type?: string;
 }
 
 export interface BookmarkApi {
@@ -49,6 +51,8 @@ export interface SyncState {
   pending: Op[];
   /** Server and token this state belongs to; a change starts afresh. */
   identity: string;
+  /** Whether `move` counts the moved node itself; learnt on the first real move down. */
+  preRemoval?: boolean;
   /** Browser nodes the server refused (invalid); never offered again. */
   ignored: Record<string, true>;
 }
