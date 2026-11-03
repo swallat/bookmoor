@@ -21,22 +21,35 @@ pub struct Limiter<K> {
     per_second: f64,
     max_keys: usize,
     buckets: HashMap<K, Bucket>,
+    last_sweep: Option<Instant>,
 }
 
 impl<K: Hash + Eq + Clone> Limiter<K> {
     pub fn new(capacity: u32, per_second: f64, max_keys: usize) -> Self {
+        assert!(
+            capacity > 0 && per_second > 0.0,
+            "limiter needs a positive rate"
+        );
         Limiter {
             capacity: f64::from(capacity),
             per_second,
             max_keys,
             buckets: HashMap::new(),
+            last_sweep: None,
         }
     }
 
     /// Spend one unit for `key`; on refusal, how long until one is available.
     pub fn take(&mut self, key: &K, now: Instant) -> Result<(), Duration> {
         if !self.buckets.contains_key(key) && self.buckets.len() >= self.max_keys {
-            self.forget_idle(now);
+            // Sweeping scans everything, so at most once a second: under a
+            // flood of new keys the lock must not be held for a scan each time.
+            if self.last_sweep.map_or(true, |t| {
+                now.saturating_duration_since(t) >= Duration::from_secs(1)
+            }) {
+                self.last_sweep = Some(now);
+                self.forget_idle(now);
+            }
             // Still full of busy keys: refuse new ones rather than grow.
             if self.buckets.len() >= self.max_keys {
                 return Err(Duration::from_secs(1));
@@ -66,6 +79,19 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
             let elapsed = now.saturating_duration_since(b.last).as_secs_f64();
             b.tokens + elapsed * rate < cap
         });
+    }
+}
+
+/// Clients of one IPv6 /64 share a bucket; otherwise rotating the low bits of
+/// an address would give every request a fresh one.
+pub fn client_key(ip: std::net::IpAddr) -> std::net::IpAddr {
+    match ip {
+        std::net::IpAddr::V6(v6) => {
+            let mut o = v6.octets();
+            o[8..].fill(0);
+            std::net::IpAddr::V6(o.into())
+        }
+        v4 => v4,
     }
 }
 
@@ -103,6 +129,17 @@ mod tests {
         assert!(l.take(&"b", t0).is_ok());
         assert!(l.take(&"a", t0 + Duration::from_secs(1)).is_ok());
         assert!(l.take(&"a", t0 + Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn ipv6_clients_in_one_64_share_a_bucket() {
+        let a: std::net::IpAddr = "2001:db8::1".parse().unwrap();
+        let b: std::net::IpAddr = "2001:db8::ffff".parse().unwrap();
+        let c: std::net::IpAddr = "2001:db8:0:1::1".parse().unwrap();
+        assert_eq!(client_key(a), client_key(b));
+        assert_ne!(client_key(a), client_key(c));
+        let v4: std::net::IpAddr = "192.0.2.1".parse().unwrap();
+        assert_eq!(client_key(v4), v4);
     }
 
     #[test]

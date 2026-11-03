@@ -340,7 +340,7 @@ Token design
 - Rotation: create a new token, update the device, revoke the old one. No
   automatic expiry in v0.1; `last_used_at` allows spotting stale ones.
 - Rate limiting: a token bucket per token (burst 120, 10/s) and a separate
-  bucket per peer IP that only failed authentications draw from (burst 10,
+  bucket per peer IP (IPv6 per /64) that only failed authentications draw from (burst 10,
   then one per 5 s), so bad tokens get `429` with `Retry-After` while a valid
   token behind the same address (a reverse proxy) is unaffected. Auth
   failures otherwise return a uniform `401`. Buckets are in memory and

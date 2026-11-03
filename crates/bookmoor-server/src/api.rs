@@ -2,6 +2,7 @@
 
 use crate::auth::{random_id, Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, SyncError};
+use crate::ratelimit::client_key;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
@@ -11,7 +12,7 @@ use axum::Extension;
 use axum::{Json, Router};
 use bookmoor_core::wire::{SyncRequest, SyncResponse, TreeResponse};
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -71,10 +72,12 @@ async fn require_auth(
     mut req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    // Without a peer address (not served with connect info) there is nothing
+    // to key the failed-auth bucket on; skipping beats sharing one for all.
     let peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map_or(IpAddr::from([0, 0, 0, 0]), |c| c.0.ip());
+        .map(|c| client_key(c.0.ip()));
     let rec = {
         let mut st = s.lock().unwrap();
         let now = Instant::now();
@@ -87,7 +90,10 @@ async fn require_auth(
             .cloned();
         match found {
             Some(rec) => {
-                // Only bad credentials count against the address.
+                // Only bad credentials count against the address. A throttled
+                // address can still use a valid token: tokens carry 256 bits,
+                // so guessing is hopeless either way, and refusing before the
+                // check would lock out a reverse proxy's real clients.
                 st.limits
                     .per_token
                     .take(&rec.id, now)
@@ -95,10 +101,12 @@ async fn require_auth(
                 rec
             }
             None => {
-                st.limits
-                    .failed_auth
-                    .take(&peer, now)
-                    .map_err(retry_after)?;
+                if let Some(peer) = peer {
+                    st.limits
+                        .failed_auth
+                        .take(&peer, now)
+                        .map_err(retry_after)?;
+                }
                 return Err(ApiError::Unauthorized);
             }
         }
@@ -108,7 +116,7 @@ async fn require_auth(
 }
 
 fn retry_after(wait: Duration) -> ApiError {
-    ApiError::TooManyRequests(wait.as_secs().max(1))
+    ApiError::TooManyRequests(wait.as_secs_f64().ceil().max(1.0) as u64)
 }
 
 fn need(who: &TokenRecord, required: Scope) -> Result<(), ApiError> {
@@ -580,17 +588,28 @@ mod tests {
     async fn bad_tokens_are_throttled_but_good_ones_keep_working() {
         let (state, admin) = setup();
         let app = router(state);
+        let from = |peer: &str, token: &str| {
+            let mut req = Request::builder()
+                .uri("/v1/tree")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap();
+            let addr: SocketAddr = format!("{peer}:4000").parse().unwrap();
+            req.extensions_mut().insert(ConnectInfo(addr));
+            let app = app.clone();
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
         let mut last = StatusCode::OK;
         for _ in 0..30 {
-            last = call(&app, "GET", "/v1/tree", Some("bkm_x_nope"), None)
-                .await
-                .0;
+            last = from("192.0.2.1", "bkm_x_nope").await;
         }
         assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
-        // The same address with a valid token is not locked out.
+        // The same address with a valid token is not locked out ...
+        assert_eq!(from("192.0.2.1", &admin).await, StatusCode::OK);
+        // ... and other addresses have buckets of their own.
         assert_eq!(
-            call(&app, "GET", "/v1/tree", Some(&admin), None).await.0,
-            StatusCode::OK
+            from("192.0.2.2", "bkm_x_nope").await,
+            StatusCode::UNAUTHORIZED
         );
     }
 
