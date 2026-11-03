@@ -31,14 +31,31 @@ impl Scope {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRecord {
     pub id: String,
     pub name: String,
     pub scope: Scope,
     /// A sync token maps to exactly one endpoint (revocation = stop a device).
     pub endpoint_id: Option<String>,
+    #[serde(with = "hex_hash")]
     secret_hash: [u8; 32],
+}
+
+mod hex_hash {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(h: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&hex::encode(h))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        let text = String::deserialize(d)?;
+        let bytes = hex::decode(&text).map_err(serde::de::Error::custom)?;
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("secret hash must be 32 bytes"))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -121,6 +138,22 @@ impl Tokens {
         } else {
             None
         }
+    }
+
+    pub fn records(&self) -> Vec<TokenRecord> {
+        let mut v: Vec<_> = self.by_id.values().cloned().collect();
+        v.sort_by(|a, b| a.id.cmp(&b.id));
+        v
+    }
+
+    pub fn from_records(records: Vec<TokenRecord>) -> Self {
+        Tokens {
+            by_id: records.into_iter().map(|r| (r.id.clone(), r)).collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
     }
 
     /// Revoke every token bound to `endpoint_id`.

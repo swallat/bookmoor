@@ -1,11 +1,13 @@
 //! bookmoor server entry point.
 //!
-//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http]`
+//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]`
+//! With `--state` (or `BOOKMOOR_STATE`) everything survives restarts.
 //! The first admin token is read from `BOOKMOOR_ADMIN_TOKEN`
 //! (`bkm_<id>_<secret>`) or generated and printed once.
 
 use bookmoor_server::api::{router, AppState};
 use bookmoor_server::auth::Scope;
+use bookmoor_server::store::Store;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -13,6 +15,7 @@ use std::sync::{Arc, Mutex};
 async fn main() {
     let mut bind: SocketAddr = "127.0.0.1:8787".parse().unwrap();
     let mut insecure = false;
+    let mut state_path = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -23,8 +26,15 @@ async fn main() {
                     .unwrap_or_else(|| fail("--bind needs an address like 127.0.0.1:8787"));
             }
             "--insecure-http" => insecure = true,
+            "--state" => {
+                state_path = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--state needs a file path"))
+                        .into(),
+                );
+            }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http]");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -35,7 +45,14 @@ async fn main() {
         fail("refusing to bind a non-loopback address without TLS in front; use a reverse proxy or pass --insecure-http");
     }
 
-    let mut state = AppState::default();
+    let mut state = match state_path {
+        Some(p) => AppState::open(Store::new(p)).unwrap_or_else(|e| fail(&e)),
+        None => {
+            eprintln!("warning: no --state file, everything is lost on restart");
+            AppState::default()
+        }
+    };
+    let first_run = state.tokens.is_empty();
     match std::env::var("BOOKMOOR_ADMIN_TOKEN") {
         Ok(t) => {
             if state
@@ -46,10 +63,15 @@ async fn main() {
                 fail("BOOKMOOR_ADMIN_TOKEN must look like bkm_<id>_<secret> (secret at least 32 characters)");
             }
         }
-        Err(_) => {
+        // Tokens loaded from the state file already include an admin.
+        Err(_) if first_run => {
             let (t, _) = state.tokens.create("admin", Scope::Admin, None);
             println!("admin token (shown once): {t}");
         }
+        Err(_) => {}
+    }
+    if let Err(e) = state.persist() {
+        fail(&format!("cannot write the state file: {e}"));
     }
 
     let app = router(Arc::new(Mutex::new(state)));
