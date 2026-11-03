@@ -18,16 +18,50 @@ interface FNode {
   kids?: string[];
 }
 
-/** chrome.bookmarks semantics, including `move` taking a pre-removal index. */
+export type Kind = "chrome" | "firefox";
+
+/**
+ * chrome.bookmarks semantics. Chrome's `move` takes a pre-removal index when
+ * a node moves down inside its folder; Firefox's takes the final one, and
+ * Firefox has a fourth root folder (the menu) that is not synced.
+ */
 export class FakeBookmarks implements BookmarkApi {
   nodes = new Map<string, FNode>();
   private n = 100;
+  kind: Kind;
+  root: string;
+  bar: string;
+  other: string;
+  mobile: string;
+  /** Roots that are never synced. */
+  local = new Set<string>();
 
-  constructor() {
-    this.nodes.set("0", { id: "0", title: "", kids: ["1", "2", "3"] });
-    this.nodes.set("1", { id: "1", parentId: "0", title: "Bookmarks bar", kids: [] });
-    this.nodes.set("2", { id: "2", parentId: "0", title: "Other bookmarks", kids: [] });
-    this.nodes.set("3", { id: "3", parentId: "0", title: "Mobile bookmarks", kids: [] });
+  constructor(kind: Kind = "chrome") {
+    this.kind = kind;
+    const ids =
+      kind === "chrome"
+        ? ["0", "1", "2", "3"]
+        : ["root________", "toolbar_____", "unfiled_____", "mobile______"];
+    [this.root, this.bar, this.other, this.mobile] = ids as [string, string, string, string];
+    const kids = [this.bar, this.other, this.mobile];
+    if (kind === "firefox") {
+      kids.splice(1, 0, "menu________");
+      this.local.add("menu________");
+    }
+    this.nodes.set(this.root, { id: this.root, title: "", kids });
+    for (const k of kids) this.nodes.set(k, { id: k, parentId: this.root, title: k, kids: [] });
+  }
+
+  isRoot(id: string): boolean {
+    return id === this.root || this.nodes.get(id)?.parentId === this.root;
+  }
+
+  /** Whether `id` sits in a folder that is not synced. */
+  isLocal(id: string): boolean {
+    for (let n = this.nodes.get(id); n; n = n.parentId ? this.nodes.get(n.parentId) : undefined) {
+      if (this.local.has(n.id)) return true;
+    }
+    return false;
   }
 
   private view(id: string): LocalNode {
@@ -43,7 +77,7 @@ export class FakeBookmarks implements BookmarkApi {
   }
 
   async getTree() {
-    return [this.view("0")];
+    return [this.view(this.root)];
   }
   async getSubTree(id: string) {
     return [this.view(id)];
@@ -74,9 +108,12 @@ export class FakeBookmarks implements BookmarkApi {
     const old = this.nodes.get(f.parentId!)!.kids!;
     const oldIdx = old.indexOf(id);
     const index = d.index ?? dest.kids.length;
-    if (old === dest.kids) {
+    if (old === dest.kids && this.kind === "chrome") {
       dest.kids.splice(index, 0, id);
       dest.kids.splice(index <= oldIdx ? oldIdx + 1 : oldIdx, 1);
+    } else if (old === dest.kids) {
+      dest.kids.splice(oldIdx, 1);
+      dest.kids.splice(index, 0, id);
     } else {
       old.splice(oldIdx, 1);
       dest.kids.splice(index, 0, id);
@@ -97,10 +134,10 @@ export class FakeBookmarks implements BookmarkApi {
   }
 
   /** Titles and URLs of everything below the three roots, nested. */
-  shape(id = "0"): unknown {
+  shape(id = this.root): unknown {
     const f = this.nodes.get(id)!;
     if (f.kids === undefined) return [f.title, f.url];
-    return f.kids.map((k) => this.shape(k));
+    return f.kids.filter((k) => !this.local.has(k)).map((k) => this.shape(k));
   }
 }
 
@@ -115,11 +152,12 @@ export class MemoryStore implements StateStore {
 }
 
 export class Browser {
-  api = new FakeBookmarks();
+  api: FakeBookmarks;
   store = new MemoryStore();
   transport: Transport;
-  constructor(transport: Transport) {
+  constructor(transport: Transport, kind: Kind = "chrome") {
     this.transport = transport;
+    this.api = new FakeBookmarks(kind);
   }
   identity = "";
   flush(): Promise<Outcome> {
@@ -131,7 +169,7 @@ export interface Server {
   url: string;
   admin: string;
   stop(): void;
-  browser(): Promise<Browser>;
+  browser(kind?: Kind): Promise<Browser>;
   settings(token: string): Settings;
 }
 
@@ -176,14 +214,14 @@ export async function startServer(bin: string): Promise<Server> {
     admin,
     stop: () => proc.kill(),
     settings,
-    async browser() {
+    async browser(kind: Kind = "chrome") {
       const res = await fetch(url + "/v1/tokens", {
         method: "POST",
         headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },
         body: JSON.stringify({ name: "test", scope: "sync" }),
       });
       const { token } = (await res.json()) as { token: string };
-      return new Browser(httpTransport(settings(token)));
+      return new Browser(httpTransport(settings(token)), kind);
     },
   };
 }

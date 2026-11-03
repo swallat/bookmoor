@@ -4,19 +4,20 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { HttpError, last, type Transport } from "./flow.ts";
-import { type Browser, type Server, serverBinary, startServer } from "./testkit.ts";
+import { type Browser, type Kind, type Server, serverBinary, startServer } from "./testkit.ts";
 
 const bin = serverBinary();
 if (!bin && process.env.BOOKMOOR_E2E_REQUIRED) throw new Error("bookmoor-server binary missing");
 
-describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, () => {
+for (const kind of ["chrome", "firefox"] as Kind[]) {
+describe(`end to end (${kind})`, { skip: bin ? false : "bookmoor-server is not built" }, () => {
   let server: Server;
   before(async () => {
     server = await startServer(bin!);
   });
   after(() => server.stop());
 
-  const bar = (b: Browser) => b.api.nodes.get("1")!;
+  const bar = (b: Browser) => b.api.nodes.get(b.api.bar)!;
   const add = async (b: Browser, parent: string, title: string, url?: string, index?: number) =>
     (await b.api.create({ parentId: parent, title, ...(url ? { url } : {}), ...(index !== undefined ? { index } : {}) })).id;
   const sync = async (...bs: Browser[]) => {
@@ -27,25 +28,25 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
   };
 
   it("carries bookmarks, folders and order to a second browser", async () => {
-    const a = await server.browser();
-    const b = await server.browser();
-    const f = await add(a, "1", "Dev");
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    const f = await add(a, a.api.bar, "Dev");
     await add(a, f, "Rust", "https://rust-lang.org/");
     await add(a, f, "MDN", "https://developer.mozilla.org/");
-    await add(a, "2", "News", "https://news.example/");
+    await add(a, a.api.other, "News", "https://news.example/");
     await sync(a, b);
     same(a, b);
     assert.equal(bar(b).kids!.length >= 1, true);
   });
 
   it("matches existing bookmarks on first sync instead of duplicating", async () => {
-    const a = await server.browser();
-    const b = await server.browser();
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
     for (const x of [a, b]) {
-      const f = await add(x, "2", "Shared folder");
+      const f = await add(x, x.api.other, "Shared folder");
       await add(x, f, "Same", "https://same.example/");
     }
-    await add(b, "2", "Only on b", "https://b.example/");
+    await add(b, b.api.other, "Only on b", "https://b.example/");
     await sync(a, b);
     same(a, b);
     for (const x of [a, b]) {
@@ -57,9 +58,9 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
   });
 
   it("propagates renames, moves, reorders and deletes", async () => {
-    const a = await server.browser();
-    const b = await server.browser();
-    const f = await add(a, "1", "Folder");
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    const f = await add(a, a.api.bar, "Folder");
     const x = await add(a, f, "X", "https://x.example/");
     const y = await add(a, f, "Y", "https://y.example/");
     const z = await add(a, f, "Z", "https://z.example/");
@@ -76,10 +77,28 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
     );
   });
 
+  it("moves a node down within its folder whatever the browser's index rules", async () => {
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    const f = await add(a, a.api.bar, "Down");
+    const ids: string[] = [];
+    for (const t of ["p", "q", "r", "s"]) ids.push(await add(a, f, t, `https://${t}.example/`));
+    await sync(a, b);
+    await a.api.move(ids[0]!, { parentId: f, index: kind === "chrome" ? 4 : 3 });
+    await a.api.move(ids[1]!, { parentId: f, index: kind === "chrome" ? 3 : 2 });
+    await sync(a, b);
+    same(a, b);
+    const bf = [...b.api.nodes.values()].find((n) => n.title === "Down")!;
+    assert.deepEqual(
+      bf.kids!.map((k) => b.api.nodes.get(k)!.title),
+      ["r", "s", "q", "p"],
+    );
+  });
+
   it("keeps an edit when the other side deleted the folder", async () => {
-    const a = await server.browser();
-    const b = await server.browser();
-    const f = await add(a, "1", "Doomed");
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    const f = await add(a, a.api.bar, "Doomed");
     await add(a, f, "Old", "https://old.example/");
     await sync(a, b);
     const bf = [...b.api.nodes.values()].find((n) => n.title === "Doomed")!;
@@ -92,9 +111,9 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
   });
 
   it("resends unacknowledged ops without duplicating", async () => {
-    const a = await server.browser();
-    const b = await server.browser();
-    await add(a, "1", "Once", "https://once.example/");
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    await add(a, a.api.bar, "Once", "https://once.example/");
     const real = a.transport;
     let failNext = false;
     const flaky: Transport = {
@@ -111,7 +130,7 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
     };
     a.transport = flaky;
     await sync(a);
-    await add(a, "1", "Twice", "https://twice.example/");
+    await add(a, a.api.bar, "Twice", "https://twice.example/");
     failNext = true;
     assert.equal(await a.flush(), "retry");
     await sync(a, b);
@@ -120,10 +139,10 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
   });
 
   it("recovers from conflicting moves that would form a cycle", async () => {
-    const a = await server.browser();
-    const b = await server.browser();
-    const x = await add(a, "1", "CycX");
-    const y = await add(a, "1", "CycY");
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    const x = await add(a, a.api.bar, "CycX");
+    const y = await add(a, a.api.bar, "CycY");
     await sync(a, b);
     const bx = [...b.api.nodes.values()].find((n) => n.title === "CycX")!.id;
     const by = [...b.api.nodes.values()].find((n) => n.title === "CycY")!.id;
@@ -135,11 +154,11 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
   });
 
   it("starts afresh when the token changes", async () => {
-    const a = await server.browser();
-    await add(a, "1", "Before", "https://before.example/");
+    const a = await server.browser(kind);
+    await add(a, a.api.bar, "Before", "https://before.example/");
     a.identity = "one";
     await sync(a);
-    const other = await server.browser();
+    const other = await server.browser(kind);
     a.transport = other.transport;
     a.identity = "two";
     await sync(a);
@@ -161,7 +180,7 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
         s = (s * 1103515245 + 12345) & 0x7fffffff;
         return s % n;
       };
-      const bs = [await server.browser(), await server.browser(), await server.browser()];
+      const bs = [await server.browser(kind), await server.browser(kind), await server.browser(kind)];
       await sync(...bs);
       for (let round = 0; round < 12; round++) {
         for (const b of bs) {
@@ -179,16 +198,18 @@ describe("end to end", { skip: bin ? false : "bookmoor-server is not built" }, (
     }
   });
 });
+}
 
 async function randomEdit(b: Browser, rnd: (n: number) => number): Promise<void> {
   const all = [...b.api.nodes.values()];
-  const folders = all.filter((n) => n.kids);
-  const movable = all.filter((n) => n.parentId && !["1", "2", "3"].includes(n.id));
+  const synced = all.filter((n) => !b.api.isLocal(n.id));
+  const folders = synced.filter((n) => n.kids);
+  const movable = synced.filter((n) => n.parentId && !b.api.isRoot(n.id));
   const pick = <T>(xs: T[]) => xs[rnd(xs.length)]!;
   switch (rnd(6)) {
     case 0:
     case 1: {
-      const p = pick(folders.filter((f) => f.id !== "0"));
+      const p = pick(folders.filter((f) => f.id !== b.api.root));
       const idx = rnd(p.kids!.length + 1);
       await b.api.create({
         parentId: p.id,
@@ -199,7 +220,7 @@ async function randomEdit(b: Browser, rnd: (n: number) => number): Promise<void>
       break;
     }
     case 2: {
-      const p = pick(folders.filter((f) => f.id !== "0"));
+      const p = pick(folders.filter((f) => f.id !== b.api.root));
       await b.api.create({ parentId: p.id, title: `f${rnd(1000)}` });
       break;
     }
@@ -209,7 +230,7 @@ async function randomEdit(b: Browser, rnd: (n: number) => number): Promise<void>
     case 4:
       if (movable.length) {
         const n = pick(movable);
-        const p = pick(folders.filter((f) => f.id !== "0"));
+        const p = pick(folders.filter((f) => f.id !== b.api.root));
         try {
           await b.api.move(n.id, { parentId: p.id, index: rnd(p.kids!.length + 1) });
         } catch {

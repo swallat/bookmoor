@@ -64,22 +64,26 @@ export function kindOf(n: LocalNode): Kind {
   return n.url === undefined ? "folder" : "bookmark";
 }
 
-/**
- * Role of a child of the browser's root node: Chrome numbers them 1, 2, 3;
- * elsewhere the first three children in order serve.
- */
-export function roleOf(child: LocalNode, position: number): string | undefined {
-  const byId: Record<string, string> = { "1": "toolbar", "2": "other", "3": "mobile" };
-  return byId[child.id] ?? ROLES[position];
-}
+const CHROME_ROLES: Record<string, string> = { "1": "toolbar", "2": "other", "3": "mobile" };
+// Firefox has a fourth folder, the bookmarks menu, which the server's fixed
+// set of roles has no place for; it stays local and is not synced.
+const FIREFOX_ROLES: Record<string, string> = {
+  toolbar_____: "toolbar",
+  unfiled_____: "other",
+  mobile______: "mobile",
+};
 
 /** Pair the browser's root and its role folders with the server's. */
 export function mapRoots(state: SyncState, tree: LocalNode[]): void {
   const root = tree[0];
   if (!root) return;
   state.map[root.id] = ROOT;
-  (root.children ?? []).forEach((c, i) => {
-    const role = roleOf(c, i);
+  const kids = root.children ?? [];
+  const firefox = kids.some((c) => c.id in FIREFOX_ROLES);
+  const byId = firefox ? FIREFOX_ROLES : CHROME_ROLES;
+  kids.forEach((c, i) => {
+    // Unknown ids in other Chromium browsers: the first three in order.
+    const role = byId[c.id] ?? (firefox ? undefined : ROLES[i]);
     if (role) state.map[c.id] = role;
   });
 }
