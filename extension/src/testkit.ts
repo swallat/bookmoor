@@ -176,7 +176,12 @@ export interface Server {
 export function serverBinary(): string | undefined {
   const bin =
     process.env.BOOKMOOR_SERVER_BIN ??
-    fileURLToPath(new URL("../../target/debug/bookmoor-server", import.meta.url));
+    fileURLToPath(
+      new URL(
+        `../../target/debug/bookmoor-server${process.platform === "win32" ? ".exe" : ""}`,
+        import.meta.url,
+      ),
+    );
   return existsSync(bin) ? bin : undefined;
 }
 
