@@ -1,0 +1,115 @@
+{
+  "_comment": "Shared by bookmoor-core (Rust) and the extension (TS). between(before, after) must equal expected; invalid cases must be rejected.",
+  "between": [
+    {
+      "before": null,
+      "after": null,
+      "expected": "V"
+    },
+    {
+      "before": "V",
+      "after": null,
+      "expected": "l"
+    },
+    {
+      "before": null,
+      "after": "V",
+      "expected": "G"
+    },
+    {
+      "before": "V",
+      "after": "W",
+      "expected": "VV"
+    },
+    {
+      "before": "V",
+      "after": "X",
+      "expected": "W"
+    },
+    {
+      "before": "V",
+      "after": "V1",
+      "expected": "V0V"
+    },
+    {
+      "before": "V1",
+      "after": "W",
+      "expected": "VW"
+    },
+    {
+      "before": "0V",
+      "after": "1",
+      "expected": "0l"
+    },
+    {
+      "before": null,
+      "after": "1",
+      "expected": "0V"
+    },
+    {
+      "before": null,
+      "after": "01",
+      "expected": "00V"
+    },
+    {
+      "before": "zz",
+      "after": null,
+      "expected": "zzV"
+    },
+    {
+      "before": "z",
+      "after": null,
+      "expected": "zV"
+    },
+    {
+      "before": "1",
+      "after": "2",
+      "expected": "1V"
+    },
+    {
+      "before": "Vz",
+      "after": "W",
+      "expected": "VzV"
+    },
+    {
+      "before": "a",
+      "after": "a1",
+      "expected": "a0V"
+    },
+    {
+      "before": "a1",
+      "after": "a2",
+      "expected": "a1V"
+    }
+  ],
+  "invalid": [
+    {
+      "before": "V",
+      "after": "V"
+    },
+    {
+      "before": "W",
+      "after": "V"
+    },
+    {
+      "before": "V0",
+      "after": null
+    },
+    {
+      "before": null,
+      "after": "a0"
+    },
+    {
+      "before": "",
+      "after": "V"
+    },
+    {
+      "before": "V-",
+      "after": null
+    },
+    {
+      "before": "é",
+      "after": null
+    }
+  ]
+}

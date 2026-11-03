@@ -5,6 +5,7 @@ pub mod adapter;
 pub mod diff;
 pub mod identity;
 pub mod model;
+pub mod position;
 
 pub use adapter::{Adapter, Capabilities, Direction, Error, Result};
 pub use diff::{diff, Change};
