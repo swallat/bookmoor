@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="bookmoor">
   <title>bookmoor</title>
-  <rect width="128" height="128" rx="26" fill="#17433E"/>
-  <path d="M34 8h60a6 6 0 0 1 6 6v108L64 98 28 122V14a6 6 0 0 1 6-6z" fill="#F5F0E4"/>
-  <circle cx="64" cy="46" r="17" fill="#E9A93B"/>
+  <rect width="128" height="128" rx="26" fill="#1D4E89"/>
+  <path d="M34 8h60a6 6 0 0 1 6 6v108L64 98 28 122V14a6 6 0 0 1 6-6z" fill="#FFFFFF"/>
+  <circle cx="64" cy="46" r="17" fill="#FFB703"/>
 </svg>
