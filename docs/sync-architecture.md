@@ -244,10 +244,17 @@ right sibling) so it never has to rewrite siblings.
 
 Unmodifiable nodes (managed bookmarks, `unmodifiable: "managed"`) and the
 three root folders are never created, moved or deleted; they are synced
-read-only or ignored. Chrome-specific quotas on bookmark writes exist; a first
-sync of thousands of bookmarks must be throttled and resumable. The exact
-limits should be verified against the current Chrome documentation before
-implementing the applier.
+read-only or ignored. Chrome's former quotas on bookmark writes
+(`MAX_WRITE_OPERATIONS_PER_HOUR` and `..._PER_MINUTE`) are deprecated and no
+longer enforced (checked against the Chrome documentation, 2026-11), so a
+first sync is not throttled; it is resumable instead, because the applier
+saves the id map and base every 25 ops.
+
+Browsers disagree on what `index` means when `move` puts a node further down
+its own folder: Chrome counts the node itself, Firefox does not. The applier
+checks the first such move and remembers the answer. Firefox's root folders
+are `toolbar_____`, `unfiled_____` and `mobile______`; its bookmarks menu has
+no counterpart among the server's roles and is not synced.
 
 ### 5.3 Event handling in an MV3 service worker
 
