@@ -90,16 +90,24 @@ fn admin_needs_an_extra_flag() {
 fn refuses_while_a_server_runs_and_works_after_it_was_killed() {
     let path = state_file("locked");
     let p = path.to_str().unwrap();
-    let mut server = Command::new(env!("CARGO_BIN_EXE_bookmoor-server"))
-        .args(["--bind", "127.0.0.1:0", "--state", p])
-        .env_remove("BOOKMOOR_ADMIN_TOKEN")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let spawn = || {
+        Command::new(env!("CARGO_BIN_EXE_bookmoor-server"))
+            .args(["--bind", "127.0.0.1:0", "--state", p])
+            .env_remove("BOOKMOOR_ADMIN_TOKEN")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut server = spawn();
     // The server holds the lock once it has started, so ask until refused.
+    // If the command's own brief lock made the server's start fail, the
+    // server exits; start it again.
     let mut refused = false;
-    for _ in 0..100 {
+    for _ in 0..200 {
+        if server.try_wait().unwrap().is_some() {
+            server = spawn();
+        }
         let out = run(&[
             "create", "--name", "x", "--scope", "read", "--state", p, "--yes",
         ]);
