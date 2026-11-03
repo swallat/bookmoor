@@ -22,11 +22,12 @@ struct LoadFile {
     tokens: Vec<TokenRecord>,
 }
 
-/// Marks a state file as in use, so the server and the token command never
-/// write it at the same time. Removed when dropped (or by hand after a crash).
+/// An exclusive OS lock on `<state>.lock`, so the server and the token
+/// command never write the state at the same time. The kernel drops it when
+/// the process ends, however it ends; the empty file may stay behind.
 #[derive(Debug)]
 pub struct Lock {
-    path: PathBuf,
+    _file: File,
 }
 
 impl Lock {
@@ -34,29 +35,22 @@ impl Lock {
         let mut name = state.file_name().unwrap_or_default().to_os_string();
         name.push(".lock");
         let path = state.with_file_name(name);
-        let mut f = OpenOptions::new()
+        let file = OpenOptions::new()
             .write(true)
-            .create_new(true)
+            .create(true)
+            .truncate(false)
             .open(&path)
-            .map_err(|e| {
-                if e.kind() == io::ErrorKind::AlreadyExists {
-                    format!(
-                        "{} exists: another bookmoor-server or token command is using this state \
-                         (or one crashed). If none is running, delete that file.",
-                        path.display()
-                    )
-                } else {
-                    format!("cannot create {}: {e}", path.display())
-                }
-            })?;
-        let _ = writeln!(f, "{}", std::process::id());
-        Ok(Lock { path })
-    }
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+            .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Lock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+                "{} is in use: another bookmoor-server or token command has this state open",
+                path.display()
+            )),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(format!("cannot lock {}: {e}", path.display()))
+            }
+        }
     }
 }
 

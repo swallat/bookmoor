@@ -15,8 +15,14 @@ use std::sync::{Arc, Mutex};
 /// `bookmoor-server token create --name N --scope S [--state FILE] [--yes] [--allow-admin]`
 fn token_command(mut args: impl Iterator<Item = String>) {
     use bookmoor_server::cli::{confirm_on_terminal, create_token, TokenRequest};
-    if args.next().as_deref() != Some("create") {
-        fail("usage: bookmoor-server token create --name NAME --scope read|sync|admin --state FILE [--yes] [--allow-admin]");
+    const USAGE: &str = "usage: bookmoor-server token create --name NAME --scope read|sync|admin --state FILE [--yes] [--allow-admin]\n\nCreates a token without a running server; refuses while the state is in use.";
+    match args.next().as_deref() {
+        Some("create") => {}
+        Some("--help" | "-h") => {
+            println!("{USAGE}");
+            return;
+        }
+        _ => fail(USAGE),
     }
     let mut state = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let (mut name, mut scope) = (None, None);
@@ -36,6 +42,10 @@ fn token_command(mut args: impl Iterator<Item = String>) {
                 )
             }
             "--state" => state = Some(value("--state").into()),
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return;
+            }
             "--yes" => yes = true,
             "--allow-admin" => allow_admin = true,
             other => fail(&format!("unknown argument {other}")),
@@ -84,7 +94,7 @@ async fn main() {
                 );
             }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]\n       bookmoor-server token create --help");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -96,10 +106,10 @@ async fn main() {
     }
 
     // Held for the life of the process; dropped on a clean shutdown.
-    if let Some(p) = state_path.as_deref() {
-        let lock = Lock::acquire(p).unwrap_or_else(|e| fail(&e));
-        *LOCK.lock().unwrap() = Some(lock);
-    }
+    // Held until the process ends; the OS releases it however that happens.
+    let _lock = state_path
+        .as_deref()
+        .map(|p| Lock::acquire(p).unwrap_or_else(|e| fail(&e)));
     let mut state = match state_path {
         Some(p) => AppState::open(Store::new(p)).unwrap_or_else(|e| fail(&e)),
         None => {
@@ -145,8 +155,6 @@ async fn main() {
     .with_graceful_shutdown(shutdown_signal())
     .await
     .expect("server error");
-    // Statics are not dropped on exit, so release the state-file lock here.
-    drop(LOCK.lock().ok().and_then(|mut l| l.take()));
 }
 
 /// Ctrl-C everywhere, and SIGTERM (systemd, docker stop) on Unix.
@@ -165,11 +173,7 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-/// The state-file lock, kept where `fail` can release it before exiting.
-static LOCK: Mutex<Option<Lock>> = Mutex::new(None);
-
 fn fail(msg: &str) -> ! {
     eprintln!("error: {msg}");
-    drop(LOCK.lock().ok().and_then(|mut l| l.take()));
     std::process::exit(2);
 }

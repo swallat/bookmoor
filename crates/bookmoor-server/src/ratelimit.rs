@@ -44,9 +44,10 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
         if !self.buckets.contains_key(key) && self.buckets.len() >= self.max_keys {
             // Sweeping scans everything, so at most once a second: under a
             // flood of new keys the lock must not be held for a scan each time.
-            if self.last_sweep.map_or(true, |t| {
-                now.saturating_duration_since(t) >= Duration::from_secs(1)
-            }) {
+            if self
+                .last_sweep
+                .is_none_or(|t| now.saturating_duration_since(t) >= Duration::from_secs(1))
+            {
                 self.last_sweep = Some(now);
                 self.forget_idle(now);
             }

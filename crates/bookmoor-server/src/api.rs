@@ -30,12 +30,20 @@ pub struct AppState {
 
 impl AppState {
     /// A new token; a sync token comes with its own endpoint.
-    pub fn issue_token(&mut self, name: &str, scope: Scope) -> (String, TokenRecord) {
+    pub fn issue_token(
+        &mut self,
+        name: &str,
+        scope: Scope,
+    ) -> Result<(String, TokenRecord), String> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+            return Err("token name must be 1 to 64 characters without control characters".into());
+        }
         let endpoint_id = (scope == Scope::Sync).then(|| random_id("ep_"));
         if let Some(ep) = &endpoint_id {
             self.engine.register_endpoint(ep);
         }
-        self.tokens.create(name, scope, endpoint_id)
+        Ok(self.tokens.create(name, scope, endpoint_id))
     }
 }
 
@@ -281,7 +289,9 @@ async fn create_token(
 ) -> Result<(StatusCode, Json<CreatedToken>), ApiError> {
     need(&who, Scope::Admin)?;
     let mut st = s.lock().unwrap();
-    let (token, rec) = st.issue_token(&body.name, body.scope);
+    let (token, rec) = st
+        .issue_token(&body.name, body.scope)
+        .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok((
         StatusCode::CREATED,

@@ -26,9 +26,6 @@ pub fn create_token(
     confirm: impl FnOnce(&str) -> Result<bool, String>,
 ) -> Result<String, String> {
     let name = req.name.trim();
-    if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
-        return Err("--name must be 1 to 64 characters without control characters".into());
-    }
     if req.scope == Scope::Admin && !req.allow_admin {
         return Err("an admin token can do everything; pass --allow-admin if you mean it".into());
     }
@@ -42,7 +39,7 @@ pub fn create_token(
     let mut state = crate::api::AppState::open(Store::new(req.state))?;
     if !req.yes {
         let what = format!(
-            "Create a {:?} token named {name:?} in {}",
+            "Create a token with scope {} named {name:?} in {}",
             req.scope,
             req.state.display()
         );
@@ -50,7 +47,7 @@ pub fn create_token(
             return Err("not confirmed, nothing was changed".into());
         }
     }
-    let (token, _) = state.issue_token(name, req.scope);
+    let (token, _) = state.issue_token(name, req.scope)?;
     state
         .persist()
         .map_err(|e| format!("cannot save the state: {e}"))?;

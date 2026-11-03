@@ -43,8 +43,6 @@ fn creates_a_token_that_the_state_then_accepts() {
     let rec = state.tokens.authenticate(&token).expect("token is valid");
     assert_eq!(rec.scope, Scope::Sync);
     assert!(rec.endpoint_id.is_some());
-    // The command leaves no lock behind.
-    assert!(!path.with_file_name("state.json.lock").exists());
 }
 
 #[test]
@@ -89,18 +87,41 @@ fn admin_needs_an_extra_flag() {
 }
 
 #[test]
-fn refuses_while_the_state_is_in_use_and_without_a_state_file() {
+fn refuses_while_a_server_runs_and_works_after_it_was_killed() {
     let path = state_file("locked");
-    let lock = path.with_file_name("state.json.lock");
-    std::fs::write(&lock, "123").unwrap();
     let p = path.to_str().unwrap();
+    let mut server = Command::new(env!("CARGO_BIN_EXE_bookmoor-server"))
+        .args(["--bind", "127.0.0.1:0", "--state", p])
+        .env_remove("BOOKMOOR_ADMIN_TOKEN")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    // The server holds the lock once it has started, so ask until refused.
+    let mut refused = false;
+    for _ in 0..100 {
+        let out = run(&[
+            "create", "--name", "x", "--scope", "read", "--state", p, "--yes",
+        ]);
+        if !out.status.success() && stderr(&out).contains("in use") {
+            refused = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(refused, "the running server must block the command");
+    // A hard kill leaves the lock file behind but not the lock.
+    server.kill().unwrap();
+    server.wait().unwrap();
     let out = run(&[
         "create", "--name", "x", "--scope", "read", "--state", p, "--yes",
     ]);
-    assert!(!out.status.success());
-    assert!(stderr(&out).contains("state.json.lock"), "{}", stderr(&out));
-    assert!(lock.exists(), "someone else's lock must stay");
+    assert!(out.status.success(), "{}", stderr(&out));
+}
 
+#[test]
+fn needs_an_existing_state_file() {
+    let path = state_file("missing");
     let missing = path.with_file_name("nope.json");
     let out = run(&[
         "create",
@@ -114,4 +135,25 @@ fn refuses_while_the_state_is_in_use_and_without_a_state_file() {
     ]);
     assert!(!out.status.success());
     assert!(!missing.exists(), "must not create a state file");
+}
+
+#[test]
+fn rejects_bad_scope_and_names() {
+    let path = state_file("bad");
+    let p = path.to_str().unwrap();
+    let out = run(&[
+        "create", "--name", "x", "--scope", "root", "--state", p, "--yes",
+    ]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("unknown scope"));
+    let long = "é".repeat(65);
+    for name in ["", "   ", long.as_str()] {
+        let out = run(&[
+            "create", "--name", name, "--scope", "read", "--state", p, "--yes",
+        ]);
+        assert!(!out.status.success(), "name {name:?}");
+        assert!(stderr(&out).contains("1 to 64"), "{}", stderr(&out));
+    }
+    let out = run(&["create", "--help"]);
+    assert!(out.status.success());
 }

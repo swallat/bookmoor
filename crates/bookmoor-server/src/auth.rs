@@ -20,6 +20,16 @@ pub enum Scope {
     Admin,
 }
 
+impl std::fmt::Display for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Scope::Read => "read",
+            Scope::Sync => "sync",
+            Scope::Admin => "admin",
+        })
+    }
+}
+
 impl std::str::FromStr for Scope {
     type Err = String;
     fn from_str(s: &str) -> Result<Scope, String> {

@@ -57,8 +57,9 @@ mise run token:create -- --name laptop --scope sync
 # or: bookmoor-server token create --name laptop --scope sync --state state.json
 ```
 
-The command refuses to run while a server holds the state file
-(`state.json.lock`), asks you to retype the name unless you pass `--yes`, and
+The command refuses to run while a server holds the state file (an OS lock on
+`state.json.lock`, released by the system even after a crash; the empty file
+itself may stay), asks you to retype the name unless you pass `--yes`, and
 needs `--allow-admin` for an admin token. The token is printed once. To
 replace a lost admin token, start the server with `BOOKMOOR_ADMIN_TOKEN` set to
 a new `bkm_<id>_<64 hex characters>`, or use the command above with
