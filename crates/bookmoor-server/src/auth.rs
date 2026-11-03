@@ -20,6 +20,20 @@ pub enum Scope {
     Admin,
 }
 
+impl std::str::FromStr for Scope {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Scope, String> {
+        match s {
+            "read" => Ok(Scope::Read),
+            "sync" => Ok(Scope::Sync),
+            "admin" => Ok(Scope::Admin),
+            other => Err(format!(
+                "unknown scope {other:?}, expected read, sync or admin"
+            )),
+        }
+    }
+}
+
 impl Scope {
     /// Whether a token of this scope may do what `required` asks for.
     pub fn allows(self, required: Scope) -> bool {

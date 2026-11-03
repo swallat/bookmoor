@@ -28,6 +28,17 @@ pub struct AppState {
     pub limits: crate::ratelimit::Limits,
 }
 
+impl AppState {
+    /// A new token; a sync token comes with its own endpoint.
+    pub fn issue_token(&mut self, name: &str, scope: Scope) -> (String, TokenRecord) {
+        let endpoint_id = (scope == Scope::Sync).then(|| random_id("ep_"));
+        if let Some(ep) = &endpoint_id {
+            self.engine.register_endpoint(ep);
+        }
+        self.tokens.create(name, scope, endpoint_id)
+    }
+}
+
 pub type Shared = Arc<Mutex<AppState>>;
 
 #[derive(Debug)]
@@ -270,11 +281,7 @@ async fn create_token(
 ) -> Result<(StatusCode, Json<CreatedToken>), ApiError> {
     need(&who, Scope::Admin)?;
     let mut st = s.lock().unwrap();
-    let endpoint_id = (body.scope == Scope::Sync).then(|| random_id("ep_"));
-    if let Some(ep) = &endpoint_id {
-        st.engine.register_endpoint(ep);
-    }
-    let (token, rec) = st.tokens.create(&body.name, body.scope, endpoint_id);
+    let (token, rec) = st.issue_token(&body.name, body.scope);
     save(&mut st)?;
     Ok((
         StatusCode::CREATED,

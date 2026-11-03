@@ -22,6 +22,44 @@ struct LoadFile {
     tokens: Vec<TokenRecord>,
 }
 
+/// Marks a state file as in use, so the server and the token command never
+/// write it at the same time. Removed when dropped (or by hand after a crash).
+#[derive(Debug)]
+pub struct Lock {
+    path: PathBuf,
+}
+
+impl Lock {
+    pub fn acquire(state: &Path) -> Result<Lock, String> {
+        let mut name = state.file_name().unwrap_or_default().to_os_string();
+        name.push(".lock");
+        let path = state.with_file_name(name);
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    format!(
+                        "{} exists: another bookmoor-server or token command is using this state \
+                         (or one crashed). If none is running, delete that file.",
+                        path.display()
+                    )
+                } else {
+                    format!("cannot create {}: {e}", path.display())
+                }
+            })?;
+        let _ = writeln!(f, "{}", std::process::id());
+        Ok(Lock { path })
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     path: PathBuf,
