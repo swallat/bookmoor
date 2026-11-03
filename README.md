@@ -45,6 +45,13 @@ mise tasks            # all tasks
 Without mise: `cargo test`, and `cd extension && npm ci && npm run build`.
 Load `extension/dist` via `chrome://extensions` > Developer mode > Load unpacked.
 
+### Log
+
+The server writes one line per request to stderr: time (UTC), client address,
+token name (`-` if unauthenticated), method, path, status and duration. Query
+strings are left out because proxy setups may carry secrets there; `/health`
+is not logged. Behind a reverse proxy the address is the proxy's.
+
 ### Tokens
 
 The first start with a new state file prints an admin token once. Only a hash

@@ -130,8 +130,72 @@ async fn require_auth(
             }
         }
     };
+    let who = TokenName(rec.name.clone());
     req.extensions_mut().insert(rec);
-    Ok(next.run(req).await)
+    let mut resp = next.run(req).await;
+    // For the request log, which sits outside this layer.
+    resp.extensions_mut().insert(who);
+    Ok(resp)
+}
+
+/// Name of the token that made a request, passed outwards to the log line.
+#[derive(Clone)]
+struct TokenName(String);
+
+/// One line per request on stderr: time, peer, token, method, path, status,
+/// duration. The query string is left out on purpose, since proxy setups may
+/// carry secrets in it. `/health` is skipped so probes do not drown the rest.
+async fn log_requests(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip().to_string())
+        .unwrap_or_else(|| "-".into());
+    let started = Instant::now();
+    let resp = next.run(req).await;
+    if path != "/health" {
+        let who = resp
+            .extensions()
+            .get::<TokenName>()
+            .map_or("-", |t| t.0.as_str());
+        eprintln!(
+            "{} {peer} {who} {method} {path} {} {}ms",
+            utc_now(),
+            resp.status().as_u16(),
+            started.elapsed().as_millis()
+        );
+    }
+    resp
+}
+
+/// `2026-11-03T20:35:16Z` without a date library.
+fn utc_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    utc(secs)
+}
+
+fn utc(secs: u64) -> String {
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    // Civil-from-days (Howard Hinnant), days since 1970-01-01.
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60
+    )
 }
 
 fn retry_after(wait: Duration) -> ApiError {
@@ -181,6 +245,7 @@ pub fn router(state: Shared) -> Router {
         .route("/health", get(health))
         .merge(v1)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(middleware::from_fn(log_requests))
         .with_state(state)
 }
 
@@ -316,6 +381,13 @@ mod tests {
         let mut st = AppState::default();
         let (admin, _) = st.tokens.create("admin", Scope::Admin, None);
         (Arc::new(Mutex::new(st)), admin)
+    }
+
+    #[test]
+    fn utc_formats_known_instants() {
+        assert_eq!(utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(utc(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(utc(1_793_738_116), "2026-11-03T20:35:16Z");
     }
 
     async fn call(
