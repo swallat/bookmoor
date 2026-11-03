@@ -2,7 +2,8 @@
 
 use crate::auth::{random_id, Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, SyncError};
-use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use crate::ratelimit::client_key;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -11,7 +12,9 @@ use axum::Extension;
 use axum::{Json, Router};
 use bookmoor_core::wire::{SyncRequest, SyncResponse, TreeResponse};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Largest accepted request body.
 pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -22,6 +25,7 @@ pub struct AppState {
     pub tokens: Tokens,
     /// Where state is saved after every change; `None` keeps it in memory.
     pub store: Option<crate::store::Store>,
+    pub limits: crate::ratelimit::Limits,
 }
 
 pub type Shared = Arc<Mutex<AppState>>;
@@ -32,10 +36,20 @@ pub enum ApiError {
     Forbidden,
     Unprocessable(String),
     Storage,
+    /// Seconds until the caller may try again.
+    TooManyRequests(u64),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let ApiError::TooManyRequests(secs) = self {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, secs.to_string())],
+                Json(serde_json::json!({ "error": "too many requests" })),
+            )
+                .into_response();
+        }
         let (status, msg) = match self {
             // Uniform body so callers cannot tell why authentication failed.
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
@@ -45,6 +59,7 @@ impl IntoResponse for ApiError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "could not save state".to_string(),
             ),
+            ApiError::TooManyRequests(_) => unreachable!("answered above"),
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()
     }
@@ -57,21 +72,51 @@ async fn require_auth(
     mut req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    // Without a peer address (not served with connect info) there is nothing
+    // to key the failed-auth bucket on; skipping beats sharing one for all.
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| client_key(c.0.ip()));
     let rec = {
-        let st = s.lock().unwrap();
-        let text = req
+        let mut st = s.lock().unwrap();
+        let now = Instant::now();
+        let found = req
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
-            .ok_or(ApiError::Unauthorized)?;
-        st.tokens
-            .authenticate(text)
-            .ok_or(ApiError::Unauthorized)?
-            .clone()
+            .and_then(|text| st.tokens.authenticate(text))
+            .cloned();
+        match found {
+            Some(rec) => {
+                // Only bad credentials count against the address. A throttled
+                // address can still use a valid token: tokens carry 256 bits,
+                // so guessing is hopeless either way, and refusing before the
+                // check would lock out a reverse proxy's real clients.
+                st.limits
+                    .per_token
+                    .take(&rec.id, now)
+                    .map_err(retry_after)?;
+                rec
+            }
+            None => {
+                if let Some(peer) = peer {
+                    st.limits
+                        .failed_auth
+                        .take(&peer, now)
+                        .map_err(retry_after)?;
+                }
+                return Err(ApiError::Unauthorized);
+            }
+        }
     };
     req.extensions_mut().insert(rec);
     Ok(next.run(req).await)
+}
+
+fn retry_after(wait: Duration) -> ApiError {
+    ApiError::TooManyRequests(wait.as_secs_f64().ceil().max(1.0) as u64)
 }
 
 fn need(who: &TokenRecord, required: Scope) -> Result<(), ApiError> {
@@ -537,5 +582,65 @@ mod tests {
         )
         .await;
         assert_eq!(r["resync"], true);
+    }
+
+    #[tokio::test]
+    async fn bad_tokens_are_throttled_but_good_ones_keep_working() {
+        let (state, admin) = setup();
+        let app = router(state);
+        let from = |peer: &str, token: &str| {
+            let mut req = Request::builder()
+                .uri("/v1/tree")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap();
+            let addr: SocketAddr = format!("{peer}:4000").parse().unwrap();
+            req.extensions_mut().insert(ConnectInfo(addr));
+            let app = app.clone();
+            async move { app.oneshot(req).await.unwrap().status() }
+        };
+        let mut last = StatusCode::OK;
+        for _ in 0..30 {
+            last = from("192.0.2.1", "bkm_x_nope").await;
+        }
+        assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+        // The same address with a valid token is not locked out ...
+        assert_eq!(from("192.0.2.1", &admin).await, StatusCode::OK);
+        // ... and other addresses have buckets of their own.
+        assert_eq!(
+            from("192.0.2.2", "bkm_x_nope").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn a_busy_token_gets_429_with_retry_after() {
+        let (state, admin) = setup();
+        state.lock().unwrap().limits.per_token = crate::ratelimit::Limiter::new(3, 0.5, 100);
+        let app = router(state);
+        for _ in 0..3 {
+            assert_eq!(
+                call(&app, "GET", "/v1/tree", Some(&admin), None).await.0,
+                StatusCode::OK
+            );
+        }
+        let req = Request::builder()
+            .uri("/v1/tree")
+            .header("authorization", format!("Bearer {admin}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let wait: u64 = resp.headers()["retry-after"]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1..=3).contains(&wait));
+        // /health stays open and unthrottled.
+        assert_eq!(
+            call(&app, "GET", "/health", None, None).await.0,
+            StatusCode::OK
+        );
     }
 }

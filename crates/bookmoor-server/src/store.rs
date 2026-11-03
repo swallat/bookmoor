@@ -102,6 +102,7 @@ impl AppState {
             engine,
             tokens,
             store: Some(store),
+            limits: Default::default(),
         })
     }
 
