@@ -1,0 +1,9 @@
+[package]
+name = "bookmoor-core"
+description = "Data model, adapter interface and three-way diff for bookmoor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]

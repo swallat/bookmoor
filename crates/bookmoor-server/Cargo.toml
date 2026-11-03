@@ -1,0 +1,10 @@
+[package]
+name = "bookmoor-server"
+description = "Self-hosted sync server for bookmoor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bookmoor-core.workspace = true

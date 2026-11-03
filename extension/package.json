@@ -1,0 +1,17 @@
+{
+  "name": "bookmoor-extension",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Browser extension for bookmoor (Chrome first, Firefox later)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.300",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>bookmoor settings</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 16px; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input { width: 100%; box-sizing: border-box; padding: 6px; }
+    .row { display: flex; gap: 8px; margin-top: 6px; }
+    button { margin-top: 1rem; padding: 6px 12px; }
+    #status { margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>bookmoor</h1>
+  <label for="url">Server URL</label>
+  <input id="url" type="url" placeholder="https://bookmoor.example.com" />
+  <label for="token">API token</label>
+  <input id="token" type="password" autocomplete="off" />
+  <label>Extra headers (e.g. reverse-proxy header auth)</label>
+  <div id="headers"></div>
+  <button id="add" type="button">Add header</button>
+  <div><button id="save" type="button">Save</button></div>
+  <div id="status" role="status"></div>
+  <script type="module" src="options.js"></script>
+</body>
+</html>
