@@ -1,3 +1,4 @@
+use crate::position::cmp_siblings;
 use std::collections::BTreeMap;
 
 /// Stable, server-side identifier of a node in the canonical tree.
@@ -6,6 +7,8 @@ pub type NodeId = String;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bookmark {
     pub id: NodeId,
+    /// Fractional index among the siblings, see [`crate::position`].
+    pub position: String,
     pub title: String,
     pub url: String,
 }
@@ -13,6 +16,8 @@ pub struct Bookmark {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Folder {
     pub id: NodeId,
+    /// Fractional index among the siblings; empty for the tree root.
+    pub position: String,
     pub title: String,
     pub children: Vec<Node>,
 }
@@ -28,6 +33,13 @@ impl Node {
         match self {
             Node::Folder(f) => &f.id,
             Node::Bookmark(b) => &b.id,
+        }
+    }
+
+    pub fn position(&self) -> &str {
+        match self {
+            Node::Folder(f) => &f.position,
+            Node::Bookmark(b) => &b.position,
         }
     }
 }
@@ -51,6 +63,22 @@ pub struct FlatNode {
     pub kind: Kind,
     pub title: String,
     pub url: Option<String>,
+    /// Fractional index among the siblings (empty for the root).
+    pub position: String,
+}
+
+impl Folder {
+    /// Order `children` by `(position, id)`, recursively. This is the
+    /// canonical sibling order; ties on position are broken by id.
+    pub fn sort_children(&mut self) {
+        self.children
+            .sort_by(|a, b| cmp_siblings((a.position(), a.id()), (b.position(), b.id())));
+        for child in &mut self.children {
+            if let Node::Folder(f) = child {
+                f.sort_children();
+            }
+        }
+    }
 }
 
 impl Tree {
@@ -60,8 +88,14 @@ impl Tree {
                 id: root_id.into(),
                 title: title.into(),
                 children: Vec::new(),
+                position: String::new(),
             },
         }
+    }
+
+    /// Put every folder's children into canonical `(position, id)` order.
+    pub fn sort(&mut self) {
+        self.root.sort_children();
     }
 
     /// Flatten into an id -> node map (the root has `parent == None`).
@@ -74,6 +108,7 @@ impl Tree {
                 kind: Kind::Folder,
                 title: self.root.title.clone(),
                 url: None,
+                position: String::new(),
             },
         );
         flatten_children(&self.root, &mut out);
@@ -92,6 +127,7 @@ fn flatten_children(folder: &Folder, out: &mut BTreeMap<NodeId, FlatNode>) {
                         kind: Kind::Folder,
                         title: f.title.clone(),
                         url: None,
+                        position: f.position.clone(),
                     },
                 );
                 flatten_children(f, out);
@@ -104,6 +140,7 @@ fn flatten_children(folder: &Folder, out: &mut BTreeMap<NodeId, FlatNode>) {
                         kind: Kind::Bookmark,
                         title: b.title.clone(),
                         url: Some(b.url.clone()),
+                        position: b.position.clone(),
                     },
                 );
             }
