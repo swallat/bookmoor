@@ -31,14 +31,31 @@ impl Scope {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRecord {
     pub id: String,
     pub name: String,
     pub scope: Scope,
     /// A sync token maps to exactly one endpoint (revocation = stop a device).
     pub endpoint_id: Option<String>,
+    #[serde(with = "hex_hash")]
     secret_hash: [u8; 32],
+}
+
+mod hex_hash {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(h: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&hex::encode(h))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        let text = String::deserialize(d)?;
+        let bytes = hex::decode(&text).map_err(serde::de::Error::custom)?;
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("secret hash must be 32 bytes"))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -123,10 +140,35 @@ impl Tokens {
         }
     }
 
+    pub fn records(&self) -> Vec<TokenRecord> {
+        let mut v: Vec<_> = self.by_id.values().cloned().collect();
+        v.sort_by(|a, b| a.id.cmp(&b.id));
+        v
+    }
+
+    pub fn from_records(records: Vec<TokenRecord>) -> Self {
+        Tokens {
+            by_id: records.into_iter().map(|r| (r.id.clone(), r)).collect(),
+        }
+    }
+
+    pub fn has_admin(&self) -> bool {
+        self.by_id.values().any(|r| r.scope == Scope::Admin)
+    }
+
+    /// Drop all tokens of `scope` called `name` (used when the admin token
+    /// from the environment is rotated).
+    pub fn remove_named(&mut self, name: &str, scope: Scope) {
+        self.by_id
+            .retain(|_, r| !(r.name == name && r.scope == scope));
+    }
+
     /// Revoke every token bound to `endpoint_id`.
-    pub fn revoke_endpoint(&mut self, endpoint_id: &str) {
+    pub fn revoke_endpoint(&mut self, endpoint_id: &str) -> bool {
+        let before = self.by_id.len();
         self.by_id
             .retain(|_, r| r.endpoint_id.as_deref() != Some(endpoint_id));
+        self.by_id.len() != before
     }
 }
 

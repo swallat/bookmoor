@@ -20,6 +20,8 @@ pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 pub struct AppState {
     pub engine: Engine,
     pub tokens: Tokens,
+    /// Where state is saved after every change; `None` keeps it in memory.
+    pub store: Option<crate::store::Store>,
 }
 
 pub type Shared = Arc<Mutex<AppState>>;
@@ -29,6 +31,7 @@ pub enum ApiError {
     Unauthorized,
     Forbidden,
     Unprocessable(String),
+    Storage,
 }
 
 impl IntoResponse for ApiError {
@@ -38,6 +41,10 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
             ApiError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m),
+            ApiError::Storage => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not save state".to_string(),
+            ),
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()
     }
@@ -113,6 +120,15 @@ pub fn router(state: Shared) -> Router {
         .with_state(state)
 }
 
+/// A failed save is reported, never ignored: the caller retries and op ids
+/// make that safe.
+fn save(st: &mut AppState) -> Result<(), ApiError> {
+    st.persist_or_revert().map_err(|e| {
+        eprintln!("error: saving state failed: {e}");
+        ApiError::Storage
+    })
+}
+
 async fn health() -> &'static str {
     "ok"
 }
@@ -137,8 +153,16 @@ async fn sync(
     if who.endpoint_id.as_deref() != Some(req.endpoint_id.as_str()) {
         return Err(ApiError::Forbidden);
     }
+    let before = st.engine.rev();
     match st.engine.sync(&req) {
-        Ok(resp) => Ok(Json(resp)),
+        Ok(resp) => {
+            // Rejected or repeated ops leave the canonical state as it was;
+            // a retry after a restart is judged the same way again.
+            if st.engine.rev() != before {
+                save(&mut st)?;
+            }
+            Ok(Json(resp))
+        }
         Err(SyncError::TooManyOps { max }) => Err(ApiError::Unprocessable(format!(
             "too many ops in one request (max {max})"
         ))),
@@ -171,8 +195,11 @@ async fn delete_endpoint(
     if who.scope != Scope::Admin && who.endpoint_id.as_deref() != Some(id.as_str()) {
         return Err(ApiError::Forbidden);
     }
-    st.engine.remove_endpoint(&id);
-    st.tokens.revoke_endpoint(&id);
+    let known = st.engine.remove_endpoint(&id);
+    let revoked = st.tokens.revoke_endpoint(&id);
+    if known || revoked {
+        save(&mut st)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -203,6 +230,7 @@ async fn create_token(
         st.engine.register_endpoint(ep);
     }
     let (token, rec) = st.tokens.create(&body.name, body.scope, endpoint_id);
+    save(&mut st)?;
     Ok((
         StatusCode::CREATED,
         Json(CreatedToken {

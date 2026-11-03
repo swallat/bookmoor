@@ -26,6 +26,7 @@ use bookmoor_core::position;
 use bookmoor_core::wire::{
     Op, OpBody, RejectReason, RejectedOp, SyncRequest, SyncResponse, TreeResponse, WireNode,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub const ROOT: &str = "root";
@@ -44,7 +45,7 @@ pub enum SyncError {
     TooManyOps { max: usize },
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Stamp {
     rev: u64,
     by: String,
@@ -56,7 +57,7 @@ impl Stamp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Rec {
     id: String,
     parent: Option<String>,
@@ -93,7 +94,7 @@ impl Rec {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LogEntry {
     rev: u64,
     /// `None` = made by the server itself (delivered to everyone).
@@ -103,6 +104,22 @@ struct LogEntry {
 }
 
 type Res<T> = Result<T, RejectReason>;
+
+/// Version of the persisted engine state.
+const SNAPSHOT_VERSION: u32 = 1;
+
+/// The persisted form of an [`Engine`] (JSON map keys must be strings, so the
+/// idempotency table is stored as a list in eviction order).
+#[derive(Serialize, Deserialize)]
+pub struct Snapshot {
+    version: u32,
+    nodes: Vec<Rec>,
+    rev: u64,
+    horizon: u64,
+    log: Vec<LogEntry>,
+    endpoints: Vec<String>,
+    seen: Vec<(String, String, Option<RejectReason>)>,
+}
 
 #[derive(Debug)]
 pub struct Engine {
@@ -199,6 +216,87 @@ impl Engine {
         e
     }
 
+    pub fn snapshot(&self) -> Snapshot {
+        let mut endpoints: Vec<String> = self.endpoints.iter().cloned().collect();
+        endpoints.sort();
+        Snapshot {
+            version: SNAPSHOT_VERSION,
+            nodes: self.nodes.values().cloned().collect(),
+            rev: self.rev,
+            horizon: self.horizon,
+            log: self.log.clone(),
+            endpoints,
+            seen: self
+                .seen_order
+                .iter()
+                .filter_map(|k| self.seen.get(k).map(|v| (k.0.clone(), k.1.clone(), *v)))
+                .collect(),
+        }
+    }
+
+    /// Rebuild an engine from persisted state, refusing anything that would
+    /// break the invariants the sync code relies on.
+    pub fn restore(s: Snapshot) -> Result<Engine, String> {
+        if s.version != SNAPSHOT_VERSION {
+            return Err(format!("unsupported snapshot version {}", s.version));
+        }
+        let nodes: BTreeMap<String, Rec> = s.nodes.into_iter().map(|r| (r.id.clone(), r)).collect();
+        for id in std::iter::once(&ROOT).chain(ROLES.iter()) {
+            if !nodes.get(*id).is_some_and(Rec::alive) {
+                return Err(format!("snapshot lacks the well-known node {id}"));
+            }
+        }
+        // Every live node must reach the root through live parents; this
+        // also rules out cycles, which the sync code would loop on.
+        for r in nodes.values().filter(|r| r.alive()) {
+            let mut cur = r;
+            let mut steps = 0;
+            while cur.id != ROOT {
+                steps += 1;
+                match cur.parent.as_ref().and_then(|p| nodes.get(p)) {
+                    Some(p) if p.alive() && steps <= nodes.len() => cur = p,
+                    _ => return Err(format!("node {} is not attached to the root", r.id)),
+                }
+            }
+        }
+        for id in ROLES {
+            if nodes[id].parent.as_deref() != Some(ROOT) {
+                return Err(format!("well-known node {id} is not below the root"));
+            }
+        }
+        let stamp_ok = |st: &Stamp| st.rev <= s.rev;
+        let stamps_ok = nodes.values().all(|r| {
+            stamp_ok(&r.created)
+                && stamp_ok(&r.title_st)
+                && stamp_ok(&r.url_st)
+                && stamp_ok(&r.place_st)
+                && r.deleted.as_ref().map_or(true, stamp_ok)
+        });
+        if !stamps_ok
+            || s.log.iter().any(|e| e.rev > s.rev)
+            || s.horizon > s.rev
+            || s.seen.len() > MAX_SEEN_OPS
+        {
+            return Err("snapshot revisions are inconsistent".into());
+        }
+        let mut seen = HashMap::new();
+        let mut seen_order = std::collections::VecDeque::new();
+        for (ep, op, v) in s.seen {
+            if seen.insert((ep.clone(), op.clone()), v).is_none() {
+                seen_order.push_back((ep, op));
+            }
+        }
+        Ok(Engine {
+            nodes,
+            rev: s.rev,
+            horizon: s.horizon,
+            log: s.log,
+            endpoints: s.endpoints.into_iter().collect(),
+            seen,
+            seen_order,
+        })
+    }
+
     pub fn rev(&self) -> u64 {
         self.rev
     }
@@ -207,10 +305,12 @@ impl Engine {
         self.endpoints.insert(id.to_string());
     }
 
-    pub fn remove_endpoint(&mut self, id: &str) {
-        self.endpoints.remove(id);
+    /// Whether the endpoint was registered.
+    pub fn remove_endpoint(&mut self, id: &str) -> bool {
+        let known = self.endpoints.remove(id);
         self.seen.retain(|(ep, _), _| ep != id);
         self.seen_order.retain(|(ep, _)| ep != id);
+        known
     }
 
     /// The canonical tree, alive nodes only, parent-first.
