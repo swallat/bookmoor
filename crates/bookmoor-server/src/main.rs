@@ -1,6 +1,6 @@
 //! bookmoor server entry point.
 //!
-//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-file FILE]`
+//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]...`
 //! and `bookmoor-server token create ...` (see `--help` of that command).
 //! With `--state` (or `BOOKMOOR_STATE`) everything survives restarts.
 //! The first admin token is read from `BOOKMOOR_ADMIN_TOKEN`
@@ -154,7 +154,17 @@ async fn main() {
     let mut state_path = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let mut dynacat_user = std::env::var("BOOKMOOR_DYNACAT_USER").ok();
     let mut dynacat_profile = std::env::var("BOOKMOOR_DYNACAT_PROFILE").ok();
-    let mut dynacat_file = std::env::var_os("BOOKMOOR_DYNACAT_FILE").map(std::path::PathBuf::from);
+    // One spec per line in the environment, see `Output::parse`.
+    let mut dynacat_outputs: Vec<bookmoor_server::dynacat::Output> = Vec::new();
+    let from_env = |var: &str| std::env::var(var).unwrap_or_default();
+    for spec in from_env("BOOKMOOR_DYNACAT_FILE")
+        .lines()
+        .chain(from_env("BOOKMOOR_DYNACAT_OUTPUTS").lines())
+        .filter(|l| !l.trim().is_empty())
+    {
+        dynacat_outputs
+            .push(bookmoor_server::dynacat::Output::parse(spec).unwrap_or_else(|e| fail(&e)));
+    }
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -184,15 +194,16 @@ async fn main() {
                         .unwrap_or_else(|| fail("--dynacat-user needs a user name")),
                 );
             }
-            "--dynacat-file" => {
-                dynacat_file = Some(
-                    args.next()
-                        .unwrap_or_else(|| fail("--dynacat-file needs a file path"))
-                        .into(),
+            "--dynacat-file" | "--dynacat-output" => {
+                let spec = args
+                    .next()
+                    .unwrap_or_else(|| fail(&format!("{a} needs a file path or a spec")));
+                dynacat_outputs.push(
+                    bookmoor_server::dynacat::Output::parse(&spec).unwrap_or_else(|e| fail(&e)),
                 );
             }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-file FILE] [--dynacat-user USER] [--dynacat-profile PROFILE]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]... [--dynacat-user USER] [--dynacat-profile PROFILE]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -239,7 +250,7 @@ async fn main() {
     }
 
     state.secure_cookies = !insecure;
-    state.dynacat_file = dynacat_file;
+    state.dynacat_outputs = dynacat_outputs;
     state.dynacat_user = dynacat_user;
     state.dynacat_profile = dynacat_profile;
     if let Err(e) = state.publish_dynacat(None) {

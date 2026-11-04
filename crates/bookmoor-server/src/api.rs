@@ -36,21 +36,22 @@ pub struct AppState {
     pub sessions: crate::sessions::Sessions,
     /// Mark the session cookie `Secure` (everything but `--insecure-http`).
     pub secure_cookies: bool,
-    /// Where the Dynacat widget file is kept up to date; `None` = off.
-    pub dynacat_file: Option<std::path::PathBuf>,
+    /// The Dynacat widget files kept up to date (none = off).
+    pub dynacat_outputs: Vec<crate::dynacat::Output>,
     /// Whose tree the Dynacat file shows (id or name); the only user if unset.
     pub dynacat_user: Option<String>,
-    /// Which of that user's profiles it shows; the only one if unset.
+    /// Default profile of an output that names none; the only one if unset.
     pub dynacat_profile: Option<String>,
 }
 
 impl AppState {
     /// The profile whose tree the Dynacat file shows: `dynacat_profile`, else
     /// the user's only profile, else (several) their `Default` one.
-    fn dynacat_target(&self) -> Result<String, String> {
+    fn dynacat_target(&self, profile: Option<&str>) -> Result<String, String> {
+        let profile = profile.or(self.dynacat_profile.as_deref());
         let uid = self.resolve_user(self.dynacat_user.as_deref())?;
-        match self.resolve_profile(&uid, self.dynacat_profile.as_deref()) {
-            Err(_) if self.dynacat_profile.is_none() => {
+        match self.resolve_profile(&uid, profile) {
+            Err(_) if profile.is_none() => {
                 let id = crate::profiles::default_id_for(&uid);
                 if self.profiles.get(&id).is_some_and(|p| p.user_id == uid) {
                     Ok(id)
@@ -67,20 +68,27 @@ impl AppState {
     /// leave the file alone. A failure is logged and never fails the sync:
     /// the dashboard is a view, the canonical tree is saved.
     pub fn publish_dynacat(&self, changed: Option<&str>) -> std::io::Result<()> {
-        let Some(path) = &self.dynacat_file else {
-            return Ok(());
-        };
-        if self.users.is_empty() {
+        if self.dynacat_outputs.is_empty() || self.users.is_empty() {
             return Ok(());
         }
-        let pid = self
-            .dynacat_target()
-            .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))?;
-        if changed.is_some_and(|c| c != pid) {
-            return Ok(());
+        // Every output gets its turn; the first failure is reported.
+        let mut first_err = None;
+        for out in &self.dynacat_outputs {
+            let res = self
+                .dynacat_target(out.profile.as_deref())
+                .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))
+                .and_then(|pid| {
+                    if changed.is_some_and(|c| c != pid) {
+                        return Ok(false);
+                    }
+                    crate::dynacat::publish(&out.file, &self.engines[&pid].tree(), &out.folder)
+                });
+            if let Err(e) = res {
+                let e = std::io::Error::other(format!("{}: {e}", out.file.display()));
+                first_err.get_or_insert(e);
+            }
         }
-        crate::dynacat::publish(path, &self.engines[&pid].tree())?;
-        Ok(())
+        first_err.map_or(Ok(()), Err)
     }
 
     /// The user a request names by id or name; with no name, the only user.
