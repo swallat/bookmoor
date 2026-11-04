@@ -22,7 +22,8 @@ bookmoor-server --state /data/state.json --dynacat-file /dynacat/config/bookmoor
 
 `--dynacat-output SPEC` can be given several times (or one spec per line in
 `BOOKMOOR_DYNACAT_OUTPUTS`). A spec is `file=PATH[;profile=NAME][;folder=A/B/C]`
-(a bare `PATH` works too; `--dynacat-file` is the same thing):
+(a bare `PATH` works too). `--dynacat-file PATH` and `BOOKMOOR_DYNACAT_FILE` take a plain path
+without any options. Two outputs must not write the same file.
 
 ```
 --dynacat-output /dynacat/config/bookmoor.yml
@@ -36,6 +37,8 @@ bookmoor-server --state /data/state.json --dynacat-file /dynacat/config/bookmoor
   insensitive, separated by `/`, so a folder name containing `/` cannot be
   selected). Its own bookmarks form the untitled first group and its
   subfolders are titled relative to it (`Rust`, not `Bookmarks Bar / Dev / Rust`).
+- Of several sibling folders with the same title the first one is used; an
+  untitled folder is selected as `(unnamed)`.
 - A folder that does not exist (yet, or renamed) is logged as a warning and
   the old file stays as it is.
 

@@ -154,12 +154,18 @@ async fn main() {
     let mut state_path = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let mut dynacat_user = std::env::var("BOOKMOOR_DYNACAT_USER").ok();
     let mut dynacat_profile = std::env::var("BOOKMOOR_DYNACAT_PROFILE").ok();
-    // One spec per line in the environment, see `Output::parse`.
+    // `BOOKMOOR_DYNACAT_FILE` is a plain path; `BOOKMOOR_DYNACAT_OUTPUTS` holds
+    // one spec per line (see `Output::parse`).
     let mut dynacat_outputs: Vec<bookmoor_server::dynacat::Output> = Vec::new();
-    let from_env = |var: &str| std::env::var(var).unwrap_or_default();
-    for spec in from_env("BOOKMOOR_DYNACAT_FILE")
+    if let Some(f) = std::env::var_os("BOOKMOOR_DYNACAT_FILE").filter(|f| !f.is_empty()) {
+        dynacat_outputs.push(bookmoor_server::dynacat::Output {
+            file: f.into(),
+            ..Default::default()
+        });
+    }
+    for spec in std::env::var("BOOKMOOR_DYNACAT_OUTPUTS")
+        .unwrap_or_default()
         .lines()
-        .chain(from_env("BOOKMOOR_DYNACAT_OUTPUTS").lines())
         .filter(|l| !l.trim().is_empty())
     {
         dynacat_outputs
@@ -194,10 +200,19 @@ async fn main() {
                         .unwrap_or_else(|| fail("--dynacat-user needs a user name")),
                 );
             }
-            "--dynacat-file" | "--dynacat-output" => {
+            "--dynacat-file" => {
+                let file = args
+                    .next()
+                    .unwrap_or_else(|| fail("--dynacat-file needs a file path"));
+                dynacat_outputs.push(bookmoor_server::dynacat::Output {
+                    file: file.into(),
+                    ..Default::default()
+                });
+            }
+            "--dynacat-output" => {
                 let spec = args
                     .next()
-                    .unwrap_or_else(|| fail(&format!("{a} needs a file path or a spec")));
+                    .unwrap_or_else(|| fail("--dynacat-output needs a spec"));
                 dynacat_outputs.push(
                     bookmoor_server::dynacat::Output::parse(&spec).unwrap_or_else(|e| fail(&e)),
                 );
@@ -250,6 +265,14 @@ async fn main() {
     }
 
     state.secure_cookies = !insecure;
+    for (i, o) in dynacat_outputs.iter().enumerate() {
+        if dynacat_outputs[..i].iter().any(|p| p.file == o.file) {
+            fail(&format!(
+                "two Dynacat outputs write {}; give each its own file",
+                o.file.display()
+            ));
+        }
+    }
     state.dynacat_outputs = dynacat_outputs;
     state.dynacat_user = dynacat_user;
     state.dynacat_profile = dynacat_profile;

@@ -71,12 +71,12 @@ impl AppState {
         if self.dynacat_outputs.is_empty() || self.users.is_empty() {
             return Ok(());
         }
-        // Every output gets its turn; the first failure is reported.
-        let mut first_err = None;
+        // Every output gets its turn; all failures are reported.
+        let mut errors = Vec::new();
         for out in &self.dynacat_outputs {
             let res = self
                 .dynacat_target(out.profile.as_deref())
-                .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))
+                .map_err(std::io::Error::other)
                 .and_then(|pid| {
                     if changed.is_some_and(|c| c != pid) {
                         return Ok(false);
@@ -84,11 +84,14 @@ impl AppState {
                     crate::dynacat::publish(&out.file, &self.engines[&pid].tree(), &out.folder)
                 });
             if let Err(e) = res {
-                let e = std::io::Error::other(format!("{}: {e}", out.file.display()));
-                first_err.get_or_insert(e);
+                errors.push(format!("{}: {e}", out.file.display()));
             }
         }
-        first_err.map_or(Ok(()), Err)
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(errors.join("; ")))
+        }
     }
 
     /// The user a request names by id or name; with no name, the only user.

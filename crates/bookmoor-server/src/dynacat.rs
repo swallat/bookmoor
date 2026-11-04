@@ -20,14 +20,25 @@ pub struct Output {
 impl Output {
     /// `file=PATH[;profile=NAME][;folder=A/B/C]`; a bare `PATH` also works.
     pub fn parse(spec: &str) -> Result<Output, String> {
+        let bad = |part: &str| format!("cannot read \"{part}\" in Dynacat output \"{spec}\"");
         let mut out = Output::default();
+        let mut seen = std::collections::BTreeSet::new();
         for (i, part) in spec.split(';').enumerate() {
             let part = part.trim();
-            match part.split_once('=') {
-                None if i == 0 && !part.is_empty() => out.file = part.into(),
-                Some(("file", v)) if !v.trim().is_empty() => out.file = v.trim().into(),
-                Some(("profile", v)) if !v.trim().is_empty() => out.profile = Some(v.trim().into()),
-                Some(("folder", v)) => {
+            let (key, value) = match part.split_once('=') {
+                Some((k, v)) => (k.trim(), v.trim()),
+                None if i == 0 && !part.is_empty() => ("file", part),
+                None => return Err(bad(part)),
+            };
+            if !seen.insert(key.to_string()) {
+                return Err(format!(
+                    "\"{key}\" given twice in Dynacat output \"{spec}\""
+                ));
+            }
+            match (key, value) {
+                ("file", v) if !v.is_empty() => out.file = v.into(),
+                ("profile", v) if !v.is_empty() => out.profile = Some(v.into()),
+                ("folder", v) => {
                     out.folder = v
                         .split('/')
                         .map(str::trim)
@@ -35,11 +46,7 @@ impl Output {
                         .map(String::from)
                         .collect()
                 }
-                _ => {
-                    return Err(format!(
-                        "cannot read \"{part}\" in Dynacat output \"{spec}\""
-                    ))
-                }
+                _ => return Err(bad(part)),
             }
         }
         if out.file.as_os_str().is_empty() {
@@ -115,5 +122,15 @@ mod tests {
         assert_eq!(o.folder, ["Bar", "Dev"]);
         assert!(Output::parse("profile=Work").is_err());
         assert!(Output::parse("file=a.yml;color=red").is_err());
+        assert!(Output::parse("file=a.yml;file=b.yml").is_err());
+        assert_eq!(
+            Output::parse("folder =Dev;file=a.yml").unwrap().folder,
+            ["Dev"]
+        );
+        assert!(Output::parse("file=a.yml;file=b.yml").is_err());
+        assert_eq!(
+            Output::parse("folder =Dev;file=a.yml").unwrap().folder,
+            ["Dev"]
+        );
     }
 }
