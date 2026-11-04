@@ -64,6 +64,9 @@ pub struct TokenRecord {
     /// no user: they manage the server, not a bookmark tree.
     #[serde(default)]
     pub user_id: Option<String>,
+    /// The profile (bookmark tree) a read or sync token reaches.
+    #[serde(default)]
+    pub profile_id: Option<String>,
     /// A sync token maps to exactly one endpoint (revocation = stop a device).
     pub endpoint_id: Option<String>,
     #[serde(with = "hex_hash")]
@@ -121,6 +124,7 @@ impl Tokens {
         name: &str,
         scope: Scope,
         user_id: Option<String>,
+        profile_id: Option<String>,
         endpoint_id: Option<String>,
     ) -> (String, TokenRecord) {
         let id = random_hex(8);
@@ -130,6 +134,7 @@ impl Tokens {
             name: name.to_string(),
             scope,
             user_id,
+            profile_id,
             endpoint_id,
             secret_hash: hash(&secret),
         };
@@ -149,6 +154,7 @@ impl Tokens {
             name: name.to_string(),
             scope,
             user_id: None,
+            profile_id: None,
             endpoint_id: None,
             secret_hash: hash(secret),
         };
@@ -233,6 +239,23 @@ impl Tokens {
         self.by_id.remove(id).is_some()
     }
 
+    /// Tokens per profile, in one pass.
+    pub fn counts_by_profile(&self) -> HashMap<&str, usize> {
+        let mut m = HashMap::new();
+        for r in self.by_id.values() {
+            if let Some(p) = r.profile_id.as_deref() {
+                *m.entry(p).or_insert(0) += 1;
+            }
+        }
+        m
+    }
+
+    /// Revoke every token of a profile.
+    pub fn revoke_profile(&mut self, profile_id: &str) {
+        self.by_id
+            .retain(|_, r| r.profile_id.as_deref() != Some(profile_id));
+    }
+
     /// Revoke every token of a user.
     pub fn revoke_user(&mut self, user_id: &str) {
         self.by_id
@@ -259,6 +282,7 @@ mod tests {
             "laptop",
             Scope::Sync,
             Some("u_1".into()),
+            Some("p_1".into()),
             Some("ep_1".into()),
         );
         assert!(text.starts_with("bkm_"));
@@ -285,6 +309,7 @@ mod tests {
             "laptop",
             Scope::Sync,
             Some("u_1".into()),
+            Some("p_1".into()),
             Some("ep_1".into()),
         );
         t.revoke_endpoint("ep_1");

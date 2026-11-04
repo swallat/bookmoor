@@ -215,7 +215,7 @@ is stored, so a lost token cannot be shown again. Device tokens come from
 command line:
 
 ```bash
-mise run token:create -- --name laptop --scope sync --user anna
+mise run token:create -- --name laptop --scope sync --user anna --profile Work
 # or: bookmoor-server token create --name laptop --scope sync --state state.json
 ```
 

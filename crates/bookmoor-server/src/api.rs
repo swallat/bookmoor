@@ -2,6 +2,7 @@
 
 use crate::auth::{random_id, Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, SyncError};
+use crate::profiles::Profiles;
 use crate::ratelimit::client_key;
 use crate::users::User;
 use crate::users::Users;
@@ -25,7 +26,8 @@ pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Default)]
 pub struct AppState {
     pub users: Users,
-    /// One bookmark tree per user id.
+    pub profiles: Profiles,
+    /// One bookmark tree per profile id.
     pub engines: BTreeMap<String, Engine>,
     pub tokens: Tokens,
     /// Where state is saved after every change; `None` keeps it in memory.
@@ -38,6 +40,8 @@ pub struct AppState {
     pub dynacat_file: Option<std::path::PathBuf>,
     /// Whose tree the Dynacat file shows (id or name); the only user if unset.
     pub dynacat_user: Option<String>,
+    /// Which of that user's profiles it shows; the only one if unset.
+    pub dynacat_profile: Option<String>,
 }
 
 impl AppState {
@@ -54,7 +58,10 @@ impl AppState {
         let uid = self
             .resolve_user(self.dynacat_user.as_deref())
             .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))?;
-        crate::dynacat::publish(path, &self.engines[&uid].tree())?;
+        let pid = self
+            .resolve_profile(&uid, self.dynacat_profile.as_deref())
+            .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))?;
+        crate::dynacat::publish(path, &self.engines[&pid].tree())?;
         Ok(())
     }
 
@@ -78,7 +85,57 @@ impl AppState {
         }
     }
 
-    /// A new user together with an empty bookmark tree.
+    /// The profile a request names (id or name) among `user_id`'s; with no
+    /// name, the only one.
+    pub fn resolve_profile(&self, user_id: &str, profile: Option<&str>) -> Result<String, String> {
+        match profile {
+            Some(p) => self
+                .profiles
+                .get(p)
+                .filter(|x| x.user_id == user_id)
+                .or_else(|| self.profiles.by_name(user_id, p))
+                .map(|x| x.id.clone())
+                .ok_or_else(|| format!("no profile called {p}")),
+            None => {
+                let all = self.profiles.for_user(user_id);
+                match all.as_slice() {
+                    [only] => Ok(only.id.clone()),
+                    [] => Err("the user has no profile".into()),
+                    _ => Err("several profiles exist: name the profile".into()),
+                }
+            }
+        }
+    }
+
+    /// A new profile with an empty bookmark tree.
+    pub fn add_profile(
+        &mut self,
+        user_id: &str,
+        name: &str,
+    ) -> Result<crate::profiles::Profile, String> {
+        if self.users.get(user_id).is_none() {
+            return Err("no such user".into());
+        }
+        let p = self.profiles.create(user_id, name)?;
+        self.engines.insert(p.id.clone(), Engine::new());
+        Ok(p)
+    }
+
+    /// Remove a profile with its tree and tokens. A user keeps at least one.
+    pub fn remove_profile(&mut self, user_id: &str, id: &str) -> Result<bool, String> {
+        let mine = self.profiles.get(id).is_some_and(|p| p.user_id == user_id);
+        if !mine {
+            return Ok(false);
+        }
+        if self.profiles.for_user(user_id).len() <= 1 {
+            return Err("a user needs at least one profile".into());
+        }
+        self.tokens.revoke_profile(id);
+        self.engines.remove(id);
+        Ok(self.profiles.remove(id))
+    }
+
+    /// A new user together with a profile and an empty bookmark tree.
     pub fn add_user(
         &mut self,
         name: &str,
@@ -102,14 +159,19 @@ impl AppState {
         hash: Option<String>,
     ) -> Result<User, String> {
         let user = self.users.create_hashed(name, admin, hash)?;
-        self.engines.insert(user.id.clone(), Engine::new());
+        let id = crate::profiles::default_id_for(&user.id);
+        self.profiles
+            .create_with_id(id.clone(), &user.id, crate::profiles::DEFAULT_NAME)?;
+        self.engines.insert(id, Engine::new());
         Ok(user)
     }
 
     /// Remove a user with their tree and all their tokens.
     pub fn remove_user(&mut self, id: &str) -> bool {
         self.sessions.end_user(id);
-        self.engines.remove(id);
+        for p in self.profiles.remove_user(id) {
+            self.engines.remove(&p);
+        }
         self.tokens.revoke_user(id);
         self.users.remove(id)
     }
@@ -119,6 +181,7 @@ impl AppState {
     pub fn issue_token(
         &mut self,
         user_id: Option<&str>,
+        profile: Option<&str>,
         name: &str,
         scope: Scope,
     ) -> Result<(String, TokenRecord), String> {
@@ -132,14 +195,21 @@ impl AppState {
             (_, Some(_)) => return Err("no such user".into()),
             (_, None) => return Err("a read or sync token needs a user".into()),
         };
+        let profile_id = match &user_id {
+            Some(u) => Some(self.resolve_profile(u, profile)?),
+            None if profile.is_some() => return Err("an admin token has no profile".into()),
+            None => None,
+        };
         let endpoint_id = (scope == Scope::Sync).then(|| random_id("ep_"));
-        if let (Some(ep), Some(uid)) = (&endpoint_id, &user_id) {
+        if let (Some(ep), Some(pid)) = (&endpoint_id, &profile_id) {
             self.engines
-                .get_mut(uid)
-                .ok_or("user has no tree")?
+                .get_mut(pid)
+                .ok_or("profile has no tree")?
                 .register_endpoint(ep);
         }
-        Ok(self.tokens.create(name, scope, user_id, endpoint_id))
+        Ok(self
+            .tokens
+            .create(name, scope, user_id, profile_id, endpoint_id))
     }
 }
 
@@ -421,9 +491,9 @@ async fn health() -> &'static str {
     "ok"
 }
 
-/// The user whose tree a token reaches.
-fn user_id(who: &TokenRecord) -> Result<&str, ApiError> {
-    who.user_id.as_deref().ok_or(ApiError::Denied(
+/// The profile (tree) a token reaches.
+fn profile_id(who: &TokenRecord) -> Result<&str, ApiError> {
+    who.profile_id.as_deref().ok_or(ApiError::Denied(
         "this token belongs to no user and has no bookmarks: use a read or sync token",
     ))
 }
@@ -434,7 +504,10 @@ async fn tree(
 ) -> Result<Json<TreeResponse>, ApiError> {
     need(&who, Scope::Read)?;
     let st = s.lock().unwrap();
-    let engine = st.engines.get(user_id(&who)?).ok_or(ApiError::Forbidden)?;
+    let engine = st
+        .engines
+        .get(profile_id(&who)?)
+        .ok_or(ApiError::Forbidden)?;
     Ok(Json(engine.tree()))
 }
 
@@ -449,14 +522,14 @@ async fn sync(
     if who.endpoint_id.as_deref() != Some(req.endpoint_id.as_str()) {
         return Err(ApiError::Forbidden);
     }
-    let uid = user_id(&who)?.to_string();
-    let engine = st.engines.get_mut(&uid).ok_or(ApiError::Forbidden)?;
+    let pid = profile_id(&who)?.to_string();
+    let engine = st.engines.get_mut(&pid).ok_or(ApiError::Forbidden)?;
     let before = engine.rev();
     match engine.sync(&req) {
         Ok(resp) => {
             // Rejected or repeated ops leave the canonical state as it was;
             // a retry after a restart is judged the same way again.
-            if st.engines[&uid].rev() != before {
+            if st.engines[&pid].rev() != before {
                 save(&mut st)?;
                 if let Err(e) = st.publish_dynacat() {
                     eprintln!("warning: cannot write the Dynacat file: {e}");
@@ -503,11 +576,11 @@ async fn delete_endpoint(
     if who.scope != Scope::Admin && who.endpoint_id.as_deref() != Some(id.as_str()) {
         return Err(ApiError::Forbidden);
     }
-    let known = match who.user_id.as_deref() {
-        // A device token only ever reaches its own user's tree.
-        Some(uid) if who.scope != Scope::Admin => st
+    let known = match who.profile_id.as_deref() {
+        // A device token only ever reaches its own profile's tree.
+        Some(pid) if who.scope != Scope::Admin => st
             .engines
-            .get_mut(uid)
+            .get_mut(pid)
             .is_some_and(|e| e.remove_endpoint(&id)),
         _ => st
             .engines
@@ -528,6 +601,8 @@ struct NewToken {
     /// User id or name; required for read and sync tokens unless there is
     /// only one user.
     user: Option<String>,
+    /// Profile id or name; may be left out while the user has only one.
+    profile: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -537,6 +612,7 @@ struct CreatedToken {
     id: String,
     scope: Scope,
     user_id: Option<String>,
+    profile_id: Option<String>,
     endpoint_id: Option<String>,
 }
 
@@ -561,7 +637,12 @@ async fn create_token(
         )
     };
     let (token, rec) = st
-        .issue_token(uid.as_deref(), &body.name, body.scope)
+        .issue_token(
+            uid.as_deref(),
+            body.profile.as_deref(),
+            &body.name,
+            body.scope,
+        )
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok((
@@ -571,6 +652,7 @@ async fn create_token(
             id: rec.id,
             scope: rec.scope,
             user_id: rec.user_id,
+            profile_id: rec.profile_id,
             endpoint_id: rec.endpoint_id,
         }),
     ))
@@ -654,7 +736,7 @@ mod tests {
     fn setup() -> (Shared, String) {
         let mut st = AppState::default();
         st.add_user("tester", false, None).unwrap();
-        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None);
+        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None, None);
         (Arc::new(Mutex::new(st)), admin)
     }
 

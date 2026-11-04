@@ -18,6 +18,8 @@ pub struct TokenRequest<'a> {
     /// Owner of a read or sync token; may be left out while there is only
     /// one user.
     pub user: Option<&'a str>,
+    /// Profile of that user; may be left out while the user has only one.
+    pub profile: Option<&'a str>,
     pub allow_admin: bool,
     /// Skip the confirmation prompt (required without a terminal).
     pub yes: bool,
@@ -55,7 +57,7 @@ pub fn create_token(
     } else {
         Some(pick_user(&state, req.user)?)
     };
-    let (token, _) = state.issue_token(user_id.as_deref(), name, req.scope)?;
+    let (token, _) = state.issue_token(user_id.as_deref(), req.profile, name, req.scope)?;
     state
         .persist()
         .map_err(|e| format!("cannot save the state: {e}"))?;

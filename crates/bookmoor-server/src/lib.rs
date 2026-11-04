@@ -5,6 +5,7 @@ pub mod auth;
 pub mod cli;
 pub mod dynacat;
 pub mod engine;
+pub mod profiles;
 pub mod ratelimit;
 pub mod sessions;
 pub mod store;

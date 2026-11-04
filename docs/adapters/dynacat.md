@@ -77,3 +77,6 @@ editor is still open. Until then the widget file is output only.
 The widget file shows one user's tree. With several users, name the user with
 `--dynacat-user NAME` (or `BOOKMOOR_DYNACAT_USER`); with a single user it is
 that user. Without a name and with several users the server refuses to start.
+
+A user with several profiles also needs `--dynacat-profile NAME` (or
+`BOOKMOOR_DYNACAT_PROFILE`): the file shows that one profile's tree.

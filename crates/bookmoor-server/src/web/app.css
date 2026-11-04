@@ -85,7 +85,7 @@ input[type="text"], input[type="password"], select {
 }
 input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var(--blue); }
 .form-row { display: grid; gap: 12px; align-items: end; grid-template-columns: 1fr; }
-@media (min-width: 40rem) { .form-row.three { grid-template-columns: 1fr 12rem auto; } .form-row.user { grid-template-columns: 1fr 1fr auto auto; } }
+@media (min-width: 40rem) { .form-row.three { grid-template-columns: 1fr 12rem auto; } .form-row.user { grid-template-columns: 1fr 1fr auto auto; } .form-row.four { grid-template-columns: 1fr 10rem 10rem auto; } .form-row.profile { grid-template-columns: 1fr auto; } }
 .check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .check input { width: 20px; height: 20px; accent-color: var(--blue); }
 .hint { font-size: .875rem; color: var(--muted); }
@@ -147,3 +147,4 @@ input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var
 
 .narrow { max-width: 22rem; }
 input.inline-pw { min-height: 36px; width: 11rem; }
+[hidden] { display: none !important; }
