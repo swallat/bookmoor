@@ -21,7 +21,7 @@ description = "Build the server (release) into target/release"
 run = "cargo build --release --locked -p bookmoor-server"
 
 [tasks."build:extension"]
-description = "Build the browser extension into extension/dist"
+description = "Build the browser extension into extension/dist (Chrome) and extension/dist-firefox"
 depends = ["install"]
 dir = "extension"
 run = "npm run build"

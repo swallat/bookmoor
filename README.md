@@ -68,7 +68,7 @@ Details: [docs/sync-architecture.md](docs/sync-architecture.md) and
 | Core: data model, three-way diff and merge, fractional positions | Done, tested |
 | Server: HTTP API, JSON snapshot persistence, device tokens, rate limit | Done, tested |
 | Chrome extension: delta sync, id map, echo suppression | Done, tested against a fake API and the real server |
-| Firefox: root folder mapping | Partly (manifest still missing) |
+| Firefox: root folder mapping, manifest (`extension/dist-firefox`) | Done, untested in a real Firefox |
 | Real-browser testing, multi-instance service-worker lease | Open |
 | Adapters for Dynacat and Dashy | Planned, requirements in [docs/adapters](docs/adapters) |
 
@@ -112,14 +112,16 @@ Tools and build commands run through [mise](https://mise.jdx.dev):
 
 ```bash
 mise install          # Rust and Node
-mise run build        # server (target/release) and extension (extension/dist)
+mise run build        # server (target/release), extension/dist (Chrome), extension/dist-firefox
 mise run check        # what CI checks
 mise run server       # start the server, state in ./state.json
 mise tasks            # all tasks
 ```
 
 Without mise: `cargo test`, and `cd extension && npm ci && npm run build`.
-Load `extension/dist` via `chrome://extensions` > Developer mode > Load unpacked.
+Chrome: load `extension/dist` via `chrome://extensions` > Developer mode > Load
+unpacked. Firefox: `about:debugging` > This Firefox > Load Temporary Add-on,
+then pick `extension/dist-firefox/manifest.json` (gone after a restart).
 
 ### Log
 
