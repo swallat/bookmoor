@@ -28,6 +28,19 @@ manifest.browser_specific_settings = {
   },
 };
 writeFileSync("dist-firefox/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+
+// Test-only packages for the end-to-end tests (e2e/): the same code, with the
+// local test server's origin granted up front, because a browser driven by a
+// script cannot click through the permission prompt of the options page.
+if (process.env.BOOKMOOR_E2E) {
+  for (const dir of ["dist", "dist-firefox"]) {
+    const out = `${dir.replace("dist", "dist-e2e")}`;
+    cpSync(dir, out, { recursive: true });
+    const m = JSON.parse(readFileSync(`${dir}/manifest.json`, "utf8"));
+    m.host_permissions = ["http://127.0.0.1/*"];
+    writeFileSync(`${out}/manifest.json`, JSON.stringify(m, null, 2) + "\n");
+  }
+}
 console.log(
   "built -> dist/ (Chrome: chrome://extensions > Load unpacked) and dist-firefox/ (Firefox: about:debugging > Load Temporary Add-on > manifest.json)",
 );

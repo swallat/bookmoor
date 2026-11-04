@@ -56,3 +56,37 @@ jobs:
         env:
           BOOKMOOR_E2E_REQUIRED: "1"
       - run: npm run build
+
+  e2e:
+    name: E2E (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p bookmoor-server --locked
+        working-directory: .
+      # The e2e packages also grant the test server's origin up front.
+      - run: npm run build
+        env:
+          BOOKMOOR_E2E: "1"
+      - run: npx playwright-core install --with-deps chromium
+        if: matrix.browser == 'chromium'
+      - name: Run the real extension in a real browser
+        run: npm run test:e2e -- --test-name-pattern="${{ matrix.browser == 'chromium' && 'Chromium' || 'Firefox' }}"
+        env:
+          BOOKMOOR_E2E_REQUIRED: "1"
+          BOOKMOOR_E2E_FIREFOX: ${{ matrix.browser == 'firefox' && '1' || '' }}

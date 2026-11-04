@@ -22,8 +22,9 @@ binary and one JSON file.
 
 > **Status: early alpha (v0.0).** The sync engine, the server and the
 > extension work and are covered by tests, including end-to-end tests against
-> the real server binary. The extension has **not yet been tested in a real
-> Chrome or Firefox**, only against a fake browser API. Expect rough edges and
+> the real server binary. CI also runs the real extension in two real
+> Chromium (and Firefox) profiles against the real server, but it has seen
+> little manual use yet. Expect rough edges and
 > do not make bookmoor your only copy of anything important yet.
 
 ## Why bookmoor
@@ -69,7 +70,8 @@ Details: [docs/sync-architecture.md](docs/sync-architecture.md) and
 | Server: HTTP API, JSON snapshot persistence, device tokens, rate limit | Done, tested |
 | Chrome extension: delta sync, id map, echo suppression | Done, tested against a fake API and the real server |
 | Firefox: root folder mapping, manifest (`extension/dist-firefox`) | Done, untested in a real Firefox |
-| Real-browser testing, multi-instance service-worker lease | Open |
+| Real-browser E2E (two Chromium / Firefox profiles, `npm run test:e2e`) | Done, in CI |
+| Multi-instance service-worker lease | Open |
 | Adapters for Dynacat and Dashy | Planned, requirements in [docs/adapters](docs/adapters) |
 
 ## Quick start
