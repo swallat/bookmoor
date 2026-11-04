@@ -135,6 +135,7 @@ impl AppState {
             tokens,
             store: Some(store),
             limits: Default::default(),
+            dynacat_file: None,
         })
     }
 
