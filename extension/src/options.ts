@@ -40,13 +40,13 @@ function showToken(token: string): void {
   const el = $("tokeninfo");
   if (!token) {
     el.textContent = "No token stored.";
-    el.className = "";
+    el.className = "hint";
   } else if (!token.startsWith("bkm_")) {
     el.textContent = `Stored: ${token.length} characters. Tokens normally start with "bkm_", check that you pasted the whole token.`;
-    el.className = "bad";
+    el.className = "hint bad";
   } else {
     el.textContent = `Stored: ${token.slice(0, 8)}\u2026 (${token.length} characters)`;
-    el.className = "";
+    el.className = "hint";
   }
 }
 
