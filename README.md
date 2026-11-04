@@ -122,6 +122,37 @@ directory into Dynacat. The example compose file shows both. Build locally with
 `docker build -t bookmoor .`. If a command overrides `--bind` with another port, the
 image's healthcheck (port 8787) reports unhealthy.
 
+## Client certificates (mTLS)
+
+Optionally the server can require a client certificate in addition to the
+token. TLS ends at your reverse proxy, so the proxy checks the certificate
+against your client CA and tells the server the result in a header. With
+`--client-cert-header NAME[=VALUE]` (or `BOOKMOOR_CLIENT_CERT_HEADER`) every request
+except `/health` must carry that header with the expected value, otherwise it
+gets 403 before the token is looked at. `NAME` alone expects `SUCCESS`;
+`NAME=*` accepts any non-empty value (proxies that set the header only for a
+verified certificate).
+
+nginx:
+
+```nginx
+ssl_client_certificate /etc/nginx/client-ca.pem;
+ssl_verify_client optional;
+location / {
+    proxy_set_header X-SSL-Client-Verify $ssl_client_verify;  # always overwritten
+    proxy_pass http://bookmoor:8787;
+}
+```
+
+```bash
+bookmoor-server --client-cert-header X-SSL-Client-Verify
+```
+
+The proxy must set the header on every request (so a client cannot send it
+itself) and the server port must not be reachable around the proxy. Browsers
+and the extension present the certificate from the browser or OS certificate
+store, so install it there; Chrome asks once which certificate to use.
+
 ## Layout
 
 | Path | Content |

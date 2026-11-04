@@ -9,6 +9,8 @@ services:
     environment:
       # Optional: fix the first admin token (bkm_<id>_<64 hex characters>).
       # BOOKMOOR_ADMIN_TOKEN: ""
+      # Require the proxy's client-certificate verdict (README, "Client certificates"):
+      # BOOKMOOR_CLIENT_CERT_HEADER: X-SSL-Client-Verify
       # Optional: write the Dynacat page for one user and profile.
       # One output per line: file=PATH[;profile=NAME][;folder=A/B/C]. Enable
       # only after `mkdir dynacat && chown 10001 dynacat`: the server exits
