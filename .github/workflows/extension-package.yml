@@ -3,8 +3,9 @@ name: Extension package
 # Builds the installable extension when its code changes on main (or by hand):
 # a Chrome zip, an unsigned Firefox zip and, if Mozilla credentials are set as
 # repository secrets, a signed Firefox .xpi. Download them from the run's
-# "Artifacts" section. If the Chrome Web Store secrets are set, the Chrome zip
-# is also uploaded and submitted for review there (see README). Pull requests do not run this: they have no secrets and
+# "Artifacts" section. The Chrome zip goes to the Chrome Web Store for review
+# only when a release is published or the run is started by hand with the
+# "chrome_store" box ticked, and only if the store secrets are set (see README). Pull requests do not run this: they have no secrets and
 # every signing uses up a version number at Mozilla.
 
 on:
@@ -14,7 +15,15 @@ on:
       - "extension/**"
       - "schema/**"
       - ".github/workflows/extension-package.yml"
+  # A published GitHub release also submits the Chrome build to the Web Store.
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      chrome_store:
+        description: "Also upload the Chrome build to the Web Store and submit it for review"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -81,7 +90,7 @@ jobs:
         if: env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == ''
         run: echo "::notice::No Firefox .xpi was signed because the secrets WEB_EXT_API_KEY and WEB_EXT_API_SECRET are not set."
       - name: Upload to the Chrome Web Store
-        if: env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
+        if: (github.event_name == 'release' || inputs.chrome_store) && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
         run: |
           set -euo pipefail
           ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip"
@@ -99,7 +108,7 @@ jobs:
           echo "$PUB" | jq -e '.status | index("OK") or index("ITEM_PENDING_REVIEW")' >/dev/null \
             || { echo "::error::Chrome Web Store did not accept the submission"; exit 1; }
       - name: Say why nothing went to the Chrome Web Store
-        if: env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == ''
+        if: (github.event_name == 'release' || inputs.chrome_store) && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
         run: echo "::notice::Nothing was uploaded to the Chrome Web Store because one of CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN is not set."
       - uses: actions/upload-artifact@v4
         with:
