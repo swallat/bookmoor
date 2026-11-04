@@ -33,8 +33,9 @@ binary and one JSON file.
 - **Convergent.** Several devices edit concurrently and end up with the same
   tree. Changes merge per field with a three-way diff, so a rename on one
   laptop and a new URL on another both survive.
-- **Safe by design.** Edit beats delete, folders never silently vanish, and
-  overwritten values are kept in an operation log. See
+- **Safe by design.** Edit beats delete and moved nodes are never silently
+  deleted. Keeping overwritten values for recovery is part of the design but
+  not implemented yet. See
   [conflict resolution](docs/sync-architecture.md#4-conflict-resolution).
 - **Offline-tolerant.** A device that was away for days catches up with
   deltas when it reconnects, and survives MV3 service-worker restarts.
