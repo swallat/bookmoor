@@ -71,3 +71,9 @@ They are not lost in Bookmoor, only not shown in Dynacat.
 Reading changes made in Dynacat back needs identity: whether Dynacat accepts an
 extra `id:` field on links or keeps a trailing `# id:` comment through the UI
 editor is still open. Until then the widget file is output only.
+
+## Multi-user
+
+The widget file shows one user's tree. With several users, name the user with
+`--dynacat-user NAME` (or `BOOKMOOR_DYNACAT_USER`); with a single user it is
+that user. Without a name and with several users the server refuses to start.

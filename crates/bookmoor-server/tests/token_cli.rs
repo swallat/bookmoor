@@ -9,10 +9,9 @@ fn state_file(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("state.json");
-    AppState::open(Store::new(&path))
-        .unwrap()
-        .persist()
-        .unwrap();
+    let mut st = AppState::open(Store::new(&path)).unwrap();
+    st.add_user("tester", false, None).unwrap();
+    st.persist().unwrap();
     path
 }
 
@@ -164,4 +163,53 @@ fn rejects_bad_scope_and_names() {
     }
     let out = run(&["create", "--help"]);
     assert!(out.status.success());
+}
+
+#[test]
+fn creates_users_and_tokens_for_them() {
+    let path = state_file("users");
+    let p = path.to_str().unwrap();
+    let user = |args: &[&str], pw: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bookmoor-server"));
+        c.arg("user").args(args).env_remove("BOOKMOOR_STATE");
+        c.env("BOOKMOOR_PASSWORD", pw).stdin(Stdio::null());
+        c.output().unwrap()
+    };
+    let out = user(
+        &["create", "--name", "anna", "--admin", "--state", p],
+        "long enough pw",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    // Too short a password is refused.
+    assert!(!user(&["create", "--name", "bob", "--state", p], "short")
+        .status
+        .success());
+    // With two users a token must name its owner.
+    assert!(
+        !run(&["create", "--name", "x", "--scope", "read", "--state", p, "--yes"])
+            .status
+            .success()
+    );
+    let out = run(&[
+        "create", "--name", "x", "--scope", "read", "--user", "ANNA", "--state", p, "--yes",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let st = AppState::open(Store::new(&path)).unwrap();
+    let anna = st.users.by_name("anna").unwrap();
+    assert!(anna.admin && anna.password_hash.is_some());
+    let token = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        st.tokens
+            .authenticate(token.trim())
+            .unwrap()
+            .user_id
+            .as_deref(),
+        Some(anna.id.as_str())
+    );
+    assert!(user(
+        &["passwd", "--name", "anna", "--state", p],
+        "another long pw"
+    )
+    .status
+    .success());
 }

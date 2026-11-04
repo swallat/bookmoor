@@ -215,7 +215,15 @@ export async function startServer(bin: string): Promise<Server> {
     if (i > 100) throw new Error("server did not start");
     await new Promise((r) => setTimeout(r, 50));
   }
+  // Tokens belong to a user; the single test user owns the one tree.
+  let user: Promise<unknown> | undefined;
   const syncToken = async (): Promise<string> => {
+    user ??= fetch(url + "/v1/users", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "test" }),
+    });
+    await user;
     const res = await fetch(url + "/v1/tokens", {
       method: "POST",
       headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },

@@ -3,23 +3,40 @@
 //! owner only because it holds token hashes.
 
 use crate::api::AppState;
-use crate::auth::{TokenRecord, Tokens};
+use crate::auth::{Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, Snapshot};
+use crate::users::{User, Users};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 struct SaveFile<'a> {
-    engine: Snapshot,
+    users: &'a [User],
+    /// Bookmark tree per user id.
+    engines: BTreeMap<&'a str, Snapshot>,
     tokens: &'a [TokenRecord],
 }
 
 #[derive(Deserialize)]
 struct LoadFile {
-    engine: Snapshot,
+    #[serde(default)]
+    users: Vec<User>,
+    #[serde(default)]
+    engines: BTreeMap<String, Snapshot>,
+    /// Single-user state of earlier versions; becomes the user `owner`.
+    engine: Option<Snapshot>,
     tokens: Vec<TokenRecord>,
+}
+
+/// Everything the state file holds.
+#[derive(Debug, Default)]
+pub struct Loaded {
+    pub users: Users,
+    pub engines: BTreeMap<String, Engine>,
+    pub tokens: Tokens,
 }
 
 /// An exclusive OS lock on `<state>.lock`, so the server and the token
@@ -65,7 +82,7 @@ impl Store {
     }
 
     /// `Ok(None)` when no state has been saved yet.
-    pub fn load(&self) -> Result<Option<(Engine, Tokens)>, String> {
+    pub fn load(&self) -> Result<Option<Loaded>, String> {
         let text = match fs::read_to_string(&self.path) {
             Ok(t) => t,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -73,16 +90,66 @@ impl Store {
         };
         let f: LoadFile = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not a valid state file: {e}", self.path.display()))?;
-        Ok(Some((
-            Engine::restore(f.engine)?,
-            Tokens::from_records(f.tokens),
-        )))
+        let mut users = f.users;
+        let mut engines = f.engines;
+        let mut tokens = f.tokens;
+        if let Some(legacy) = f.engine {
+            if !users.is_empty() || !engines.is_empty() {
+                return Err("state file mixes the single-user and multi-user layout".into());
+            }
+            // Earlier versions had one tree for everyone: keep it, owned by
+            // a user without a password (set one with `user passwd`).
+            let owner = User {
+                id: "u_owner".into(),
+                name: "owner".into(),
+                admin: true,
+                password_hash: None,
+            };
+            engines.insert(owner.id.clone(), legacy);
+            for t in tokens.iter_mut().filter(|t| t.scope != Scope::Admin) {
+                t.user_id = Some(owner.id.clone());
+            }
+            users.push(owner);
+        }
+        let users = Users::from_records(users)?;
+        let mut restored = BTreeMap::new();
+        for (uid, snap) in engines {
+            if users.get(&uid).is_none() {
+                return Err(format!("tree of unknown user {uid}"));
+            }
+            restored.insert(uid, Engine::restore(snap)?);
+        }
+        if let Some(u) = users.list().find(|u| !restored.contains_key(&u.id)) {
+            return Err(format!("user {} has no tree", u.name));
+        }
+        for t in &tokens {
+            match (&t.user_id, t.scope) {
+                (None, Scope::Admin) => {}
+                (Some(uid), s) if s != Scope::Admin && users.get(uid).is_some() => {}
+                _ => return Err(format!("token {} does not match any user", t.id)),
+            }
+        }
+        Ok(Some(Loaded {
+            users,
+            engines: restored,
+            tokens: Tokens::from_records(tokens),
+        }))
     }
 
-    pub fn save(&self, engine: &Engine, tokens: &Tokens) -> io::Result<()> {
+    pub fn save(
+        &self,
+        users: &Users,
+        engines: &BTreeMap<String, Engine>,
+        tokens: &Tokens,
+    ) -> io::Result<()> {
         let records = tokens.records();
+        let user_records = users.records();
         let bytes = serde_json::to_vec(&SaveFile {
-            engine: engine.snapshot(),
+            users: &user_records,
+            engines: engines
+                .iter()
+                .map(|(k, e)| (k.as_str(), e.snapshot()))
+                .collect(),
             tokens: &records,
         })
         .map_err(io::Error::other)?;
@@ -129,20 +196,20 @@ fn tmp_path(p: &Path) -> PathBuf {
 impl AppState {
     /// Open `store`, loading earlier state if there is any.
     pub fn open(store: Store) -> Result<AppState, String> {
-        let (engine, tokens) = store.load()?.unwrap_or_default();
+        let l = store.load()?.unwrap_or_default();
         Ok(AppState {
-            engine,
-            tokens,
+            users: l.users,
+            engines: l.engines,
+            tokens: l.tokens,
             store: Some(store),
-            limits: Default::default(),
-            dynacat_file: None,
+            ..AppState::default()
         })
     }
 
     /// Write the current state; a no-op without a store.
     pub fn persist(&self) -> io::Result<()> {
         match &self.store {
-            Some(s) => s.save(&self.engine, &self.tokens),
+            Some(s) => s.save(&self.users, &self.engines, &self.tokens),
             None => Ok(()),
         }
     }
@@ -158,9 +225,10 @@ impl AppState {
         };
         if let Some(store) = &self.store {
             match store.load() {
-                Ok(Some((engine, tokens))) => {
-                    self.engine = engine;
-                    self.tokens = tokens;
+                Ok(Some(l)) => {
+                    self.users = l.users;
+                    self.engines = l.engines;
+                    self.tokens = l.tokens;
                 }
                 _ => {
                     eprintln!("fatal: cannot save or reload state ({err}); exiting");
@@ -210,27 +278,36 @@ mod tests {
         let path = tmp("roundtrip");
         let store = Store::new(&path);
         let mut st = AppState::open(store.clone()).unwrap();
-        st.engine.register_endpoint("ep_a");
-        st.engine.register_endpoint("ep_b");
-        let (token, _) = st.tokens.create("a", Scope::Sync, Some("ep_a".into()));
+        let uid = st
+            .add_user("alice", false, Some("long enough pw"))
+            .unwrap()
+            .id;
+        let engine = st.engines.get_mut(&uid).unwrap();
+        engine.register_endpoint("ep_a");
+        engine.register_endpoint("ep_b");
+        let (token, _) = st
+            .tokens
+            .create("a", Scope::Sync, Some(uid.clone()), Some("ep_a".into()));
         let req = SyncRequest {
             endpoint_id: "ep_a".into(),
             since_rev: 0,
             ops: vec![add(1), add(2)],
         };
-        let first = st.engine.sync(&req).unwrap();
+        let first = st.engines.get_mut(&uid).unwrap().sync(&req).unwrap();
         st.persist().unwrap();
 
         let mut again = AppState::open(store).unwrap();
-        assert_eq!(again.engine.tree(), st.engine.tree());
+        assert_eq!(again.engines[&uid].tree(), st.engines[&uid].tree());
         assert!(again.tokens.authenticate(&token).is_some());
         // A retried request must not apply twice.
-        let replay = again.engine.sync(&req).unwrap();
+        let replay = again.engines.get_mut(&uid).unwrap().sync(&req).unwrap();
         assert_eq!(replay.rev, first.rev);
-        assert_eq!(again.engine.tree(), st.engine.tree());
+        assert_eq!(again.engines[&uid].tree(), st.engines[&uid].tree());
         // The other device still receives what it missed.
         let b = again
-            .engine
+            .engines
+            .get_mut(&uid)
+            .unwrap()
             .sync(&SyncRequest {
                 endpoint_id: "ep_b".into(),
                 since_rev: 0,
@@ -260,9 +337,7 @@ mod tests {
         fs::write(&path, "{ not json").unwrap();
         assert!(Store::new(&path).load().is_err());
         // A well-formed file without the well-known folders is refused too.
-        let mut st = AppState::default();
-        st.tokens.create("x", Scope::Read, None);
-        let mut snap = serde_json::to_value(st.engine.snapshot()).unwrap();
+        let mut snap = serde_json::to_value(Engine::new().snapshot()).unwrap();
         snap["nodes"] = serde_json::json!([]);
         let file = serde_json::json!({ "engine": snap, "tokens": [] });
         fs::write(&path, file.to_string()).unwrap();
@@ -274,37 +349,40 @@ mod tests {
     fn failed_save_rolls_back_memory() {
         let path = tmp("rollback");
         let mut st = AppState::open(Store::new(&path)).unwrap();
-        st.engine.register_endpoint("ep_a");
+        let uid = st.add_user("alice", false, None).unwrap().id;
+        st.engines.get_mut(&uid).unwrap().register_endpoint("ep_a");
         st.persist().unwrap();
-        let saved = st.engine.tree();
-        st.engine
+        let saved = st.engines[&uid].tree();
+        st.engines
+            .get_mut(&uid)
+            .unwrap()
             .sync(&SyncRequest {
                 endpoint_id: "ep_a".into(),
                 since_rev: 0,
                 ops: vec![add(1)],
             })
             .unwrap();
-        assert_ne!(st.engine.tree(), saved);
+        assert_ne!(st.engines[&uid].tree(), saved);
         // A directory in the way of the temp file makes the save fail.
         fs::create_dir(tmp_path(&path)).unwrap();
         assert!(st.persist_or_revert().is_err());
-        assert_eq!(st.engine.tree(), saved);
+        assert_eq!(st.engines[&uid].tree(), saved);
     }
 
     #[test]
     fn cyclic_or_detached_state_is_refused() {
         let path = tmp("cycle");
-        let mut st = AppState::default();
-        st.engine.register_endpoint("ep_a");
+        let mut engine = Engine::new();
+        engine.register_endpoint("ep_a");
         let ops = vec![add(1), add(2)];
-        st.engine
+        engine
             .sync(&SyncRequest {
                 endpoint_id: "ep_a".into(),
                 since_rev: 0,
                 ops,
             })
             .unwrap();
-        let mut snap = serde_json::to_value(st.engine.snapshot()).unwrap();
+        let mut snap = serde_json::to_value(engine.snapshot()).unwrap();
         for n in snap["nodes"].as_array_mut().unwrap() {
             match n["id"].as_str().unwrap() {
                 "n1" => n["parent"] = "n2".into(),
@@ -316,5 +394,80 @@ mod tests {
         fs::write(&path, file.to_string()).unwrap();
         let err = Store::new(&path).load().err().unwrap();
         assert!(err.contains("not attached"), "{err}");
+    }
+
+    #[test]
+    fn single_user_state_becomes_the_owner() {
+        let path = tmp("legacy");
+        let mut engine = Engine::new();
+        engine.register_endpoint("ep_a");
+        engine
+            .sync(&SyncRequest {
+                endpoint_id: "ep_a".into(),
+                since_rev: 0,
+                ops: vec![add(1)],
+            })
+            .unwrap();
+        let mut tokens = Tokens::new();
+        let (sync, _) = tokens.create("laptop", Scope::Sync, None, Some("ep_a".into()));
+        let (admin, _) = tokens.create("admin", Scope::Admin, None, None);
+        let file = serde_json::json!({
+            "engine": engine.snapshot(),
+            "tokens": tokens.records(),
+        });
+        fs::write(&path, file.to_string()).unwrap();
+        let st = AppState::open(Store::new(&path)).unwrap();
+        let owner = st.users.by_name("owner").unwrap();
+        assert!(owner.admin && owner.password_hash.is_none());
+        assert_eq!(st.engines[&owner.id].tree(), engine.tree());
+        let rec = st.tokens.authenticate(&sync).unwrap();
+        assert_eq!(rec.user_id.as_deref(), Some(owner.id.as_str()));
+        assert!(st.tokens.authenticate(&admin).unwrap().user_id.is_none());
+        // Saved again, it is the multi-user layout and loads to the same.
+        st.persist().unwrap();
+        let again = AppState::open(Store::new(&path)).unwrap();
+        assert_eq!(again.users.by_name("owner").unwrap().id, owner.id);
+    }
+
+    #[test]
+    fn trees_of_users_are_separate() {
+        let mut st = AppState::default();
+        let a = st.add_user("alice", false, None).unwrap().id;
+        let b = st.add_user("bob", false, None).unwrap().id;
+        st.engines.get_mut(&a).unwrap().register_endpoint("ep_a");
+        st.engines
+            .get_mut(&a)
+            .unwrap()
+            .sync(&SyncRequest {
+                endpoint_id: "ep_a".into(),
+                since_rev: 0,
+                ops: vec![add(1)],
+            })
+            .unwrap();
+        assert_eq!(st.engines[&a].rev(), 1);
+        assert_eq!(st.engines[&b].rev(), 0);
+        assert!(st.remove_user(&a));
+        assert!(!st.engines.contains_key(&a));
+    }
+
+    #[test]
+    fn tokens_must_belong_to_a_user() {
+        let path = tmp("orphan");
+        let mut tokens = Tokens::new();
+        tokens.create("x", Scope::Read, Some("u_gone".into()), None);
+        let file = serde_json::json!({
+            "engine": Engine::new().snapshot(),
+            "tokens": tokens.records(),
+        });
+        fs::write(&path, file.to_string()).unwrap();
+        // Legacy files re-home non-admin tokens, so build the new layout.
+        let st = AppState::open(Store::new(&path)).unwrap();
+        st.persist().unwrap();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        v["tokens"][0]["user_id"] = "u_gone".into();
+        fs::write(&path, v.to_string()).unwrap();
+        let err = Store::new(&path).load().err().unwrap();
+        assert!(err.contains("does not match any user"), "{err}");
     }
 }

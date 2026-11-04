@@ -15,6 +15,9 @@ pub struct TokenRequest<'a> {
     pub state: &'a Path,
     pub name: &'a str,
     pub scope: Scope,
+    /// Owner of a read or sync token; may be left out while there is only
+    /// one user.
+    pub user: Option<&'a str>,
     pub allow_admin: bool,
     /// Skip the confirmation prompt (required without a terminal).
     pub yes: bool,
@@ -47,7 +50,12 @@ pub fn create_token(
             return Err("not confirmed, nothing was changed".into());
         }
     }
-    let (token, _) = state.issue_token(name, req.scope)?;
+    let user_id = if req.scope == Scope::Admin {
+        None
+    } else {
+        Some(pick_user(&state, req.user)?)
+    };
+    let (token, _) = state.issue_token(user_id.as_deref(), name, req.scope)?;
     state
         .persist()
         .map_err(|e| format!("cannot save the state: {e}"))?;
@@ -70,4 +78,38 @@ pub fn confirm_on_terminal(name: &str) -> impl FnOnce(&str) -> Result<bool, Stri
             .map_err(|e| e.to_string())?;
         Ok(line.trim() == name.trim())
     }
+}
+
+fn pick_user(state: &crate::api::AppState, name: Option<&str>) -> Result<String, String> {
+    state.resolve_user(name)
+}
+
+/// `user create`: add a user (and optionally a web UI password).
+pub fn create_user(
+    state: &Path,
+    name: &str,
+    admin: bool,
+    password: Option<&str>,
+) -> Result<(), String> {
+    if !state.exists() {
+        return Err(format!(
+            "{} does not exist; start the server once with --state to create it",
+            state.display()
+        ));
+    }
+    let _lock = Lock::acquire(state)?;
+    let mut st = crate::api::AppState::open(Store::new(state))?;
+    st.add_user(name, admin, password)?;
+    st.persist()
+        .map_err(|e| format!("cannot save the state: {e}"))
+}
+
+/// `user passwd`: set the web UI password of an existing user.
+pub fn set_password(state: &Path, name: &str, password: &str) -> Result<(), String> {
+    let _lock = Lock::acquire(state)?;
+    let mut st = crate::api::AppState::open(Store::new(state))?;
+    let id = pick_user(&st, Some(name))?;
+    st.users.set_password(&id, password)?;
+    st.persist()
+        .map_err(|e| format!("cannot save the state: {e}"))
 }
