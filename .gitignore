@@ -6,3 +6,4 @@ extension/dist-firefox/
 .DS_Store
 extension/dist-e2e/
 extension/dist-e2e-firefox/
+extension/web-ext-artifacts/

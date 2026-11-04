@@ -125,6 +125,24 @@ Chrome: load `extension/dist` via `chrome://extensions` > Developer mode > Load
 unpacked. Firefox: `about:debugging` > This Firefox > Load Temporary Add-on,
 then pick `extension/dist-firefox/manifest.json` (gone after a restart).
 
+### Firefox: keep the extension after a restart
+
+A temporarily loaded add-on is gone after a restart. For a permanent install
+have Mozilla sign it (free, "unlisted", nothing is published):
+
+1. Create API credentials at <https://addons.mozilla.org/developers/addon/api/key/>
+   (JWT issuer and JWT secret). Treat them like a password.
+2. Put them into the environment of your shell, not into the repo:
+   `WEB_EXT_API_KEY` (issuer) and `WEB_EXT_API_SECRET` (secret).
+3. `mise run sign:firefox`. The signed `.xpi` lands in
+   `extension/web-ext-artifacts/`. Install it via `about:addons` > gear icon >
+   Install Add-on From File.
+
+Each signing needs a new `version` in `extension/manifest.json`. Without
+signing, only Firefox Developer Edition, Nightly and ESR can install an
+unsigned file (set `xpinstall.signatures.required` to `false`):
+`mise run package:firefox` builds the unsigned `.zip`, rename it to `.xpi`.
+
 ### Log
 
 The server writes one line per request to stderr: time (UTC), client address,

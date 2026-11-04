@@ -23,9 +23,11 @@ manifest.background = { scripts: ["background.js"], type: "module" };
 manifest.browser_specific_settings = {
   gecko: {
     id: "bookmoor@wallat.de",
-    strict_min_version: "128.0",
+    // data_collection_permissions needs Firefox 140 (142 on Android).
+    strict_min_version: "140.0",
     data_collection_permissions: { required: ["bookmarksInfo"] },
   },
+  gecko_android: { strict_min_version: "142.0" },
 };
 writeFileSync("dist-firefox/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
 

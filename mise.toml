@@ -26,6 +26,18 @@ depends = ["install"]
 dir = "extension"
 run = "npm run build"
 
+[tasks."package:firefox"]
+description = "Pack the Firefox extension into extension/web-ext-artifacts/bookmoor-<version>.zip (unsigned)"
+depends = ["build:extension"]
+dir = "extension"
+run = "npm run package:firefox"
+
+[tasks."sign:firefox"]
+description = "Have Mozilla sign the Firefox extension (unlisted); needs WEB_EXT_API_KEY and WEB_EXT_API_SECRET in the environment"
+depends = ["build:extension"]
+dir = "extension"
+run = "npm run sign:firefox"
+
 [tasks.build]
 description = "Build the server and the browser extension"
 depends = ["build:server", "build:extension"]
