@@ -29,14 +29,17 @@ async function launch(): Promise<WebDriver> {
   return driver;
 }
 
-/** Run `fn` (async, with the WebExtension API) inside the options page. */
-async function inExt<T>(d: WebDriver, fn: string, ...args: unknown[]): Promise<T> {
+/** Call a WebExtension API (e.g. "bookmarks.getChildren") on the options page, through e2e/bridge.js. */
+async function api<T>(d: WebDriver, path: string, ...args: unknown[]): Promise<T> {
   await d.get(OPTIONS);
-  return (await d.executeAsyncScript(
-    `const done = arguments[arguments.length - 1];
-     (async () => { ${fn} })().then(done, (e) => done({ __error: String(e) }));`,
-    ...args,
-  )) as T;
+  await d.executeScript(
+    "document.body.dataset.cmd = arguments[0]; document.dispatchEvent(new Event('e2e-cmd'));",
+    JSON.stringify({ path, args }),
+  );
+  const raw = await d.wait(async () => (await d.findElement({ css: "body" }).getAttribute("data-result")) || false, 15_000);
+  const out = JSON.parse(raw as string) as { value?: T; error?: string };
+  if (out.error) throw new Error(`${path}: ${out.error}`);
+  return out.value as T;
 }
 
 async function configure(d: WebDriver, server: Server): Promise<void> {
@@ -49,19 +52,16 @@ async function configure(d: WebDriver, server: Server): Promise<void> {
 }
 
 async function sync(d: WebDriver): Promise<void> {
-  await inExt(d, `await browser.runtime.sendMessage({ type: "bookmoor-sync-now" }); return 1;`);
+  await api(d, "runtime.sendMessage", { type: "bookmoor-sync-now" });
 }
 
 async function bar(d: WebDriver): Promise<{ title: string; url?: string }[]> {
-  return inExt(
-    d,
-    `const kids = await browser.bookmarks.getChildren("${BAR}");
-     return kids.map((k) => ({ title: k.title, ...(k.url ? { url: k.url } : {}) }));`,
-  );
+  const kids = await api<{ title: string; url?: string }[]>(d, "bookmarks.getChildren", BAR);
+  return kids.map((k) => ({ title: k.title, ...(k.url ? { url: k.url } : {}) }));
 }
 
 function create(d: WebDriver, title: string, url: string): Promise<unknown> {
-  return inExt(d, `return await browser.bookmarks.create({ parentId: "${BAR}", title: arguments[0], url: arguments[1] });`, title, url);
+  return api(d, "bookmarks.create", { parentId: BAR, title, url });
 }
 
 describe("two real Firefox profiles", { skip: !enabled }, () => {
@@ -92,17 +92,16 @@ describe("two real Firefox profiles", { skip: !enabled }, () => {
   });
 
   it("syncs a rename from B to A", async () => {
-    await inExt(
-      b,
-      `const [m] = await browser.bookmarks.getChildren("${BAR}"); await browser.bookmarks.update(m.id, { title: "Renamed" }); return 1;`,
-    );
+    const [m] = await api<{ id: string }[]>(b, "bookmarks.getChildren", BAR);
+    await api(b, "bookmarks.update", m!.id, { title: "Renamed" });
     await sync(b);
     await sync(a);
     assert.deepEqual(await bar(a), [{ title: "Renamed", url: "https://example.com/" }]);
   });
 
   it("syncs a deletion", async () => {
-    await inExt(a, `const [m] = await browser.bookmarks.getChildren("${BAR}"); await browser.bookmarks.remove(m.id); return 1;`);
+    const [m] = await api<{ id: string }[]>(a, "bookmarks.getChildren", BAR);
+    await api(a, "bookmarks.remove", m!.id);
     await sync(a);
     await sync(b);
     assert.deepEqual(await bar(b), []);

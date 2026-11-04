@@ -38,6 +38,13 @@ if (process.env.BOOKMOOR_E2E) {
     cpSync(dir, out, { recursive: true });
     const m = JSON.parse(readFileSync(`${dir}/manifest.json`, "utf8"));
     m.host_permissions = ["http://127.0.0.1/*"];
+    // geckodriver cannot navigate to moz-extension:// pages that are not
+    // web-accessible, and cannot call WebExtension APIs directly; the bridge
+    // lets a test call them through the DOM (strings only).
+    m.web_accessible_resources = [{ resources: ["options.html"], matches: ["<all_urls>"] }];
+    cpSync("e2e/bridge.js", `${out}/e2e-bridge.js`);
+    const html = readFileSync(`${out}/options.html`, "utf8");
+    writeFileSync(`${out}/options.html`, html.replace("</body>", '  <script src="e2e-bridge.js"></script>\n</body>'));
     writeFileSync(`${out}/manifest.json`, JSON.stringify(m, null, 2) + "\n");
   }
 }
