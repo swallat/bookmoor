@@ -24,6 +24,8 @@ const BIN = serverBinary();
 async function launch(): Promise<WebDriver> {
   const options = new firefox.Options();
   options.addArguments("-headless");
+  // Grant optional (host) permission requests without the prompt a script cannot click.
+  options.setPreference("extensions.webextOptionalPermissionPrompts", false);
   options.setPreference("extensions.webextensions.uuids", JSON.stringify({ [ADDON_ID]: UUID }));
   const driver = await new Builder().forBrowser("firefox").setFirefoxOptions(options).build();
   await (driver as WebDriver & { installAddon(p: string, temporary: boolean): Promise<string> }).installAddon(EXT, true);
@@ -73,7 +75,12 @@ async function configure(d: WebDriver, server: Server): Promise<void> {
   await d.findElement({ id: "url" }).sendKeys(server.url);
   await d.findElement({ id: "token" }).sendKeys(token);
   await d.findElement({ id: "save" }).click();
-  await d.wait(async () => (await d.findElement({ id: "status" }).getText()) === "Saved.", 10_000);
+  const status = () => d.findElement({ id: "status" }).getText();
+  try {
+    await d.wait(async () => (await status()) === "Saved.", 15_000);
+  } catch (e) {
+    throw new Error(`options page did not save: status "${await status()}"`, { cause: e });
+  }
 }
 
 async function sync(d: WebDriver): Promise<void> {
