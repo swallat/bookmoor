@@ -31,10 +31,12 @@ async function api(method, path, body) {
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
   if (!res.ok) {
-    if (res.status === 401 && me) { me = null; await start(); }
+    const wasSignedIn = Boolean(me);
+    if (res.status === 401 && wasSignedIn) { me = null; await start(); }
     const err = new Error(
       res.status === 429 ? "Too many attempts. Wait a moment and try again."
-        : res.status === 401 && !me ? "Name or password is wrong."
+        : res.status === 401 && wasSignedIn ? "Your session ended. Sign in again."
+        : res.status === 401 ? (path === "setup" ? "That admin token is not valid." : "Name or password is wrong.")
         : (data && data.error) || "Something went wrong (" + res.status + ").");
     err.status = res.status;
     throw err;
@@ -226,13 +228,12 @@ async function usersView() {
   const list = await api("GET", "users");
   const rows = list.map((u) => {
     const self = u.id === me.id;
-    const pw = h("input", { type: "password", "aria-label": "New password for " + u.name, autocomplete: "new-password", placeholder: "New password" });
+    const pw = h("input", { type: "password", "aria-label": "New password for " + u.name, autocomplete: "new-password", placeholder: "New password", class: "inline-pw" });
     const reset = h("form", { class: "actions", hidden: true, onsubmit: async (e) => {
       e.preventDefault();
       try { await api("POST", "users/" + u.id + "/password", { password: pw.value }); toast("Password changed for " + u.name); render(); }
       catch (x) { toast(x.message); }
     } }, pw, h("button", { class: "btn small", type: "submit", text: "Save" }));
-    pw.style.minHeight = "36px"; pw.style.width = "11rem";
     return h("div", { class: "row" },
       h("div", { class: "main" },
         h("div", { class: "name" }, u.name, self && h("span", { class: "muted", text: " (you)" })),
@@ -276,7 +277,7 @@ function accountView() {
       h("h2", { text: "Change password" }),
       h("p", { class: "muted", text: "Other browsers you are signed in on will be signed out." }),
       form([
-        h("div", { class: "stack-sm", style: "max-width:22rem" },
+        h("div", { class: "stack-sm narrow" },
           field("current", "Current password", { type: "password", autocomplete: "current-password", required: true }),
           field("new", "New password", { type: "password", autocomplete: "new-password", required: true }, "At least 10 characters.")),
       ], "Change password", async (fd, f) => {

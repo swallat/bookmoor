@@ -206,6 +206,24 @@ impl Tokens {
         v
     }
 
+    /// Tokens per user, in one pass.
+    pub fn counts_by_user(&self) -> HashMap<&str, usize> {
+        let mut m = HashMap::new();
+        for r in self.by_id.values() {
+            if let Some(u) = r.user_id.as_deref() {
+                *m.entry(u).or_insert(0) += 1;
+            }
+        }
+        m
+    }
+
+    pub fn count_for_user(&self, user_id: &str) -> usize {
+        self.by_id
+            .values()
+            .filter(|r| r.user_id.as_deref() == Some(user_id))
+            .count()
+    }
+
     pub fn get(&self, id: &str) -> Option<&TokenRecord> {
         self.by_id.get(id)
     }

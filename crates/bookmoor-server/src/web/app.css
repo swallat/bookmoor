@@ -144,3 +144,6 @@ input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var
   .reveal { animation: arrive .25s ease-out; }
   @keyframes arrive { from { opacity: 0; transform: translateY(-4px); } }
 }
+
+.narrow { max-width: 22rem; }
+input.inline-pw { min-height: 36px; width: 11rem; }

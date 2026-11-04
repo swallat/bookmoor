@@ -6,7 +6,7 @@
 //! `SameSite=Strict` cookie, so a cross-site form post cannot act as a user.
 
 use crate::api::{retry_after, save, ApiError, AppState, Shared};
-use crate::auth::Scope;
+use crate::auth::{Scope, TokenRecord};
 use crate::ratelimit::client_key;
 use crate::users::{check_password, hash_password, verify_password, User};
 use axum::extract::{ConnectInfo, FromRequestParts, Path, Request, State};
@@ -201,8 +201,31 @@ fn signed_in(st: &mut AppState, user: &User) -> Response {
     resp
 }
 
+/// Every login-like attempt costs one token of the per-address bucket, so
+/// guessing is bounded per address.
+fn throttle(st: &mut AppState, peer: Option<IpAddr>) -> Result<(), ApiError> {
+    match peer {
+        Some(p) => st
+            .limits
+            .failed_auth
+            .take(&p, Instant::now())
+            .map_err(retry_after),
+        None => Ok(()),
+    }
+}
+
+/// At most this many Argon2 computations at once: each takes tens of MiB.
+fn hashing_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| tokio::sync::Semaphore::new(4))
+}
+
 async fn hash_blocking(pw: String) -> Result<String, ApiError> {
     check_password(&pw).map_err(ApiError::Unprocessable)?;
+    let _slot = hashing_slots()
+        .acquire()
+        .await
+        .map_err(|_| ApiError::Storage)?;
     tokio::task::spawn_blocking(move || hash_password(&pw))
         .await
         .map_err(|_| ApiError::Storage)?
@@ -213,6 +236,9 @@ async fn verify_blocking(hash: Option<String>, pw: String) -> bool {
     if pw.len() > crate::users::MAX_PASSWORD_BYTES {
         return false;
     }
+    let Ok(_slot) = hashing_slots().acquire().await else {
+        return false;
+    };
     tokio::task::spawn_blocking(move || verify_password(hash.as_deref(), &pw))
         .await
         .unwrap_or(false)
@@ -244,12 +270,7 @@ async fn login(
     // Every attempt costs a token, so guessing is bounded per address.
     let found = {
         let mut st = s.lock().unwrap();
-        if let Some(p) = peer {
-            st.limits
-                .failed_auth
-                .take(&p, Instant::now())
-                .map_err(retry_after)?;
-        }
+        throttle(&mut st, peer)?;
         st.users
             .by_name(&b.name)
             .map(|u| (u.id.clone(), u.password_hash.clone()))
@@ -282,12 +303,7 @@ async fn setup(
 ) -> Result<Response, ApiError> {
     {
         let mut st = s.lock().unwrap();
-        if let Some(p) = peer {
-            st.limits
-                .failed_auth
-                .take(&p, Instant::now())
-                .map_err(retry_after)?;
-        }
+        throttle(&mut st, peer)?;
         if st.users.any_password() {
             return Err(ApiError::Denied("setup is already done"));
         }
@@ -340,18 +356,24 @@ struct Device {
     endpoint_id: Option<String>,
 }
 
+impl From<TokenRecord> for Device {
+    fn from(t: TokenRecord) -> Device {
+        Device {
+            id: t.id,
+            name: t.name,
+            scope: t.scope,
+            endpoint_id: t.endpoint_id,
+        }
+    }
+}
+
 async fn devices(State(s): State<Shared>, a: Authed) -> Json<Vec<Device>> {
     let st = s.lock().unwrap();
     Json(
         st.tokens
             .for_user(&a.user.id)
             .into_iter()
-            .map(|t| Device {
-                id: t.id,
-                name: t.name,
-                scope: t.scope,
-                endpoint_id: t.endpoint_id,
-            })
+            .map(Device::from)
             .collect(),
     )
 }
@@ -371,7 +393,7 @@ async fn add_device(
         return Err(ApiError::Forbidden);
     }
     let mut st = s.lock().unwrap();
-    if st.tokens.for_user(&a.user.id).len() >= MAX_DEVICES {
+    if st.tokens.count_for_user(&a.user.id) >= MAX_DEVICES {
         return Err(ApiError::Unprocessable(format!(
             "at most {MAX_DEVICES} devices"
         )));
@@ -384,7 +406,7 @@ async fn add_device(
         StatusCode::CREATED,
         Json(serde_json::json!({
             "token": token,
-            "device": Device { id: rec.id, name: rec.name, scope: rec.scope, endpoint_id: rec.endpoint_id },
+            "device": Device::from(rec),
         })),
     ))
 }
@@ -423,12 +445,7 @@ async fn change_password(
 ) -> Result<Response, ApiError> {
     {
         let mut st = s.lock().unwrap();
-        if let Some(p) = peer {
-            st.limits
-                .failed_auth
-                .take(&p, Instant::now())
-                .map_err(retry_after)?;
-        }
+        throttle(&mut st, peer)?;
     }
     if !verify_blocking(a.user.password_hash.clone(), b.current).await {
         return Err(ApiError::Denied("the current password is wrong"));
@@ -460,6 +477,7 @@ struct UserRow {
 
 async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
     let st = s.lock().unwrap();
+    let counts = st.tokens.counts_by_user();
     Json(
         st.users
             .list()
@@ -468,7 +486,7 @@ async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
                 name: u.name.clone(),
                 admin: u.admin,
                 has_password: u.password_hash.is_some(),
-                devices: st.tokens.for_user(&u.id).len(),
+                devices: counts.get(u.id.as_str()).copied().unwrap_or(0),
             })
             .collect(),
     )
@@ -484,15 +502,26 @@ struct NewUser {
 
 async fn add_user(
     State(s): State<Shared>,
-    _: Admin,
+    Admin(a): Admin,
     Json(b): Json<NewUser>,
 ) -> Result<StatusCode, ApiError> {
     let hash = hash_blocking(b.password).await?;
     let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
     st.add_user_hashed(&b.name, b.admin, Some(hash))
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok(StatusCode::CREATED)
+}
+
+/// The extractor checked admin rights on a copy; check again under the lock
+/// the change runs in, so two admins cannot undo each other's rights.
+fn still_admin(st: &AppState, a: &Authed) -> Result<(), ApiError> {
+    if st.users.get(&a.user.id).is_some_and(|u| u.admin) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
 async fn remove_user(
@@ -504,6 +533,7 @@ async fn remove_user(
         return Err(ApiError::Denied("you cannot remove yourself"));
     }
     let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
     if st.remove_user(&id) {
         save(&mut st)?;
     }
@@ -517,12 +547,13 @@ struct Password {
 
 async fn reset_password(
     State(s): State<Shared>,
-    _: Admin,
+    Admin(a): Admin,
     Path(id): Path<String>,
     Json(b): Json<Password>,
 ) -> Result<StatusCode, ApiError> {
     let hash = hash_blocking(b.password).await?;
     let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
     st.users
         .set_hash(&id, hash)
         .map_err(ApiError::Unprocessable)?;
