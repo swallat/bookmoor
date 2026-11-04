@@ -143,7 +143,9 @@ impl Store {
         let mut restored = BTreeMap::new();
         for (pid, snap) in engines {
             if profiles.get(&pid).is_none() {
-                return Err(format!("tree of unknown profile {pid}"));
+                return Err(format!(
+                    "tree of unknown profile {pid} (does the file mix the old and new layout?)"
+                ));
             }
             restored.insert(pid, Engine::restore(snap)?);
         }
@@ -606,5 +608,32 @@ mod tests {
         assert!(!st.engines.contains_key(&work));
         assert!(st.tokens.counts_by_profile().is_empty());
         assert!(st.remove_profile(&uid, &home).is_err());
+    }
+
+    #[test]
+    fn tokens_must_point_at_a_profile_of_their_user() {
+        let path = tmp("badprofile");
+        let mut st = AppState::default();
+        let a = st.add_user("alice", false, None).unwrap().id;
+        let b = st.add_user("bob", false, None).unwrap().id;
+        let (pa, pb) = (default_id_for(&a), default_id_for(&b));
+        // Alice's token pointing at Bob's profile.
+        st.tokens
+            .create("x", Scope::Read, Some(a.clone()), Some(pb), None);
+        Store::new(&path)
+            .save(&st.users, &st.profiles, &st.engines, &st.tokens)
+            .unwrap();
+        let err = Store::new(&path).load().err().unwrap();
+        assert!(err.contains("does not match any user and profile"), "{err}");
+        // A token for a profile that does not exist.
+        let mut st = AppState::default();
+        let a = st.add_user("alice", false, None).unwrap().id;
+        st.tokens
+            .create("x", Scope::Read, Some(a), Some("p_gone".into()), None);
+        Store::new(&path)
+            .save(&st.users, &st.profiles, &st.engines, &st.tokens)
+            .unwrap();
+        assert!(Store::new(&path).load().is_err());
+        let _ = pa;
     }
 }

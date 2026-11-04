@@ -4,9 +4,10 @@ Status: accepted and implemented (model in #35, web UI after it).
 
 ## Decisions
 
-- **One bookmark tree per user.** Each user owns an independent `Engine`
-  (revisions, tombstones, endpoints). Nothing is shared between users; sharing
-  is a non-goal for now.
+- **Separate bookmark trees.** Each user owns one or more profiles (below), and
+  each profile has an independent `Engine` (revisions, tombstones, endpoints).
+  Nothing is shared between users or between profiles; sharing is a non-goal
+  for now.
 - **Profiles.** A user has one or more profiles (name unique per user, at most
   20, a user always keeps one). A profile is a separate bookmark tree with its
   own endpoints; profiles share nothing (a shared or filtered tree was weighed
@@ -42,12 +43,15 @@ there. The single-user file migrates the same way via `owner`.
   bookmarks and revokes its devices), a profile choice when adding a device
   (shown once there are two), a profile tag on each device.
 - CLI: `token create --profile`; Dynacat: `--dynacat-profile` next to
-  `--dynacat-user`.
+  `--dynacat-user`. Without it, a user with several profiles shows their
+  `Default` one, so adding a profile does not break a running setup. The file
+  is only rewritten when that profile changes.
 
 ## Migration
 
 A state file of the single-user layout is read as: one user `owner` (admin,
-no password) who owns the old tree and all non-admin tokens. The extension
+no password) who owns the old tree (as profile `Default`) and all non-admin
+tokens. The extension
 keeps working unchanged. Set a password with
 `bookmoor-server user passwd --name owner --state state.json` (server stopped).
 The file is written in the new layout on the next save; going back to an older

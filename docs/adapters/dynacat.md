@@ -78,5 +78,7 @@ The widget file shows one user's tree. With several users, name the user with
 `--dynacat-user NAME` (or `BOOKMOOR_DYNACAT_USER`); with a single user it is
 that user. Without a name and with several users the server refuses to start.
 
-A user with several profiles also needs `--dynacat-profile NAME` (or
-`BOOKMOOR_DYNACAT_PROFILE`): the file shows that one profile's tree.
+A user with several profiles can pick one with `--dynacat-profile NAME` (or
+`BOOKMOOR_DYNACAT_PROFILE`); without it the file shows their `Default`
+profile. If the named profile is removed, the server refuses to start until
+the option is fixed.

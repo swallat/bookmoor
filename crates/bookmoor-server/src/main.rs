@@ -242,7 +242,7 @@ async fn main() {
     state.dynacat_file = dynacat_file;
     state.dynacat_user = dynacat_user;
     state.dynacat_profile = dynacat_profile;
-    if let Err(e) = state.publish_dynacat() {
+    if let Err(e) = state.publish_dynacat(None) {
         fail(&format!("cannot write the Dynacat file: {e}"));
     }
 

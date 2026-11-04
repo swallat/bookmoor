@@ -45,22 +45,40 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Refresh the Dynacat widget file with the tree of `dynacat_user` (the
-    /// only user when unset). A failure is logged and never fails the sync:
+    /// The profile whose tree the Dynacat file shows: `dynacat_profile`, else
+    /// the user's only profile, else (several) their `Default` one.
+    fn dynacat_target(&self) -> Result<String, String> {
+        let uid = self.resolve_user(self.dynacat_user.as_deref())?;
+        match self.resolve_profile(&uid, self.dynacat_profile.as_deref()) {
+            Err(_) if self.dynacat_profile.is_none() => {
+                let id = crate::profiles::default_id_for(&uid);
+                if self.profiles.get(&id).is_some_and(|p| p.user_id == uid) {
+                    Ok(id)
+                } else {
+                    Err("several profiles exist: name one with --dynacat-profile".into())
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Refresh the Dynacat widget file with the tree of the Dynacat user's
+    /// profile. `changed` is the profile a sync just changed: other profiles
+    /// leave the file alone. A failure is logged and never fails the sync:
     /// the dashboard is a view, the canonical tree is saved.
-    pub fn publish_dynacat(&self) -> std::io::Result<()> {
+    pub fn publish_dynacat(&self, changed: Option<&str>) -> std::io::Result<()> {
         let Some(path) = &self.dynacat_file else {
             return Ok(());
         };
         if self.users.is_empty() {
             return Ok(());
         }
-        let uid = self
-            .resolve_user(self.dynacat_user.as_deref())
-            .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))?;
         let pid = self
-            .resolve_profile(&uid, self.dynacat_profile.as_deref())
+            .dynacat_target()
             .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))?;
+        if changed.is_some_and(|c| c != pid) {
+            return Ok(());
+        }
         crate::dynacat::publish(path, &self.engines[&pid].tree())?;
         Ok(())
     }
@@ -160,8 +178,14 @@ impl AppState {
     ) -> Result<User, String> {
         let user = self.users.create_hashed(name, admin, hash)?;
         let id = crate::profiles::default_id_for(&user.id);
-        self.profiles
-            .create_with_id(id.clone(), &user.id, crate::profiles::DEFAULT_NAME)?;
+        if let Err(e) =
+            self.profiles
+                .create_with_id(id.clone(), &user.id, crate::profiles::DEFAULT_NAME)
+        {
+            // Never leave a user without a profile behind.
+            self.users.remove(&user.id);
+            return Err(e);
+        }
         self.engines.insert(id, Engine::new());
         Ok(user)
     }
@@ -531,7 +555,7 @@ async fn sync(
             // a retry after a restart is judged the same way again.
             if st.engines[&pid].rev() != before {
                 save(&mut st)?;
-                if let Err(e) = st.publish_dynacat() {
+                if let Err(e) = st.publish_dynacat(Some(&pid)) {
                     eprintln!("warning: cannot write the Dynacat file: {e}");
                 }
             }

@@ -38,6 +38,13 @@ impl Profiles {
     pub fn from_records(records: Vec<Profile>) -> Result<Self, String> {
         let mut p = Profiles::default();
         for r in records {
+            check_name(&r.name)?;
+            if p.by_id.values().filter(|x| x.user_id == r.user_id).count() >= MAX_PROFILES_PER_USER
+            {
+                return Err(format!(
+                    "too many profiles for one user (max {MAX_PROFILES_PER_USER})"
+                ));
+            }
             if p.by_name(&r.user_id, &r.name).is_some() {
                 return Err(format!("duplicate profile {} of one user", r.name));
             }
