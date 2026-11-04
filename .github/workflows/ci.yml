@@ -89,4 +89,5 @@ jobs:
         run: npm run test:e2e -- --test-name-pattern="${{ matrix.browser == 'chromium' && 'Chromium' || 'Firefox' }}"
         env:
           BOOKMOOR_E2E_REQUIRED: "1"
+          MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: "1"
           BOOKMOOR_E2E_FIREFOX: ${{ matrix.browser == 'firefox' && '1' || '' }}

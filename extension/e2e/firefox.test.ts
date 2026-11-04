@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { Builder, type WebDriver } from "selenium-webdriver";
 import firefox from "selenium-webdriver/firefox.js";
+import { Context } from "selenium-webdriver/firefox.js";
 import { serverBinary, startServer, type Server } from "../src/testkit.ts";
 
 const EXT = resolve(import.meta.dirname, "../dist-e2e-firefox");
@@ -29,9 +30,33 @@ async function launch(): Promise<WebDriver> {
   return driver;
 }
 
+const opened = new WeakSet<WebDriver>();
+
+/**
+ * Open the options page in its own tab and stay there. geckodriver refuses to
+ * navigate to moz-extension:// itself, so the tab is opened from the browser's
+ * chrome context (needs MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1).
+ */
+async function openOptions(d: WebDriver): Promise<void> {
+  if (opened.has(d)) return;
+  const before = await d.getAllWindowHandles();
+  const ff = d as WebDriver & { setContext(c: unknown): Promise<void> };
+  await ff.setContext(Context.CHROME);
+  await d.executeScript(
+    `const t = gBrowser.addTab(arguments[0], { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+     gBrowser.selectedTab = t;`,
+    OPTIONS,
+  );
+  await ff.setContext(Context.CONTENT);
+  const handle = await d.wait(async () => (await d.getAllWindowHandles()).find((h) => !before.includes(h)), 15_000);
+  await d.switchTo().window(handle as string);
+  await d.wait(async () => (await d.findElements({ id: "save" })).length > 0, 15_000);
+  opened.add(d);
+}
+
 /** Call a WebExtension API (e.g. "bookmarks.getChildren") on the options page, through e2e/bridge.js. */
 async function api<T>(d: WebDriver, path: string, ...args: unknown[]): Promise<T> {
-  await d.get(OPTIONS);
+  await openOptions(d);
   await d.executeScript(
     "document.body.dataset.cmd = arguments[0]; document.dispatchEvent(new Event('e2e-cmd'));",
     JSON.stringify({ path, args }),
@@ -44,7 +69,7 @@ async function api<T>(d: WebDriver, path: string, ...args: unknown[]): Promise<T
 
 async function configure(d: WebDriver, server: Server): Promise<void> {
   const token = await server.syncToken();
-  await d.get(OPTIONS);
+  await openOptions(d);
   await d.findElement({ id: "url" }).sendKeys(server.url);
   await d.findElement({ id: "token" }).sendKeys(token);
   await d.findElement({ id: "save" }).click();
