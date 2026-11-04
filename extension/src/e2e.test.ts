@@ -242,3 +242,35 @@ async function randomEdit(b: Browser, rnd: (n: number) => number): Promise<void>
       if (movable.length) await b.api.removeTree(pick(movable).id);
   }
 }
+
+describe("end to end (chrome and firefox together)", { skip: bin ? false : "bookmoor-server is not built" }, () => {
+  let server: Server;
+  before(async () => {
+    server = await startServer(bin!);
+  });
+  after(() => server.stop());
+
+  const titles = (b: Browser, folder: string) =>
+    b.api.nodes.get(folder)!.kids!.map((k) => b.api.nodes.get(k)!.title);
+  const sync = async (...bs: Browser[]) => {
+    for (let i = 0; i < 2; i++) for (const b of bs) assert.equal(await b.flush(), "ok", String(last.error instanceof Error ? last.error.stack : last.error));
+  };
+
+  it("pairs the Firefox toolbar with Chrome's bookmarks bar, in both directions", async () => {
+    const ff = await server.browser("firefox");
+    const ch = await server.browser("chrome");
+    await ff.api.create({ parentId: ff.api.bar, title: "From Firefox", url: "https://ff.example/" });
+    await ff.api.create({ parentId: ff.api.other, title: "FF other", url: "https://ffo.example/" });
+    await ff.api.create({ parentId: "menu________", title: "FF menu", url: "https://ffm.example/" });
+    await ch.api.create({ parentId: ch.api.bar, title: "From Chrome", url: "https://ch.example/" });
+    await ch.api.create({ parentId: ch.api.other, title: "CH other", url: "https://cho.example/" });
+    await sync(ff, ch);
+    assert.deepEqual(titles(ch, ch.api.bar).sort(), ["From Chrome", "From Firefox"]);
+    assert.deepEqual(titles(ff, ff.api.bar).sort(), ["From Chrome", "From Firefox"]);
+    assert.deepEqual(titles(ch, ch.api.other).sort(), ["CH other", "FF other"]);
+    assert.deepEqual(titles(ff, ff.api.other).sort(), ["CH other", "FF other"]);
+    // The Firefox menu has no counterpart: it stays out of Chrome entirely.
+    const all = [...ch.api.nodes.values()].map((n) => n.title);
+    assert.equal(all.includes("FF menu"), false);
+  });
+});
