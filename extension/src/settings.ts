@@ -53,6 +53,14 @@ export function originPatterns(serverUrl: string): string[] {
   return [...new Set([originPattern(serverUrl), `${u.protocol}//${u.host}/*`])];
 }
 
+/** Whether any grant covers the server; `contains` alone wants every pattern granted. */
+export async function hasHostAccess(serverUrl: string): Promise<boolean> {
+  for (const origin of originPatterns(serverUrl)) {
+    if (await chrome.permissions.contains({ origins: [origin] })) return true;
+  }
+  return false;
+}
+
 /**
  * URL of an API path below the configured server URL. A path prefix in the
  * server URL (`https://host/bookmoor`, for a server mounted below a proxy

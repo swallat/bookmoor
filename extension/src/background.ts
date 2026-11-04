@@ -1,5 +1,5 @@
 import { flush, last, type Outcome } from "./flow.ts";
-import { loadSettings, originPatterns } from "./settings.ts";
+import { loadSettings, hasHostAccess } from "./settings.ts";
 import { chromeBookmarks, chromeStateStore } from "./storage.ts";
 import { describe, STATUS_KEY, type SyncStatus } from "./status.ts";
 import { httpTransport } from "./transport.ts";
@@ -34,8 +34,7 @@ async function round(): Promise<void> {
   }
   // Without host access the browser blocks the request and the error says
   // little ("NetworkError"), so check it first and say what is missing.
-  const hostPatterns = originPatterns(settings.serverUrl);
-  if (!(await chrome.permissions.contains({ origins: hostPatterns }).catch(() => true))) {
+  if (!(await hasHostAccess(settings.serverUrl).catch(() => true))) {
     await setStatus(
       "auth",
       `The extension has no access to ${new URL(settings.serverUrl).host}. ` +
