@@ -1,6 +1,6 @@
 # Multi-user and web UI
 
-Status: accepted (PR 1 implements the model, PR 2 the web UI).
+Status: accepted and implemented (model in #35, web UI after it).
 
 ## Decisions
 
@@ -46,9 +46,13 @@ Admin tokens never had a device, but they could read `/v1/tree`; they now get
   `user` is rejected for admin tokens.
 - CLI: `user create|passwd`, and `token create --user NAME`.
 
-## Web UI (PR 2)
+## Web UI
 
 Served by the server at `/`, no build step, no external resources (strict
 CSP). API under `/ui/api/*` with the session cookie, plus a custom request
 header on every write as CSRF protection. First setup: while no user has a
-password, the page offers a setup form that needs the admin token.
+password, the page offers a setup form that needs the admin token (it gives
+the first admin a password, or the legacy `owner`). Signing in, setup and
+password changes share the per-address failed-auth bucket, one token per
+attempt. Password hashing runs off the async runtime and outside the state
+lock. Admins cannot remove or demote themselves.

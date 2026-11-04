@@ -229,6 +229,7 @@ async fn main() {
         fail(&format!("cannot write the state file: {e}"));
     }
 
+    state.secure_cookies = !insecure;
     state.dynacat_file = dynacat_file;
     state.dynacat_user = dynacat_user;
     if let Err(e) = state.publish_dynacat() {

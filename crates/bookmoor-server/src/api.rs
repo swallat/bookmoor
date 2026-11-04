@@ -31,6 +31,9 @@ pub struct AppState {
     /// Where state is saved after every change; `None` keeps it in memory.
     pub store: Option<crate::store::Store>,
     pub limits: crate::ratelimit::Limits,
+    pub sessions: crate::sessions::Sessions,
+    /// Mark the session cookie `Secure` (everything but `--insecure-http`).
+    pub secure_cookies: bool,
     /// Where the Dynacat widget file is kept up to date; `None` = off.
     pub dynacat_file: Option<std::path::PathBuf>,
     /// Whose tree the Dynacat file shows (id or name); the only user if unset.
@@ -105,6 +108,7 @@ impl AppState {
 
     /// Remove a user with their tree and all their tokens.
     pub fn remove_user(&mut self, id: &str) -> bool {
+        self.sessions.end_user(id);
         self.engines.remove(id);
         self.tokens.revoke_user(id);
         self.users.remove(id)
@@ -343,7 +347,7 @@ fn utc(secs: u64) -> String {
     )
 }
 
-fn retry_after(wait: Duration) -> ApiError {
+pub(crate) fn retry_after(wait: Duration) -> ApiError {
     ApiError::TooManyRequests(wait.as_secs_f64().ceil().max(1.0) as u64)
 }
 
@@ -397,6 +401,7 @@ pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/health", get(health))
         .merge(v1)
+        .merge(crate::web::routes())
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(cors_for_extensions))
         .layer(middleware::from_fn(log_requests))
@@ -405,7 +410,7 @@ pub fn router(state: Shared) -> Router {
 
 /// A failed save is reported, never ignored: the caller retries and op ids
 /// make that safe.
-fn save(st: &mut AppState) -> Result<(), ApiError> {
+pub(crate) fn save(st: &mut AppState) -> Result<(), ApiError> {
     st.persist_or_revert().map_err(|e| {
         eprintln!("error: saving state failed: {e}");
         ApiError::Storage

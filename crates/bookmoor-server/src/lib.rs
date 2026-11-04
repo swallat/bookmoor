@@ -6,5 +6,7 @@ pub mod cli;
 pub mod dynacat;
 pub mod engine;
 pub mod ratelimit;
+pub mod sessions;
 pub mod store;
 pub mod users;
+pub mod web;

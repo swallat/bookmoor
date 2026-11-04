@@ -1,0 +1,149 @@
+/* bookmoor admin. Palette from the logo: blue, white, yellow. Yellow is a
+   signal (focus, active tab, one-time token), never a fill for body UI. */
+:root {
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --ink: #12233b;
+  --muted: #4f6079;
+  --line: #d6dfeb;
+  --blue: #1d4e89;
+  --blue-hover: #163d6d;
+  --on-blue: #ffffff;
+  --link: #1d4e89;
+  --yellow: #ffb703;
+  --yellow-wash: #fff6dc;
+  --danger: #a5251c;
+  --danger-wash: #fdeceb;
+  --radius: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1626;
+    --surface: #112038;
+    --ink: #e8eef8;
+    --muted: #a3b3ca;
+    --line: #26385a;
+    --blue: #ffb703;          /* primary actions flip to the logo's yellow */
+    --blue-hover: #ffc93d;
+    --on-blue: #12233b;
+    --link: #8fb9ec;
+    --yellow-wash: #2b2410;
+    --danger: #ff9b92;
+    --danger-wash: #34181a;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 var(--font);
+}
+a { color: var(--link); }
+h1, h2, h3 { line-height: 1.25; margin: 0; }
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.125rem; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.small { font-size: .875rem; }
+.mono { font-family: var(--mono); font-size: .875em; }
+
+:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; border-radius: 4px; }
+
+.shell { max-width: 46rem; margin: 0 auto; padding: 0 16px 64px; }
+.bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 0;
+}
+.bar img { width: 32px; height: 32px; display: block; }
+.brand { font-weight: 700; font-size: 1.125rem; letter-spacing: .01em; }
+.bar .who { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 32px; overflow-x: auto; }
+.tab {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  padding: 10px 14px; font: inherit; color: var(--muted);
+  border-bottom: 3px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--yellow); }
+
+.stack > * + * { margin-top: 24px; }
+.stack-sm > * + * { margin-top: 8px; }
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+/* forms */
+.field { display: grid; gap: 4px; min-width: 0; }
+.field label { font-size: .875rem; font-weight: 600; }
+input[type="text"], input[type="password"], select {
+  width: 100%; min-height: 44px; padding: 8px 12px;
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid #8697b0; border-radius: var(--radius);
+}
+input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var(--blue); }
+.form-row { display: grid; gap: 12px; align-items: end; grid-template-columns: 1fr; }
+@media (min-width: 40rem) { .form-row.three { grid-template-columns: 1fr 12rem auto; } .form-row.user { grid-template-columns: 1fr 1fr auto auto; } }
+.check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.check input { width: 20px; height: 20px; accent-color: var(--blue); }
+.hint { font-size: .875rem; color: var(--muted); }
+.error { color: var(--danger); font-size: .9375rem; min-height: 1.4em; }
+
+/* buttons */
+.btn {
+  appearance: none; cursor: pointer; font: inherit; font-weight: 600;
+  min-height: 44px; padding: 8px 18px; border-radius: var(--radius);
+  border: 1px solid transparent; background: var(--blue); color: var(--on-blue);
+  transition: background-color .15s;
+}
+.btn:hover { background: var(--blue-hover); }
+.btn:disabled { opacity: .6; cursor: progress; }
+.btn.quiet { background: none; color: var(--link); border-color: var(--line); font-weight: 500; }
+.btn.quiet:hover { background: var(--bg); }
+.btn.danger { background: none; color: var(--danger); border-color: var(--line); font-weight: 500; }
+.btn.danger:hover { background: var(--danger-wash); }
+.btn.sure { background: var(--danger); color: var(--surface); }
+.btn.small { min-height: 36px; padding: 4px 12px; font-size: .875rem; }
+.link { appearance: none; background: none; border: 0; font: inherit; color: var(--link); cursor: pointer; text-decoration: underline; padding: 8px 4px; }
+
+/* lists: one surface, rows divided by lines, no nested cards */
+.list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.row { display: flex; gap: 12px 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 14px 16px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row .main { min-width: 0; }
+.row .name { font-weight: 600; overflow-wrap: anywhere; }
+.row .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); font-size: .8125rem; color: var(--muted); }
+.tag.warn { border-color: var(--yellow); color: var(--ink); background: var(--yellow-wash); }
+
+/* the one-time token */
+.reveal { background: var(--yellow-wash); border: 1px solid var(--yellow); border-radius: var(--radius); padding: 16px; }
+.reveal code {
+  display: block; margin: 12px 0; padding: 10px 12px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; font: .875rem/1.4 var(--mono);
+  overflow-wrap: anywhere; user-select: all;
+}
+.reveal dl { margin: 12px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: .9375rem; }
+.reveal dt { color: var(--muted); }
+.reveal dd { margin: 0; overflow-wrap: anywhere; }
+
+/* sign in */
+.center { max-width: 24rem; margin: 0 auto; padding: 12vh 16px 48px; }
+.center .logo { width: 56px; height: 56px; display: block; margin-bottom: 20px; }
+.center form { margin-top: 24px; }
+.noscript { padding: 24px; }
+.toast {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: var(--radius);
+  max-width: calc(100vw - 32px); font-size: .9375rem;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .reveal { animation: arrive .25s ease-out; }
+  @keyframes arrive { from { opacity: 0; transform: translateY(-4px); } }
+}
+
+.narrow { max-width: 22rem; }
+input.inline-pw { min-height: 36px; width: 11rem; }
