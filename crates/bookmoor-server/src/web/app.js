@@ -120,7 +120,7 @@ function setupView() {
 // ---- signed in ------------------------------------------------------------
 
 function shell(content) {
-  const tabs = [["devices", "Devices"], ...(me.admin ? [["users", "Users"]] : []), ["account", "Account"]];
+  const tabs = [["devices", "Devices"], ["profiles", "Profiles"], ...(me.admin ? [["users", "Users"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -169,12 +169,15 @@ function serverUrl() {
 }
 
 async function devicesView() {
-  const list = await api("GET", "devices");
+  const [list, profiles] = await Promise.all([api("GET", "devices"), api("GET", "profiles")]);
+  const many = profiles.length > 1;
+  const profileName = (id) => (profiles.find((p) => p.id === id) || {}).name || "";
   const rows = list.length
     ? list.map((d) => h("div", { class: "row" },
         h("div", { class: "main" },
           h("div", { class: "name", text: d.name }),
           h("div", { class: "muted small" },
+            many && h("span", { class: "tag", text: profileName(d.profile_id) }), many && " ",
             d.scope === "sync" ? "Sync · " : "Read only · ",
             h("span", { class: "mono", text: d.endpoint_id || "token " + d.id.slice(0, 8) }))),
         h("div", { class: "actions" },
@@ -188,10 +191,16 @@ async function devicesView() {
   return h("div", { class: "stack" },
     h("div", { class: "stack-sm" },
       h("h2", { text: "Add a device" }),
-      h("p", { class: "muted", text: "Each browser gets its own sync token. Revoking it stops that browser and nothing else." }),
+      h("p", { class: "muted", text: many
+        ? "Each browser gets its own sync token for one profile. Revoking it stops that browser and nothing else."
+        : "Each browser gets its own sync token. Revoking it stops that browser and nothing else." }),
       form([
-        h("div", { class: "form-row three" },
+        h("div", { class: "form-row " + (many ? "four" : "three") },
           field("device-name", "Device name", { type: "text", placeholder: "Laptop, Firefox", required: true, maxlength: "64" }),
+          many && h("div", { class: "field" },
+            h("label", { for: "device-profile", text: "Profile" }),
+            h("select", { id: "device-profile", name: "profile" },
+              profiles.map((p) => h("option", { value: p.id, text: p.name })))),
           h("div", { class: "field" },
             h("label", { for: "device-scope", text: "Access" }),
             h("select", { id: "device-scope", name: "scope" },
@@ -199,7 +208,9 @@ async function devicesView() {
               h("option", { value: "read", text: "Read only" }))),
           ),
       ], "Create token", async (fd, f) => {
-        const r = await api("POST", "devices", { name: fd.get("device-name"), scope: fd.get("scope") });
+        const r = await api("POST", "devices", {
+          name: fd.get("device-name"), scope: fd.get("scope"), profile: fd.get("profile") || undefined,
+        });
         lastToken = r;
         f.reset();
         render();
@@ -207,6 +218,43 @@ async function devicesView() {
     lastToken && tokenReveal(lastToken),
     h("div", { class: "stack-sm" },
       h("h2", { text: "Your devices" }),
+      h("div", { class: "list" }, rows)));
+}
+
+async function profilesView() {
+  const list = await api("GET", "profiles");
+  const rows = list.map((p) => {
+    const input = h("input", { type: "text", "aria-label": "New name for " + p.name, value: p.name, maxlength: "48", class: "inline-pw" });
+    const rename = h("form", { class: "actions", hidden: true, onsubmit: async (e) => {
+      e.preventDefault();
+      try { await api("POST", "profiles/" + p.id + "/rename", { name: input.value }); toast("Renamed to " + input.value.trim()); render(); }
+      catch (x) { toast(x.message); }
+    } }, input, h("button", { class: "btn small", type: "submit", text: "Save" }));
+    return h("div", { class: "row" },
+      h("div", { class: "main" },
+        h("div", { class: "name", text: p.name }),
+        h("div", { class: "muted small", text: p.devices + (p.devices === 1 ? " device" : " devices") })),
+      h("div", { class: "actions" },
+        rename,
+        h("button", { class: "btn quiet small", type: "button", text: "Rename", onclick: () => { rename.hidden = !rename.hidden; if (!rename.hidden) input.select(); } }),
+        list.length > 1 && confirmButton("Remove", "Yes, delete bookmarks and devices", async () => {
+          await api("DELETE", "profiles/" + p.id); toast("Removed " + p.name); render();
+        })));
+  });
+  return h("div", { class: "stack" },
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Add a profile" }),
+      h("p", { class: "muted", text: "A profile is a separate set of bookmarks, for example Private and Work. Profiles share nothing. A device syncs exactly one." }),
+      form([
+        h("div", { class: "form-row profile" },
+          field("profile-name", "Profile name", { type: "text", placeholder: "Work", required: true, maxlength: "48" })),
+      ], "Add profile", async (fd, f) => {
+        await api("POST", "profiles", { name: fd.get("profile-name") });
+        toast("Added " + fd.get("profile-name").trim());
+        render();
+      }, { inline: true })),
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Your profiles" }),
       h("div", { class: "list" }, rows)));
 }
 
@@ -288,9 +336,9 @@ function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, users: usersView, account: async () => accountView() };
+  const views = { devices: devicesView, profiles: profilesView, users: usersView, account: async () => accountView() };
   if (tab === "users" && !me.admin) tab = "devices";
-  document.title = { devices: "Devices", users: "Users", account: "Account" }[tab] + " · bookmoor";
+  document.title = { devices: "Devices", profiles: "Profiles", users: "Users", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }

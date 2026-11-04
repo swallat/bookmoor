@@ -55,6 +55,9 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/logout", post(logout))
         .route("/ui/api/devices", get(devices).post(add_device))
         .route("/ui/api/devices/{id}", delete(remove_device))
+        .route("/ui/api/profiles", get(profiles).post(add_profile))
+        .route("/ui/api/profiles/{id}", delete(remove_profile))
+        .route("/ui/api/profiles/{id}/rename", post(rename_profile))
         .route("/ui/api/password", post(change_password))
         .route("/ui/api/users", get(users).post(add_user))
         .route("/ui/api/users/{id}", delete(remove_user))
@@ -353,6 +356,7 @@ struct Device {
     id: String,
     name: String,
     scope: Scope,
+    profile_id: Option<String>,
     endpoint_id: Option<String>,
 }
 
@@ -362,6 +366,7 @@ impl From<TokenRecord> for Device {
             id: t.id,
             name: t.name,
             scope: t.scope,
+            profile_id: t.profile_id,
             endpoint_id: t.endpoint_id,
         }
     }
@@ -382,6 +387,8 @@ async fn devices(State(s): State<Shared>, a: Authed) -> Json<Vec<Device>> {
 struct NewDevice {
     name: String,
     scope: Scope,
+    /// Profile id; may be left out while the user has only one profile.
+    profile: Option<String>,
 }
 
 async fn add_device(
@@ -399,7 +406,7 @@ async fn add_device(
         )));
     }
     let (token, rec) = st
-        .issue_token(Some(&a.user.id), &b.name, b.scope)
+        .issue_token(Some(&a.user.id), b.profile.as_deref(), &b.name, b.scope)
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok((
@@ -424,10 +431,87 @@ async fn remove_device(
         .cloned()
         .ok_or(ApiError::Forbidden)?;
     st.tokens.revoke(&rec.id);
-    if let (Some(ep), Some(e)) = (&rec.endpoint_id, st.engines.get_mut(&a.user.id)) {
+    if let (Some(ep), Some(e)) = (
+        &rec.endpoint_id,
+        rec.profile_id.as_ref().and_then(|p| st.engines.get_mut(p)),
+    ) {
         e.remove_endpoint(ep);
     }
     save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct ProfileRow {
+    id: String,
+    name: String,
+    devices: usize,
+}
+
+async fn profiles(State(s): State<Shared>, a: Authed) -> Json<Vec<ProfileRow>> {
+    let st = s.lock().unwrap();
+    let counts = st.tokens.counts_by_profile();
+    Json(
+        st.profiles
+            .for_user(&a.user.id)
+            .into_iter()
+            .map(|p| ProfileRow {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                devices: counts.get(p.id.as_str()).copied().unwrap_or(0),
+            })
+            .collect(),
+    )
+}
+
+#[derive(Deserialize)]
+struct ProfileName {
+    name: String,
+}
+
+async fn add_profile(
+    State(s): State<Shared>,
+    a: Authed,
+    Json(b): Json<ProfileName>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    st.add_profile(&a.user.id, &b.name)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok(StatusCode::CREATED)
+}
+
+async fn rename_profile(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+    Json(b): Json<ProfileName>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    if !st.profiles.get(&id).is_some_and(|p| p.user_id == a.user.id) {
+        return Err(ApiError::Forbidden);
+    }
+    st.profiles
+        .rename(&id, &b.name)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes the profile's bookmarks and revokes its devices.
+async fn remove_profile(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    match st
+        .remove_profile(&a.user.id, &id)
+        .map_err(ApiError::Unprocessable)?
+    {
+        true => save(&mut st)?,
+        false => return Err(ApiError::Forbidden),
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -602,7 +686,7 @@ mod tests {
 
     fn ui() -> Ui {
         let mut st = AppState::default();
-        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None);
+        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None, None);
         let state = Arc::new(Mutex::new(st));
         Ui {
             app: router(state.clone()),
@@ -957,7 +1041,7 @@ mod tests {
     async fn upgrade_owner_claims_the_old_tree_in_setup() {
         let mut st = AppState::default();
         st.add_user("owner", true, None).unwrap();
-        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None);
+        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None, None);
         let u = Ui {
             app: router(Arc::new(Mutex::new(st))),
             state: Arc::new(Mutex::new(AppState::default())),
@@ -988,5 +1072,127 @@ mod tests {
             );
             assert_eq!(r.headers()["x-frame-options"], "DENY");
         }
+    }
+
+    #[tokio::test]
+    async fn profiles_are_managed_per_user_and_devices_pick_one() {
+        let u = ui();
+        let anna = u.setup("anna").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let home = v[0]["id"].as_str().unwrap().to_string();
+        assert_eq!(v[0]["name"], "Default");
+        let (st, _, _) = u
+            .post(
+                "/ui/api/profiles",
+                Some(&anna),
+                serde_json::json!({"name":"Work"}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let dup = serde_json::json!({"name":"work"});
+        assert_eq!(
+            u.post("/ui/api/profiles", Some(&anna), dup).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let work = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "Work")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // With two profiles a device has to name one.
+        let no = serde_json::json!({"name":"laptop","scope":"sync"});
+        assert_eq!(
+            u.post("/ui/api/devices", Some(&anna), no).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let yes = serde_json::json!({"name":"laptop","scope":"sync","profile":work});
+        let (st, v, _) = u.post("/ui/api/devices", Some(&anna), yes).await;
+        assert_eq!(st, StatusCode::CREATED);
+        assert_eq!(v["device"]["profile_id"], work.as_str());
+        let token = v["token"].as_str().unwrap().to_string();
+        // Bob can neither see nor touch anna's profiles.
+        let new = serde_json::json!({"name":"bob","password":"another good password"});
+        u.post("/ui/api/users", Some(&anna), new).await;
+        let login = serde_json::json!({"name":"bob","password":"another good password"});
+        let bob = cookie_of(&u.post("/ui/api/login", None, login).await.2.unwrap());
+        let rename = serde_json::json!({"name":"Mine now"});
+        assert_eq!(
+            u.post(
+                &format!("/ui/api/profiles/{work}/rename"),
+                Some(&bob),
+                rename
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            u.call(
+                "DELETE",
+                &format!("/ui/api/profiles/{work}"),
+                Some(&bob),
+                None,
+                true
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let steal = serde_json::json!({"name":"x","scope":"read","profile":work});
+        assert_eq!(
+            u.post("/ui/api/devices", Some(&bob), steal).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        // Rename, then remove: the device token stops working.
+        let rename = serde_json::json!({"name":"Job"});
+        assert_eq!(
+            u.post(
+                &format!("/ui/api/profiles/{work}/rename"),
+                Some(&anna),
+                rename
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        let (st, _, _) = u
+            .call(
+                "DELETE",
+                &format!("/ui/api/profiles/{work}"),
+                Some(&anna),
+                None,
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let tree = Request::builder()
+            .uri("/v1/tree")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            u.app.clone().oneshot(tree).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        // The last profile stays.
+        let (st, _, _) = u
+            .call(
+                "DELETE",
+                &format!("/ui/api/profiles/{home}"),
+                Some(&anna),
+                None,
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

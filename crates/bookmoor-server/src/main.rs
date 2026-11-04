@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 /// `bookmoor-server token create --name N --scope S [--state FILE] [--yes] [--allow-admin]`
 fn token_command(mut args: impl Iterator<Item = String>) {
     use bookmoor_server::cli::{confirm_on_terminal, create_token, TokenRequest};
-    const USAGE: &str = "usage: bookmoor-server token create --name NAME --scope read|sync|admin [--user USER] --state FILE [--yes] [--allow-admin]\n\nCreates a token without a running server; refuses while the state is in use.";
+    const USAGE: &str = "usage: bookmoor-server token create --name NAME --scope read|sync|admin [--user USER] [--profile PROFILE] --state FILE [--yes] [--allow-admin]\n\nCreates a token without a running server; refuses while the state is in use.";
     match args.next().as_deref() {
         Some("create") => {}
         Some("--help" | "-h") => {
@@ -25,7 +25,7 @@ fn token_command(mut args: impl Iterator<Item = String>) {
         _ => fail(USAGE),
     }
     let mut state = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
-    let (mut name, mut scope, mut user) = (None, None, None);
+    let (mut name, mut scope, mut user, mut profile) = (None, None, None, None);
     let (mut yes, mut allow_admin) = (false, false);
     while let Some(a) = args.next() {
         let mut value = |what: &str| {
@@ -35,6 +35,7 @@ fn token_command(mut args: impl Iterator<Item = String>) {
         match a.as_str() {
             "--name" => name = Some(value("--name")),
             "--user" => user = Some(value("--user")),
+            "--profile" => profile = Some(value("--profile")),
             "--scope" => {
                 scope = Some(
                     value("--scope")
@@ -60,6 +61,7 @@ fn token_command(mut args: impl Iterator<Item = String>) {
         name: &name,
         scope,
         user: user.as_deref(),
+        profile: profile.as_deref(),
         allow_admin,
         yes,
     };
@@ -151,6 +153,7 @@ async fn main() {
     let mut insecure = false;
     let mut state_path = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let mut dynacat_user = std::env::var("BOOKMOOR_DYNACAT_USER").ok();
+    let mut dynacat_profile = std::env::var("BOOKMOOR_DYNACAT_PROFILE").ok();
     let mut dynacat_file = std::env::var_os("BOOKMOOR_DYNACAT_FILE").map(std::path::PathBuf::from);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -169,6 +172,12 @@ async fn main() {
                         .into(),
                 );
             }
+            "--dynacat-profile" => {
+                dynacat_profile = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--dynacat-profile needs a profile name")),
+                );
+            }
             "--dynacat-user" => {
                 dynacat_user = Some(
                     args.next()
@@ -183,7 +192,7 @@ async fn main() {
                 );
             }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-file FILE] [--dynacat-user USER]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-file FILE] [--dynacat-user USER] [--dynacat-profile PROFILE]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -220,7 +229,7 @@ async fn main() {
         }
         // A state file that already holds an admin token needs no new one.
         Err(_) if !state.tokens.has_admin() => {
-            let (t, _) = state.tokens.create("admin", Scope::Admin, None, None);
+            let (t, _) = state.tokens.create("admin", Scope::Admin, None, None, None);
             println!("admin token (shown once): {t}");
         }
         Err(_) => {}
@@ -232,7 +241,8 @@ async fn main() {
     state.secure_cookies = !insecure;
     state.dynacat_file = dynacat_file;
     state.dynacat_user = dynacat_user;
-    if let Err(e) = state.publish_dynacat() {
+    state.dynacat_profile = dynacat_profile;
+    if let Err(e) = state.publish_dynacat(None) {
         fail(&format!("cannot write the Dynacat file: {e}"));
     }
 

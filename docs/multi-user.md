@@ -4,11 +4,17 @@ Status: accepted and implemented (model in #35, web UI after it).
 
 ## Decisions
 
-- **One bookmark tree per user.** Each user owns an independent `Engine`
-  (revisions, tombstones, endpoints). Nothing is shared between users; sharing
-  is a non-goal for now.
-- **Tokens and devices belong to a user.** A `read` or `sync` token carries a
-  `user_id` and can only reach that user's tree. A sync token still maps to
+- **Separate bookmark trees.** Each user owns one or more profiles (below), and
+  each profile has an independent `Engine` (revisions, tombstones, endpoints).
+  Nothing is shared between users or between profiles; sharing is a non-goal
+  for now.
+- **Profiles.** A user has one or more profiles (name unique per user, at most
+  20, a user always keeps one). A profile is a separate bookmark tree with its
+  own endpoints; profiles share nothing (a shared or filtered tree was weighed
+  and rejected: the sync would need to understand subtrees). The `Engine` is
+  now per profile, so neither the sync protocol nor the extension changes.
+- **Tokens and devices belong to a user and a profile.** A `read` or `sync` token carries a
+  `user_id` and a `profile_id` and can only reach that profile's tree. A sync token still maps to
   exactly one endpoint. `admin` tokens belong to no user: they manage users and
   tokens, and have no tree (the server answers 403 on `/v1/tree` and
   `/v1/sync`).
@@ -24,10 +30,28 @@ Status: accepted and implemented (model in #35, web UI after it).
 - **Roles.** `admin` users manage all users; others manage their own devices
   and tokens. Admin API tokens stay as the break-glass and automation path.
 
+## Profiles: state and API
+
+State: `{ users, profiles, engines: {profile_id: ...}, tokens }`. A file from
+the first multi-user version (no `profiles`) becomes one profile `Default`
+(id `p_<user id suffix>`) per user, holding the old tree; its tokens move
+there. The single-user file migrates the same way via `owner`.
+
+- `POST /v1/tokens` takes `profile` (id or name, within the token's user); it
+  may be left out while the user has only one profile.
+- Web UI: a Profiles tab (add, rename, remove; removing deletes the profile's
+  bookmarks and revokes its devices), a profile choice when adding a device
+  (shown once there are two), a profile tag on each device.
+- CLI: `token create --profile`; Dynacat: `--dynacat-profile` next to
+  `--dynacat-user`. Without it, a user with several profiles shows their
+  `Default` one, so adding a profile does not break a running setup. The file
+  is only rewritten when that profile changes.
+
 ## Migration
 
 A state file of the single-user layout is read as: one user `owner` (admin,
-no password) who owns the old tree and all non-admin tokens. The extension
+no password) who owns the old tree (as profile `Default`) and all non-admin
+tokens. The extension
 keeps working unchanged. Set a password with
 `bookmoor-server user passwd --name owner --state state.json` (server stopped).
 The file is written in the new layout on the next save; going back to an older

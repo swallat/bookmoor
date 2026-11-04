@@ -5,6 +5,7 @@
 use crate::api::AppState;
 use crate::auth::{Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, Snapshot};
+use crate::profiles::{default_id_for, Profile, Profiles, DEFAULT_NAME};
 use crate::users::{User, Users};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -15,7 +16,8 @@ use std::path::{Path, PathBuf};
 #[derive(Serialize)]
 struct SaveFile<'a> {
     users: &'a [User],
-    /// Bookmark tree per user id.
+    profiles: &'a [Profile],
+    /// Bookmark tree per profile id.
     engines: BTreeMap<&'a str, Snapshot>,
     tokens: &'a [TokenRecord],
 }
@@ -24,6 +26,9 @@ struct SaveFile<'a> {
 struct LoadFile {
     #[serde(default)]
     users: Vec<User>,
+    /// Absent in files from before profiles: then `engines` is keyed by user.
+    #[serde(default)]
+    profiles: Vec<Profile>,
     #[serde(default)]
     engines: BTreeMap<String, Snapshot>,
     /// Single-user state of earlier versions; becomes the user `owner`.
@@ -35,6 +40,7 @@ struct LoadFile {
 #[derive(Debug, Default)]
 pub struct Loaded {
     pub users: Users,
+    pub profiles: Profiles,
     pub engines: BTreeMap<String, Engine>,
     pub tokens: Tokens,
 }
@@ -91,6 +97,7 @@ impl Store {
         let f: LoadFile = serde_json::from_str(&text)
             .map_err(|e| format!("{} is not a valid state file: {e}", self.path.display()))?;
         let mut users = f.users;
+        let mut profiles = f.profiles;
         let mut engines = f.engines;
         let mut tokens = f.tokens;
         if let Some(legacy) = f.engine {
@@ -111,26 +118,66 @@ impl Store {
             }
             users.push(owner);
         }
-        let users = Users::from_records(users)?;
-        let mut restored = BTreeMap::new();
-        for (uid, snap) in engines {
-            if users.get(&uid).is_none() {
-                return Err(format!("tree of unknown user {uid}"));
+        if profiles.is_empty() && !users.is_empty() {
+            // Before profiles every user had exactly one tree, keyed by the
+            // user id: it becomes that user's profile "Default".
+            let mut moved = BTreeMap::new();
+            for (uid, snap) in engines {
+                let pid = default_id_for(&uid);
+                profiles.push(Profile {
+                    id: pid.clone(),
+                    user_id: uid,
+                    name: DEFAULT_NAME.into(),
+                });
+                moved.insert(pid, snap);
             }
-            restored.insert(uid, Engine::restore(snap)?);
+            engines = moved;
+            for t in tokens.iter_mut().filter(|t| t.scope != Scope::Admin) {
+                if t.profile_id.is_none() {
+                    t.profile_id = t.user_id.as_deref().map(default_id_for);
+                }
+            }
         }
-        if let Some(u) = users.list().find(|u| !restored.contains_key(&u.id)) {
-            return Err(format!("user {} has no tree", u.name));
+        let users = Users::from_records(users)?;
+        let profiles = Profiles::from_records(profiles)?;
+        let mut restored = BTreeMap::new();
+        for (pid, snap) in engines {
+            if profiles.get(&pid).is_none() {
+                return Err(format!(
+                    "tree of unknown profile {pid} (does the file mix the old and new layout?)"
+                ));
+            }
+            restored.insert(pid, Engine::restore(snap)?);
+        }
+        for p in profiles.list() {
+            if users.get(&p.user_id).is_none() {
+                return Err(format!("profile {} belongs to an unknown user", p.name));
+            }
+            if !restored.contains_key(&p.id) {
+                return Err(format!("profile {} has no tree", p.name));
+            }
+        }
+        if let Some(u) = users.list().find(|u| profiles.for_user(&u.id).is_empty()) {
+            return Err(format!("user {} has no profile", u.name));
         }
         for t in &tokens {
-            match (&t.user_id, t.scope) {
-                (None, Scope::Admin) => {}
-                (Some(uid), s) if s != Scope::Admin && users.get(uid).is_some() => {}
-                _ => return Err(format!("token {} does not match any user", t.id)),
+            let ok = match (&t.user_id, &t.profile_id, t.scope) {
+                (None, None, Scope::Admin) => true,
+                (Some(u), Some(p), s) if s != Scope::Admin => {
+                    users.get(u).is_some() && profiles.get(p).is_some_and(|p| &p.user_id == u)
+                }
+                _ => false,
+            };
+            if !ok {
+                return Err(format!(
+                    "token {} does not match any user and profile",
+                    t.id
+                ));
             }
         }
         Ok(Some(Loaded {
             users,
+            profiles,
             engines: restored,
             tokens: Tokens::from_records(tokens),
         }))
@@ -139,13 +186,16 @@ impl Store {
     pub fn save(
         &self,
         users: &Users,
+        profiles: &Profiles,
         engines: &BTreeMap<String, Engine>,
         tokens: &Tokens,
     ) -> io::Result<()> {
         let records = tokens.records();
         let user_records = users.records();
+        let profile_records = profiles.records();
         let bytes = serde_json::to_vec(&SaveFile {
             users: &user_records,
+            profiles: &profile_records,
             engines: engines
                 .iter()
                 .map(|(k, e)| (k.as_str(), e.snapshot()))
@@ -199,6 +249,7 @@ impl AppState {
         let l = store.load()?.unwrap_or_default();
         Ok(AppState {
             users: l.users,
+            profiles: l.profiles,
             engines: l.engines,
             tokens: l.tokens,
             store: Some(store),
@@ -209,7 +260,7 @@ impl AppState {
     /// Write the current state; a no-op without a store.
     pub fn persist(&self) -> io::Result<()> {
         match &self.store {
-            Some(s) => s.save(&self.users, &self.engines, &self.tokens),
+            Some(s) => s.save(&self.users, &self.profiles, &self.engines, &self.tokens),
             None => Ok(()),
         }
     }
@@ -227,6 +278,7 @@ impl AppState {
             match store.load() {
                 Ok(Some(l)) => {
                     self.users = l.users;
+                    self.profiles = l.profiles;
                     self.engines = l.engines;
                     self.tokens = l.tokens;
                 }
@@ -282,31 +334,36 @@ mod tests {
             .add_user("alice", false, Some("long enough pw"))
             .unwrap()
             .id;
-        let engine = st.engines.get_mut(&uid).unwrap();
+        let pid = default_id_for(&uid);
+        let engine = st.engines.get_mut(&pid).unwrap();
         engine.register_endpoint("ep_a");
         engine.register_endpoint("ep_b");
-        let (token, _) = st
-            .tokens
-            .create("a", Scope::Sync, Some(uid.clone()), Some("ep_a".into()));
+        let (token, _) = st.tokens.create(
+            "a",
+            Scope::Sync,
+            Some(uid.clone()),
+            Some(pid.clone()),
+            Some("ep_a".into()),
+        );
         let req = SyncRequest {
             endpoint_id: "ep_a".into(),
             since_rev: 0,
             ops: vec![add(1), add(2)],
         };
-        let first = st.engines.get_mut(&uid).unwrap().sync(&req).unwrap();
+        let first = st.engines.get_mut(&pid).unwrap().sync(&req).unwrap();
         st.persist().unwrap();
 
         let mut again = AppState::open(store).unwrap();
-        assert_eq!(again.engines[&uid].tree(), st.engines[&uid].tree());
+        assert_eq!(again.engines[&pid].tree(), st.engines[&pid].tree());
         assert!(again.tokens.authenticate(&token).is_some());
         // A retried request must not apply twice.
-        let replay = again.engines.get_mut(&uid).unwrap().sync(&req).unwrap();
+        let replay = again.engines.get_mut(&pid).unwrap().sync(&req).unwrap();
         assert_eq!(replay.rev, first.rev);
-        assert_eq!(again.engines[&uid].tree(), st.engines[&uid].tree());
+        assert_eq!(again.engines[&pid].tree(), st.engines[&pid].tree());
         // The other device still receives what it missed.
         let b = again
             .engines
-            .get_mut(&uid)
+            .get_mut(&pid)
             .unwrap()
             .sync(&SyncRequest {
                 endpoint_id: "ep_b".into(),
@@ -350,11 +407,12 @@ mod tests {
         let path = tmp("rollback");
         let mut st = AppState::open(Store::new(&path)).unwrap();
         let uid = st.add_user("alice", false, None).unwrap().id;
-        st.engines.get_mut(&uid).unwrap().register_endpoint("ep_a");
+        let pid = default_id_for(&uid);
+        st.engines.get_mut(&pid).unwrap().register_endpoint("ep_a");
         st.persist().unwrap();
-        let saved = st.engines[&uid].tree();
+        let saved = st.engines[&pid].tree();
         st.engines
-            .get_mut(&uid)
+            .get_mut(&pid)
             .unwrap()
             .sync(&SyncRequest {
                 endpoint_id: "ep_a".into(),
@@ -362,11 +420,11 @@ mod tests {
                 ops: vec![add(1)],
             })
             .unwrap();
-        assert_ne!(st.engines[&uid].tree(), saved);
+        assert_ne!(st.engines[&pid].tree(), saved);
         // A directory in the way of the temp file makes the save fail.
         fs::create_dir(tmp_path(&path)).unwrap();
         assert!(st.persist_or_revert().is_err());
-        assert_eq!(st.engines[&uid].tree(), saved);
+        assert_eq!(st.engines[&pid].tree(), saved);
     }
 
     #[test]
@@ -409,8 +467,8 @@ mod tests {
             })
             .unwrap();
         let mut tokens = Tokens::new();
-        let (sync, _) = tokens.create("laptop", Scope::Sync, None, Some("ep_a".into()));
-        let (admin, _) = tokens.create("admin", Scope::Admin, None, None);
+        let (sync, _) = tokens.create("laptop", Scope::Sync, None, None, Some("ep_a".into()));
+        let (admin, _) = tokens.create("admin", Scope::Admin, None, None, None);
         let file = serde_json::json!({
             "engine": engine.snapshot(),
             "tokens": tokens.records(),
@@ -419,7 +477,7 @@ mod tests {
         let st = AppState::open(Store::new(&path)).unwrap();
         let owner = st.users.by_name("owner").unwrap();
         assert!(owner.admin && owner.password_hash.is_none());
-        assert_eq!(st.engines[&owner.id].tree(), engine.tree());
+        assert_eq!(st.engines[&default_id_for(&owner.id)].tree(), engine.tree());
         let rec = st.tokens.authenticate(&sync).unwrap();
         assert_eq!(rec.user_id.as_deref(), Some(owner.id.as_str()));
         assert!(st.tokens.authenticate(&admin).unwrap().user_id.is_none());
@@ -434,9 +492,10 @@ mod tests {
         let mut st = AppState::default();
         let a = st.add_user("alice", false, None).unwrap().id;
         let b = st.add_user("bob", false, None).unwrap().id;
-        st.engines.get_mut(&a).unwrap().register_endpoint("ep_a");
+        let (pa, pb) = (default_id_for(&a), default_id_for(&b));
+        st.engines.get_mut(&pa).unwrap().register_endpoint("ep_a");
         st.engines
-            .get_mut(&a)
+            .get_mut(&pa)
             .unwrap()
             .sync(&SyncRequest {
                 endpoint_id: "ep_a".into(),
@@ -444,17 +503,17 @@ mod tests {
                 ops: vec![add(1)],
             })
             .unwrap();
-        assert_eq!(st.engines[&a].rev(), 1);
-        assert_eq!(st.engines[&b].rev(), 0);
+        assert_eq!(st.engines[&pa].rev(), 1);
+        assert_eq!(st.engines[&pb].rev(), 0);
         assert!(st.remove_user(&a));
-        assert!(!st.engines.contains_key(&a));
+        assert!(!st.engines.contains_key(&pa));
     }
 
     #[test]
     fn tokens_must_belong_to_a_user() {
         let path = tmp("orphan");
         let mut tokens = Tokens::new();
-        tokens.create("x", Scope::Read, Some("u_gone".into()), None);
+        tokens.create("x", Scope::Read, None, None, None);
         let file = serde_json::json!({
             "engine": Engine::new().snapshot(),
             "tokens": tokens.records(),
@@ -469,5 +528,112 @@ mod tests {
         fs::write(&path, v.to_string()).unwrap();
         let err = Store::new(&path).load().err().unwrap();
         assert!(err.contains("does not match any user"), "{err}");
+    }
+
+    #[test]
+    fn layout_from_before_profiles_gets_a_default_profile() {
+        let path = tmp("preprofiles");
+        let mut st = AppState::open(Store::new(&path)).unwrap();
+        let uid = st.add_user("alice", false, None).unwrap().id;
+        let pid = default_id_for(&uid);
+        st.engines.get_mut(&pid).unwrap().register_endpoint("ep_a");
+        st.engines
+            .get_mut(&pid)
+            .unwrap()
+            .sync(&SyncRequest {
+                endpoint_id: "ep_a".into(),
+                since_rev: 0,
+                ops: vec![add(1)],
+            })
+            .unwrap();
+        let (tok, _) = st.tokens.create(
+            "a",
+            Scope::Sync,
+            Some(uid.clone()),
+            Some(pid.clone()),
+            Some("ep_a".into()),
+        );
+        st.persist().unwrap();
+        // Rewrite the file as the previous version wrote it.
+        let mut v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("profiles");
+        let tree = v["engines"][&pid].take();
+        v["engines"] = serde_json::json!({ uid.clone(): tree });
+        v["tokens"][0].as_object_mut().unwrap().remove("profile_id");
+        fs::write(&path, v.to_string()).unwrap();
+        let again = AppState::open(Store::new(&path)).unwrap();
+        let p = again.profiles.for_user(&uid);
+        assert_eq!(
+            (p.len(), p[0].name.as_str(), p[0].id.as_str()),
+            (1, "Default", pid.as_str())
+        );
+        assert_eq!(again.engines[&pid].rev(), 1);
+        let rec = again.tokens.authenticate(&tok).unwrap();
+        assert_eq!(rec.profile_id.as_deref(), Some(pid.as_str()));
+    }
+
+    #[test]
+    fn profiles_have_their_own_trees_and_tokens() {
+        let mut st = AppState::default();
+        let uid = st.add_user("alice", false, None).unwrap().id;
+        let work = st.add_profile(&uid, "Work").unwrap().id;
+        let home = default_id_for(&uid);
+        // Two profiles: a token has to say which.
+        assert!(st.issue_token(Some(&uid), None, "d", Scope::Sync).is_err());
+        let (_, rec) = st
+            .issue_token(Some(&uid), Some("work"), "d", Scope::Sync)
+            .unwrap();
+        assert_eq!(rec.profile_id.as_deref(), Some(work.as_str()));
+        let ep = rec.endpoint_id.unwrap();
+        st.engines
+            .get_mut(&work)
+            .unwrap()
+            .sync(&SyncRequest {
+                endpoint_id: ep,
+                since_rev: 0,
+                ops: vec![add(1)],
+            })
+            .unwrap();
+        assert_eq!((st.engines[&work].rev(), st.engines[&home].rev()), (1, 0));
+        // Another user's profile cannot be named, a duplicate name is refused.
+        let other = st.add_user("bob", false, None).unwrap().id;
+        assert!(st
+            .issue_token(Some(&other), Some(&work), "d", Scope::Read)
+            .is_err());
+        assert!(st.add_profile(&uid, "WORK").is_err());
+        // Removing a profile drops its tree and its devices; the last one stays.
+        assert_eq!(st.remove_profile(&other, &work), Ok(false));
+        assert_eq!(st.remove_profile(&uid, &work), Ok(true));
+        assert!(!st.engines.contains_key(&work));
+        assert!(st.tokens.counts_by_profile().is_empty());
+        assert!(st.remove_profile(&uid, &home).is_err());
+    }
+
+    #[test]
+    fn tokens_must_point_at_a_profile_of_their_user() {
+        let path = tmp("badprofile");
+        let mut st = AppState::default();
+        let a = st.add_user("alice", false, None).unwrap().id;
+        let b = st.add_user("bob", false, None).unwrap().id;
+        let (pa, pb) = (default_id_for(&a), default_id_for(&b));
+        // Alice's token pointing at Bob's profile.
+        st.tokens
+            .create("x", Scope::Read, Some(a.clone()), Some(pb), None);
+        Store::new(&path)
+            .save(&st.users, &st.profiles, &st.engines, &st.tokens)
+            .unwrap();
+        let err = Store::new(&path).load().err().unwrap();
+        assert!(err.contains("does not match any user and profile"), "{err}");
+        // A token for a profile that does not exist.
+        let mut st = AppState::default();
+        let a = st.add_user("alice", false, None).unwrap().id;
+        st.tokens
+            .create("x", Scope::Read, Some(a), Some("p_gone".into()), None);
+        Store::new(&path)
+            .save(&st.users, &st.profiles, &st.engines, &st.tokens)
+            .unwrap();
+        assert!(Store::new(&path).load().is_err());
+        let _ = pa;
     }
 }
