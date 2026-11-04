@@ -72,7 +72,8 @@ Details: [docs/sync-architecture.md](docs/sync-architecture.md) and
 | Firefox: root folder mapping, manifest (`extension/dist-firefox`) | Done, untested in a real Firefox |
 | Real-browser E2E (two Chromium / Firefox profiles, `npm run test:e2e`) | Done, in CI |
 | Multi-instance service-worker lease | Open |
-| Adapters for Dynacat and Dashy | Planned, requirements in [docs/adapters](docs/adapters) |
+| Dynacat adapter, push only (`--dynacat-file`) | Done, untested against a live Dynacat, see [docs/adapters/dynacat.md](docs/adapters/dynacat.md) |
+| Dashy adapter | Planned, requirements in [docs/adapters](docs/adapters) |
 
 ## Quick start
 

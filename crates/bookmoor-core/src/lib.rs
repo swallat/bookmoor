@@ -3,6 +3,7 @@
 
 pub mod adapter;
 pub mod diff;
+pub mod dynacat;
 pub mod identity;
 pub mod merge;
 pub mod model;

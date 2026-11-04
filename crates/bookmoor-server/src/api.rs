@@ -26,9 +26,21 @@ pub struct AppState {
     /// Where state is saved after every change; `None` keeps it in memory.
     pub store: Option<crate::store::Store>,
     pub limits: crate::ratelimit::Limits,
+    /// Where the Dynacat widget file is kept up to date; `None` = off.
+    pub dynacat_file: Option<std::path::PathBuf>,
 }
 
 impl AppState {
+    /// Refresh the Dynacat widget file. A failure is logged and never fails
+    /// the sync: the dashboard is a view, the canonical tree is saved.
+    pub fn publish_dynacat(&self) {
+        if let Some(path) = &self.dynacat_file {
+            if let Err(e) = crate::dynacat::publish(path, &self.engine.tree()) {
+                eprintln!("warning: cannot write {}: {e}", path.display());
+            }
+        }
+    }
+
     /// A new token; a sync token comes with its own endpoint.
     pub fn issue_token(
         &mut self,
@@ -341,6 +353,7 @@ async fn sync(
             // a retry after a restart is judged the same way again.
             if st.engine.rev() != before {
                 save(&mut st)?;
+                st.publish_dynacat();
             }
             Ok(Json(resp))
         }
