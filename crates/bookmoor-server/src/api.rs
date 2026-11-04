@@ -31,9 +31,30 @@ pub struct AppState {
     /// Where state is saved after every change; `None` keeps it in memory.
     pub store: Option<crate::store::Store>,
     pub limits: crate::ratelimit::Limits,
+    /// Where the Dynacat widget file is kept up to date; `None` = off.
+    pub dynacat_file: Option<std::path::PathBuf>,
+    /// Whose tree the Dynacat file shows (id or name); the only user if unset.
+    pub dynacat_user: Option<String>,
 }
 
 impl AppState {
+    /// Refresh the Dynacat widget file with the tree of `dynacat_user` (the
+    /// only user when unset). A failure is logged and never fails the sync:
+    /// the dashboard is a view, the canonical tree is saved.
+    pub fn publish_dynacat(&self) -> std::io::Result<()> {
+        let Some(path) = &self.dynacat_file else {
+            return Ok(());
+        };
+        if self.users.is_empty() {
+            return Ok(());
+        }
+        let uid = self
+            .resolve_user(self.dynacat_user.as_deref())
+            .map_err(|e| std::io::Error::other(format!("Dynacat file: {e}")))?;
+        crate::dynacat::publish(path, &self.engines[&uid].tree())?;
+        Ok(())
+    }
+
     /// The user a request names by id or name; with no name, the only user.
     pub fn resolve_user(&self, user: Option<&str>) -> Result<String, String> {
         match user {
@@ -432,6 +453,9 @@ async fn sync(
             // a retry after a restart is judged the same way again.
             if st.engines[&uid].rev() != before {
                 save(&mut st)?;
+                if let Err(e) = st.publish_dynacat() {
+                    eprintln!("warning: cannot write the Dynacat file: {e}");
+                }
             }
             Ok(Json(resp))
         }

@@ -1,6 +1,6 @@
 //! bookmoor server entry point.
 //!
-//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]`
+//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-file FILE]`
 //! and `bookmoor-server token create ...` (see `--help` of that command).
 //! With `--state` (or `BOOKMOOR_STATE`) everything survives restarts.
 //! The first admin token is read from `BOOKMOOR_ADMIN_TOKEN`
@@ -150,6 +150,8 @@ async fn main() {
     let mut bind: SocketAddr = "127.0.0.1:8787".parse().unwrap();
     let mut insecure = false;
     let mut state_path = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
+    let mut dynacat_user = std::env::var("BOOKMOOR_DYNACAT_USER").ok();
+    let mut dynacat_file = std::env::var_os("BOOKMOOR_DYNACAT_FILE").map(std::path::PathBuf::from);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -167,8 +169,21 @@ async fn main() {
                         .into(),
                 );
             }
+            "--dynacat-user" => {
+                dynacat_user = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--dynacat-user needs a user name")),
+                );
+            }
+            "--dynacat-file" => {
+                dynacat_file = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--dynacat-file needs a file path"))
+                        .into(),
+                );
+            }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-file FILE] [--dynacat-user USER]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -212,6 +227,12 @@ async fn main() {
     }
     if let Err(e) = state.persist() {
         fail(&format!("cannot write the state file: {e}"));
+    }
+
+    state.dynacat_file = dynacat_file;
+    state.dynacat_user = dynacat_user;
+    if let Err(e) = state.publish_dynacat() {
+        fail(&format!("cannot write the Dynacat file: {e}"));
     }
 
     let app = router(Arc::new(Mutex::new(state)));
