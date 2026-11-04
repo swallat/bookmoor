@@ -36,15 +36,17 @@ function showSync(status: SyncStatus | undefined): void {
 }
 
 async function init(): Promise<void> {
-  const stored = await chrome.storage.local.get(STATUS_KEY);
-  showSync(stored[STATUS_KEY] as SyncStatus | undefined);
   chrome.storage.onChanged.addListener((changes) => {
     const change = changes[STATUS_KEY];
     if (change) showSync(change.newValue as SyncStatus | undefined);
   });
+  void chrome.storage.local.get(STATUS_KEY).then((stored) => showSync(stored[STATUS_KEY] as SyncStatus | undefined));
   const s = await loadSettings();
-  $<HTMLInputElement>("url").value = s.serverUrl;
-  $<HTMLInputElement>("token").value = s.token;
+  // Do not overwrite what was typed while the settings were loading.
+  const url = $<HTMLInputElement>("url");
+  const token = $<HTMLInputElement>("token");
+  if (!url.value) url.value = s.serverUrl;
+  if (!token.value) token.value = s.token;
   for (const h of s.headers) $("headers").append(pairRow(h));
   for (const q of s.query) $("query").append(pairRow(q, "Parameter"));
   $("add").addEventListener("click", () => $("headers").append(pairRow()));
