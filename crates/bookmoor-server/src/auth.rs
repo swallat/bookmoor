@@ -194,6 +194,27 @@ impl Tokens {
             .retain(|_, r| !(r.name == name && r.scope == scope));
     }
 
+    /// A user's tokens, by name.
+    pub fn for_user(&self, user_id: &str) -> Vec<TokenRecord> {
+        let mut v: Vec<_> = self
+            .by_id
+            .values()
+            .filter(|r| r.user_id.as_deref() == Some(user_id))
+            .cloned()
+            .collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        v
+    }
+
+    pub fn get(&self, id: &str) -> Option<&TokenRecord> {
+        self.by_id.get(id)
+    }
+
+    /// Revoke one token; true if it existed.
+    pub fn revoke(&mut self, id: &str) -> bool {
+        self.by_id.remove(id).is_some()
+    }
+
     /// Revoke every token of a user.
     pub fn revoke_user(&mut self, user_id: &str) {
         self.by_id

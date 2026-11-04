@@ -68,6 +68,7 @@ Details: [docs/sync-architecture.md](docs/sync-architecture.md) and
 |---|---|
 | Core: data model, three-way diff and merge, fractional positions | Done, tested |
 | Server: HTTP API, JSON snapshot persistence, device tokens, rate limit | Done, tested |
+| Server: users (tree per user) and web UI for devices and users | Done, tested, see [docs/multi-user.md](docs/multi-user.md) |
 | Chrome extension: delta sync, id map, echo suppression | Done, tested against a fake API and the real server |
 | Firefox: root folder mapping, manifest (`extension/dist-firefox`) | Done, untested in a real Firefox |
 | Real-browser E2E (two Chromium / Firefox profiles, `npm run test:e2e`) | Done, in CI |
@@ -174,6 +175,18 @@ The server writes one line per request to stderr: time (UTC), client address,
 token name (`-` if unauthenticated), method, path, status and duration. Query
 strings are left out because proxy setups may carry secrets there; `/health`
 is not logged. Behind a reverse proxy the address is the proxy's.
+
+### Web UI
+
+The server serves a small admin page at `/` (behind your reverse proxy at the
+same path prefix; links are relative). Sign in with a user name and password to
+create and revoke device tokens (the token is shown once), change your password
+and, as an admin, add, promote and remove users. On a fresh install the page
+asks for the admin token once to create the first admin; after an upgrade use
+the name `owner` there to keep your bookmarks. Sessions last 7 days and live in
+memory, so a restart signs everyone out. The session cookie is `HttpOnly`,
+`SameSite=Strict` and `Secure` unless `--insecure-http` is set; pages are
+served with a strict Content-Security-Policy and no external resources.
 
 ### Users
 

@@ -1,0 +1,961 @@
+//! The web UI (`docs/multi-user.md`): static files plus a small JSON API
+//! under `/ui/api`, secured by a session cookie. Users manage their own
+//! devices and tokens; admin users also manage users.
+//!
+//! Every write needs the `X-Bookmoor-UI` header on top of the
+//! `SameSite=Strict` cookie, so a cross-site form post cannot act as a user.
+
+use crate::api::{retry_after, save, ApiError, AppState, Shared};
+use crate::auth::Scope;
+use crate::ratelimit::client_key;
+use crate::users::{check_password, hash_password, verify_password, User};
+use axum::extract::{ConnectInfo, FromRequestParts, Path, Request, State};
+use axum::http::request::Parts;
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::net::{IpAddr, SocketAddr};
+use std::time::Instant;
+
+const INDEX: &str = include_str!("web/index.html");
+const APP_JS: &str = include_str!("web/app.js");
+const APP_CSS: &str = include_str!("web/app.css");
+const LOGO: &str = include_str!("web/logo.svg");
+
+const COOKIE: &str = "bookmoor_session";
+const CSRF_HEADER: &str = "x-bookmoor-ui";
+/// Devices (read and sync tokens) one user may have.
+const MAX_DEVICES: usize = 50;
+
+pub fn routes() -> Router<Shared> {
+    Router::new()
+        .route(
+            "/",
+            get(|| async { asset("text/html; charset=utf-8", INDEX) }),
+        )
+        .route(
+            "/ui/app.js",
+            get(|| async { asset("text/javascript; charset=utf-8", APP_JS) }),
+        )
+        .route(
+            "/ui/app.css",
+            get(|| async { asset("text/css; charset=utf-8", APP_CSS) }),
+        )
+        .route(
+            "/ui/logo.svg",
+            get(|| async { asset("image/svg+xml", LOGO) }),
+        )
+        .route("/ui/api/session", get(session))
+        .route("/ui/api/setup", post(setup))
+        .route("/ui/api/login", post(login))
+        .route("/ui/api/logout", post(logout))
+        .route("/ui/api/devices", get(devices).post(add_device))
+        .route("/ui/api/devices/{id}", delete(remove_device))
+        .route("/ui/api/password", post(change_password))
+        .route("/ui/api/users", get(users).post(add_user))
+        .route("/ui/api/users/{id}", delete(remove_user))
+        .route("/ui/api/users/{id}/password", post(reset_password))
+        .route("/ui/api/users/{id}/admin", post(set_admin))
+        .layer(middleware::from_fn(page_headers))
+}
+
+fn asset(kind: &'static str, body: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, kind)], body).into_response()
+}
+
+/// Strict headers for the UI: nothing but our own files may load or run.
+async fn page_headers(req: Request, next: Next) -> Response {
+    let is_api = req.uri().path().starts_with("/ui/api/");
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        ),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if is_api { "no-store" } else { "no-cache" }),
+    );
+    resp
+}
+
+/// The client address, if the server was started with connect info.
+struct Peer(Option<IpAddr>);
+
+impl<S: Send + Sync> FromRequestParts<S> for Peer {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
+        Ok(Peer(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|c| client_key(c.0.ip())),
+        ))
+    }
+}
+
+fn cookie_value(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .find_map(|c| {
+            c.trim()
+                .strip_prefix(&format!("{COOKIE}="))
+                .map(String::from)
+        })
+}
+
+/// A signed-in user, from the session cookie.
+struct Authed {
+    user: User,
+    session: String,
+}
+
+impl FromRequestParts<Shared> for Authed {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, s: &Shared) -> Result<Self, ApiError> {
+        if !matches!(parts.method, Method::GET | Method::HEAD)
+            && !parts.headers.contains_key(CSRF_HEADER)
+        {
+            return Err(ApiError::Denied("missing request header"));
+        }
+        let session = cookie_value(&parts.headers).ok_or(ApiError::Unauthorized)?;
+        let st = s.lock().unwrap();
+        let user = st
+            .sessions
+            .user_for(&session, Instant::now())
+            .and_then(|id| st.users.get(id))
+            .cloned()
+            .ok_or(ApiError::Unauthorized)?;
+        Ok(Authed { user, session })
+    }
+}
+
+/// A signed-in user who is an admin.
+struct Admin(Authed);
+
+impl FromRequestParts<Shared> for Admin {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, s: &Shared) -> Result<Self, ApiError> {
+        let a = Authed::from_request_parts(parts, s).await?;
+        if a.user.admin {
+            Ok(Admin(a))
+        } else {
+            Err(ApiError::Forbidden)
+        }
+    }
+}
+
+fn set_cookie(token: &str, max_age: u64, secure: bool) -> HeaderValue {
+    let secure = if secure { "; Secure" } else { "" };
+    HeaderValue::from_str(&format!(
+        "{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}"
+    ))
+    .expect("cookie is ascii")
+}
+
+#[derive(Serialize)]
+struct Me {
+    id: String,
+    name: String,
+    admin: bool,
+}
+
+impl From<&User> for Me {
+    fn from(u: &User) -> Me {
+        Me {
+            id: u.id.clone(),
+            name: u.name.clone(),
+            admin: u.admin,
+        }
+    }
+}
+
+/// The reply that signs a user in.
+fn signed_in(st: &mut AppState, user: &User) -> Response {
+    let token = st.sessions.create(&user.id, Instant::now());
+    let max_age = crate::sessions::SESSION_TTL.as_secs();
+    let mut resp =
+        Json(serde_json::json!({ "state": "user", "user": Me::from(user) })).into_response();
+    resp.headers_mut().insert(
+        header::SET_COOKIE,
+        set_cookie(&token, max_age, st.secure_cookies),
+    );
+    resp
+}
+
+async fn hash_blocking(pw: String) -> Result<String, ApiError> {
+    check_password(&pw).map_err(ApiError::Unprocessable)?;
+    tokio::task::spawn_blocking(move || hash_password(&pw))
+        .await
+        .map_err(|_| ApiError::Storage)?
+        .map_err(ApiError::Unprocessable)
+}
+
+async fn verify_blocking(hash: Option<String>, pw: String) -> bool {
+    if pw.len() > crate::users::MAX_PASSWORD_BYTES {
+        return false;
+    }
+    tokio::task::spawn_blocking(move || verify_password(hash.as_deref(), &pw))
+        .await
+        .unwrap_or(false)
+}
+
+async fn session(State(s): State<Shared>, headers: HeaderMap) -> Json<serde_json::Value> {
+    let st = s.lock().unwrap();
+    let user = cookie_value(&headers)
+        .and_then(|c| st.sessions.user_for(&c, Instant::now()).map(String::from))
+        .and_then(|id| st.users.get(&id));
+    Json(match user {
+        Some(u) => serde_json::json!({ "state": "user", "user": Me::from(u) }),
+        None if !st.users.any_password() => serde_json::json!({ "state": "setup" }),
+        None => serde_json::json!({ "state": "login" }),
+    })
+}
+
+#[derive(Deserialize)]
+struct Login {
+    name: String,
+    password: String,
+}
+
+async fn login(
+    State(s): State<Shared>,
+    Peer(peer): Peer,
+    Json(b): Json<Login>,
+) -> Result<Response, ApiError> {
+    // Every attempt costs a token, so guessing is bounded per address.
+    let found = {
+        let mut st = s.lock().unwrap();
+        if let Some(p) = peer {
+            st.limits
+                .failed_auth
+                .take(&p, Instant::now())
+                .map_err(retry_after)?;
+        }
+        st.users
+            .by_name(&b.name)
+            .map(|u| (u.id.clone(), u.password_hash.clone()))
+    };
+    let ok = verify_blocking(found.as_ref().and_then(|f| f.1.clone()), b.password).await;
+    let mut st = s.lock().unwrap();
+    match found {
+        Some((id, _)) if ok => match st.users.get(&id).cloned() {
+            Some(user) => Ok(signed_in(&mut st, &user)),
+            None => Err(ApiError::Unauthorized),
+        },
+        _ => Err(ApiError::Unauthorized),
+    }
+}
+
+#[derive(Deserialize)]
+struct Setup {
+    admin_token: String,
+    name: String,
+    password: String,
+}
+
+/// First setup: while nobody can sign in yet, the admin token creates the
+/// first admin (or gives a password to an existing user, such as the `owner`
+/// left behind by an upgrade).
+async fn setup(
+    State(s): State<Shared>,
+    Peer(peer): Peer,
+    Json(b): Json<Setup>,
+) -> Result<Response, ApiError> {
+    {
+        let mut st = s.lock().unwrap();
+        if let Some(p) = peer {
+            st.limits
+                .failed_auth
+                .take(&p, Instant::now())
+                .map_err(retry_after)?;
+        }
+        if st.users.any_password() {
+            return Err(ApiError::Denied("setup is already done"));
+        }
+        let ok = st
+            .tokens
+            .authenticate(b.admin_token.trim())
+            .is_some_and(|r| r.scope == Scope::Admin);
+        if !ok {
+            return Err(ApiError::Unauthorized);
+        }
+    }
+    let hash = hash_blocking(b.password).await?;
+    let mut st = s.lock().unwrap();
+    if st.users.any_password() {
+        return Err(ApiError::Denied("setup is already done"));
+    }
+    let existing = st.users.by_name(&b.name).map(|u| u.id.clone());
+    let user = match existing {
+        Some(id) => {
+            st.users
+                .set_hash(&id, hash)
+                .map_err(ApiError::Unprocessable)?;
+            st.users
+                .set_admin(&id, true)
+                .map_err(ApiError::Unprocessable)?;
+            st.users.get(&id).cloned().expect("just updated")
+        }
+        None => st
+            .add_user_hashed(&b.name, true, Some(hash))
+            .map_err(ApiError::Unprocessable)?,
+    };
+    save(&mut st)?;
+    Ok(signed_in(&mut st, &user))
+}
+
+async fn logout(State(s): State<Shared>, a: Authed) -> Response {
+    let mut st = s.lock().unwrap();
+    st.sessions.end(&a.session);
+    let mut resp = StatusCode::NO_CONTENT.into_response();
+    resp.headers_mut()
+        .insert(header::SET_COOKIE, set_cookie("", 0, st.secure_cookies));
+    resp
+}
+
+#[derive(Serialize)]
+struct Device {
+    id: String,
+    name: String,
+    scope: Scope,
+    endpoint_id: Option<String>,
+}
+
+async fn devices(State(s): State<Shared>, a: Authed) -> Json<Vec<Device>> {
+    let st = s.lock().unwrap();
+    Json(
+        st.tokens
+            .for_user(&a.user.id)
+            .into_iter()
+            .map(|t| Device {
+                id: t.id,
+                name: t.name,
+                scope: t.scope,
+                endpoint_id: t.endpoint_id,
+            })
+            .collect(),
+    )
+}
+
+#[derive(Deserialize)]
+struct NewDevice {
+    name: String,
+    scope: Scope,
+}
+
+async fn add_device(
+    State(s): State<Shared>,
+    a: Authed,
+    Json(b): Json<NewDevice>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if b.scope == Scope::Admin {
+        return Err(ApiError::Forbidden);
+    }
+    let mut st = s.lock().unwrap();
+    if st.tokens.for_user(&a.user.id).len() >= MAX_DEVICES {
+        return Err(ApiError::Unprocessable(format!(
+            "at most {MAX_DEVICES} devices"
+        )));
+    }
+    let (token, rec) = st
+        .issue_token(Some(&a.user.id), &b.name, b.scope)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "token": token,
+            "device": Device { id: rec.id, name: rec.name, scope: rec.scope, endpoint_id: rec.endpoint_id },
+        })),
+    ))
+}
+
+async fn remove_device(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    let rec = st
+        .tokens
+        .get(&id)
+        .filter(|t| t.user_id.as_deref() == Some(a.user.id.as_str()))
+        .cloned()
+        .ok_or(ApiError::Forbidden)?;
+    st.tokens.revoke(&rec.id);
+    if let (Some(ep), Some(e)) = (&rec.endpoint_id, st.engines.get_mut(&a.user.id)) {
+        e.remove_endpoint(ep);
+    }
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ChangePassword {
+    current: String,
+    new: String,
+}
+
+async fn change_password(
+    State(s): State<Shared>,
+    Peer(peer): Peer,
+    a: Authed,
+    Json(b): Json<ChangePassword>,
+) -> Result<Response, ApiError> {
+    {
+        let mut st = s.lock().unwrap();
+        if let Some(p) = peer {
+            st.limits
+                .failed_auth
+                .take(&p, Instant::now())
+                .map_err(retry_after)?;
+        }
+    }
+    if !verify_blocking(a.user.password_hash.clone(), b.current).await {
+        return Err(ApiError::Denied("the current password is wrong"));
+    }
+    let hash = hash_blocking(b.new).await?;
+    let mut st = s.lock().unwrap();
+    st.users
+        .set_hash(&a.user.id, hash)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    // Other browsers are signed out; this one gets a fresh session.
+    st.sessions.end_user(&a.user.id);
+    let user = st
+        .users
+        .get(&a.user.id)
+        .cloned()
+        .ok_or(ApiError::Unauthorized)?;
+    Ok(signed_in(&mut st, &user))
+}
+
+#[derive(Serialize)]
+struct UserRow {
+    id: String,
+    name: String,
+    admin: bool,
+    has_password: bool,
+    devices: usize,
+}
+
+async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
+    let st = s.lock().unwrap();
+    Json(
+        st.users
+            .list()
+            .map(|u| UserRow {
+                id: u.id.clone(),
+                name: u.name.clone(),
+                admin: u.admin,
+                has_password: u.password_hash.is_some(),
+                devices: st.tokens.for_user(&u.id).len(),
+            })
+            .collect(),
+    )
+}
+
+#[derive(Deserialize)]
+struct NewUser {
+    name: String,
+    password: String,
+    #[serde(default)]
+    admin: bool,
+}
+
+async fn add_user(
+    State(s): State<Shared>,
+    _: Admin,
+    Json(b): Json<NewUser>,
+) -> Result<StatusCode, ApiError> {
+    let hash = hash_blocking(b.password).await?;
+    let mut st = s.lock().unwrap();
+    st.add_user_hashed(&b.name, b.admin, Some(hash))
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok(StatusCode::CREATED)
+}
+
+async fn remove_user(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if id == a.user.id {
+        return Err(ApiError::Denied("you cannot remove yourself"));
+    }
+    let mut st = s.lock().unwrap();
+    if st.remove_user(&id) {
+        save(&mut st)?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct Password {
+    password: String,
+}
+
+async fn reset_password(
+    State(s): State<Shared>,
+    _: Admin,
+    Path(id): Path<String>,
+    Json(b): Json<Password>,
+) -> Result<StatusCode, ApiError> {
+    let hash = hash_blocking(b.password).await?;
+    let mut st = s.lock().unwrap();
+    st.users
+        .set_hash(&id, hash)
+        .map_err(ApiError::Unprocessable)?;
+    st.sessions.end_user(&id);
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct Role {
+    admin: bool,
+}
+
+async fn set_admin(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Path(id): Path<String>,
+    Json(b): Json<Role>,
+) -> Result<StatusCode, ApiError> {
+    if id == a.user.id {
+        return Err(ApiError::Denied("you cannot change your own role"));
+    }
+    let mut st = s.lock().unwrap();
+    st.users
+        .set_admin(&id, b.admin)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::api::{router, AppState, Shared};
+    use crate::auth::Scope;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use std::sync::{Arc, Mutex};
+    use tower::ServiceExt;
+
+    struct Ui {
+        app: axum::Router,
+        state: Shared,
+        admin: String,
+    }
+
+    fn ui() -> Ui {
+        let mut st = AppState::default();
+        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None);
+        let state = Arc::new(Mutex::new(st));
+        Ui {
+            app: router(state.clone()),
+            state,
+            admin,
+        }
+    }
+
+    impl Ui {
+        async fn call(
+            &self,
+            method: &str,
+            uri: &str,
+            cookie: Option<&str>,
+            body: Option<serde_json::Value>,
+            csrf: bool,
+        ) -> (StatusCode, serde_json::Value, Option<String>) {
+            let mut b = Request::builder().method(method).uri(uri);
+            if let Some(c) = cookie {
+                b = b.header("cookie", format!("bookmoor_session={c}"));
+            }
+            if csrf {
+                b = b.header("x-bookmoor-ui", "1");
+            }
+            let req = match body {
+                Some(v) => b
+                    .header("content-type", "application/json")
+                    .body(Body::from(v.to_string()))
+                    .unwrap(),
+                None => b.body(Body::empty()).unwrap(),
+            };
+            let resp = self.app.clone().oneshot(req).await.unwrap();
+            let status = resp.status();
+            let set = resp
+                .headers()
+                .get("set-cookie")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            (
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+                set,
+            )
+        }
+
+        async fn post(
+            &self,
+            uri: &str,
+            c: Option<&str>,
+            body: serde_json::Value,
+        ) -> (StatusCode, serde_json::Value, Option<String>) {
+            self.call("POST", uri, c, Some(body), true).await
+        }
+
+        /// Set up the first admin and return the session cookie value.
+        async fn setup(&self, name: &str) -> String {
+            let (st, _, set) = self
+                .post(
+                    "/ui/api/setup",
+                    None,
+                    serde_json::json!({"admin_token": self.admin, "name": name, "password": "correct horse battery"}),
+                )
+                .await;
+            assert_eq!(st, StatusCode::OK);
+            cookie_of(&set.unwrap())
+        }
+    }
+
+    fn cookie_of(set_cookie: &str) -> String {
+        set_cookie
+            .split(';')
+            .next()
+            .unwrap()
+            .trim_start_matches("bookmoor_session=")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn setup_then_login_then_manage_devices() {
+        let u = ui();
+        let (_, v, _) = u.call("GET", "/ui/api/session", None, None, false).await;
+        assert_eq!(v["state"], "setup");
+        // Wrong token, then a real one.
+        let bad = serde_json::json!({"admin_token":"bkm_a_b","name":"anna","password":"correct horse battery"});
+        assert_eq!(
+            u.post("/ui/api/setup", None, bad).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let cookie = u.setup("anna").await;
+        // Setup closes once someone can sign in.
+        let again = serde_json::json!({"admin_token": u.admin, "name":"eve","password":"correct horse battery"});
+        assert_eq!(
+            u.post("/ui/api/setup", None, again).await.0,
+            StatusCode::FORBIDDEN
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/session", Some(&cookie), None, false)
+            .await;
+        assert_eq!(
+            (v["state"].as_str(), v["user"]["name"].as_str()),
+            (Some("user"), Some("anna"))
+        );
+        let (_, v, _) = u.call("GET", "/ui/api/session", None, None, false).await;
+        assert_eq!(v["state"], "login");
+
+        // A device token created in the UI syncs on the API.
+        let (st, v, _) = u
+            .post(
+                "/ui/api/devices",
+                Some(&cookie),
+                serde_json::json!({"name":"laptop","scope":"sync"}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let token = v["token"].as_str().unwrap().to_string();
+        let ep = v["device"]["endpoint_id"].as_str().unwrap().to_string();
+        let sync = Request::builder()
+            .method("POST")
+            .uri("/v1/sync")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({"endpoint_id": ep, "since_rev": 0, "ops": []}).to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            u.app.clone().oneshot(sync).await.unwrap().status(),
+            StatusCode::OK
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/devices", Some(&cookie), None, false)
+            .await;
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        // Revoking kills the token.
+        let id = v[0]["id"].as_str().unwrap();
+        let (st, _, _) = u
+            .call(
+                "DELETE",
+                &format!("/ui/api/devices/{id}"),
+                Some(&cookie),
+                None,
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let tree = Request::builder()
+            .uri("/v1/tree")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            u.app.clone().oneshot(tree).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        // Admin tokens cannot be minted from the UI.
+        let (st, _, _) = u
+            .post(
+                "/ui/api/devices",
+                Some(&cookie),
+                serde_json::json!({"name":"x","scope":"admin"}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn login_logout_and_cookie_flags() {
+        let u = ui();
+        u.setup("anna").await;
+        let bad = serde_json::json!({"name":"anna","password":"wrong wrong wrong"});
+        assert_eq!(
+            u.post("/ui/api/login", None, bad).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let ghost = serde_json::json!({"name":"nobody","password":"correct horse battery"});
+        assert_eq!(
+            u.post("/ui/api/login", None, ghost).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        u.state.lock().unwrap().secure_cookies = true;
+        let ok = serde_json::json!({"name":"ANNA","password":"correct horse battery"});
+        let (st, _, set) = u.post("/ui/api/login", None, ok).await;
+        assert_eq!(st, StatusCode::OK);
+        let set = set.unwrap();
+        for flag in ["HttpOnly", "SameSite=Strict", "Secure", "Path=/"] {
+            assert!(set.contains(flag), "{set}");
+        }
+        let cookie = cookie_of(&set);
+        let (st, _, _) = u
+            .call("POST", "/ui/api/logout", Some(&cookie), None, true)
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let (st, _, _) = u
+            .call("GET", "/ui/api/devices", Some(&cookie), None, false)
+            .await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn writes_need_the_request_header() {
+        let u = ui();
+        let cookie = u.setup("anna").await;
+        let body = serde_json::json!({"name":"laptop","scope":"sync"});
+        let (st, _, _) = u
+            .call("POST", "/ui/api/devices", Some(&cookie), Some(body), false)
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn only_admins_manage_users_and_not_themselves() {
+        let u = ui();
+        let admin = u.setup("anna").await;
+        let new = serde_json::json!({"name":"bob","password":"another good password"});
+        assert_eq!(
+            u.post("/ui/api/users", Some(&admin), new).await.0,
+            StatusCode::CREATED
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/users", Some(&admin), None, false)
+            .await;
+        let bob_id = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["name"] == "bob")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let anna_id = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["name"] == "anna")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let login = serde_json::json!({"name":"bob","password":"another good password"});
+        let (_, _, set) = u.post("/ui/api/login", None, login).await;
+        let bob = cookie_of(&set.unwrap());
+        // Bob is no admin.
+        assert_eq!(
+            u.call("GET", "/ui/api/users", Some(&bob), None, false)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let pw = serde_json::json!({"password":"hijacked password"});
+        assert_eq!(
+            u.post(&format!("/ui/api/users/{anna_id}/password"), Some(&bob), pw)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        // Bob's devices are his own: anna cannot revoke them, and vice versa.
+        let (_, v, _) = u
+            .post(
+                "/ui/api/devices",
+                Some(&bob),
+                serde_json::json!({"name":"phone","scope":"read"}),
+            )
+            .await;
+        let dev = v["device"]["id"].as_str().unwrap().to_string();
+        let (st, _, _) = u
+            .call(
+                "DELETE",
+                &format!("/ui/api/devices/{dev}"),
+                Some(&admin),
+                None,
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        // Admin cannot remove or demote themselves.
+        let (st, _, _) = u
+            .call(
+                "DELETE",
+                &format!("/ui/api/users/{anna_id}"),
+                Some(&admin),
+                None,
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let (st, _, _) = u
+            .post(
+                &format!("/ui/api/users/{anna_id}/admin"),
+                Some(&admin),
+                serde_json::json!({"admin": false}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        // Removing bob ends his session.
+        let (st, _, _) = u
+            .call(
+                "DELETE",
+                &format!("/ui/api/users/{bob_id}"),
+                Some(&admin),
+                None,
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        assert_eq!(
+            u.call("GET", "/ui/api/devices", Some(&bob), None, false)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn password_change_signs_other_sessions_out() {
+        let u = ui();
+        let first = u.setup("anna").await;
+        let login = serde_json::json!({"name":"anna","password":"correct horse battery"});
+        let (_, _, set) = u.post("/ui/api/login", None, login).await;
+        let second = cookie_of(&set.unwrap());
+        let wrong = serde_json::json!({"current":"not it at all","new":"a brand new password"});
+        assert_eq!(
+            u.post("/ui/api/password", Some(&first), wrong).await.0,
+            StatusCode::FORBIDDEN
+        );
+        let change =
+            serde_json::json!({"current":"correct horse battery","new":"a brand new password"});
+        let (st, _, set) = u.post("/ui/api/password", Some(&first), change).await;
+        assert_eq!(st, StatusCode::OK);
+        let fresh = cookie_of(&set.unwrap());
+        assert_eq!(
+            u.call("GET", "/ui/api/devices", Some(&second), None, false)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            u.call("GET", "/ui/api/devices", Some(&fresh), None, false)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let old = serde_json::json!({"name":"anna","password":"correct horse battery"});
+        assert_eq!(
+            u.post("/ui/api/login", None, old).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn upgrade_owner_claims_the_old_tree_in_setup() {
+        let mut st = AppState::default();
+        st.add_user("owner", true, None).unwrap();
+        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None);
+        let u = Ui {
+            app: router(Arc::new(Mutex::new(st))),
+            state: Arc::new(Mutex::new(AppState::default())),
+            admin,
+        };
+        let cookie = u.setup("owner").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/session", Some(&cookie), None, false)
+            .await;
+        assert_eq!(v["user"]["name"], "owner");
+    }
+
+    #[tokio::test]
+    async fn pages_are_served_with_a_strict_policy() {
+        let u = ui();
+        for path in ["/", "/ui/app.js", "/ui/app.css", "/ui/logo.svg"] {
+            let r = u
+                .app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::OK, "{path}");
+            let csp = r.headers()["content-security-policy"].to_str().unwrap();
+            assert!(
+                csp.contains("default-src 'none'") && !csp.contains("unsafe"),
+                "{csp}"
+            );
+            assert_eq!(r.headers()["x-frame-options"], "DENY");
+        }
+    }
+}

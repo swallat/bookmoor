@@ -188,6 +188,27 @@ impl Users {
         Ok(())
     }
 
+    /// Store a hash made earlier (see [`hash_password`]).
+    pub fn set_hash(&mut self, id: &str, hash: String) -> Result<(), String> {
+        let u = self.by_id.get_mut(id).ok_or("no such user")?;
+        u.password_hash = Some(hash);
+        Ok(())
+    }
+
+    pub fn set_admin(&mut self, id: &str, admin: bool) -> Result<(), String> {
+        let u = self.by_id.get_mut(id).ok_or("no such user")?;
+        u.admin = admin;
+        Ok(())
+    }
+
+    pub fn admin_count(&self) -> usize {
+        self.by_id.values().filter(|u| u.admin).count()
+    }
+
+    pub fn any_password(&self) -> bool {
+        self.by_id.values().any(|u| u.password_hash.is_some())
+    }
+
     pub fn remove(&mut self, id: &str) -> bool {
         self.by_id.remove(id).is_some()
     }
