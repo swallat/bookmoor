@@ -151,6 +151,22 @@ signing, only Firefox Developer Edition, Nightly and ESR can install an
 unsigned file (set `xpinstall.signatures.required` to `false`):
 `mise run package:firefox` builds the unsigned `.zip`, rename it to `.xpi`.
 
+### Chrome Web Store (unlisted, uploaded by CI)
+
+Chrome only installs extensions from the Web Store (or by policy), so the Chrome equivalent of a signed `.xpi` is an **unlisted** store item: nobody finds it by search, you install it with its link and it updates itself. The `Extension package` workflow uploads every build and submits it for review once these four repository secrets are set (Settings > Secrets and variables > Actions):
+
+| Secret | Where it comes from |
+| --- | --- |
+| `CWS_EXTENSION_ID` | the item's ID from the Web Store developer dashboard (step 1) |
+| `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET` | an OAuth client (step 2) |
+| `CWS_REFRESH_TOKEN` | a refresh token for your Google account (step 3) |
+
+1. **Create the item once, by hand.** In the [developer dashboard](https://chrome.google.com/webstore/devconsole) choose *New item* and upload `bookmoor-chrome-<version>.zip` from a workflow run. Fill in the listing (description, a screenshot, category), the privacy tab (it reads bookmarks and talks to your own server; no data goes to the developer) and under *Distribution* set visibility to **Unlisted**. Submit it. The ID (32 letters) is in the item's URL.
+2. **OAuth client.** In the [Google Cloud console](https://console.cloud.google.com/) create a project, enable the *Chrome Web Store API*, set up the OAuth consent screen (external, add yourself as test user, then *publish app* so the refresh token does not expire after 7 days) and create an OAuth client ID of type *Desktop app*.
+3. **Refresh token.** Open `https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&redirect_uri=http://localhost&client_id=<CLIENT_ID>&access_type=offline&prompt=consent`, allow access and copy the `code` parameter from the (failing) `localhost` redirect URL. Then run `curl -s https://oauth2.googleapis.com/token -d client_id=<CLIENT_ID> -d client_secret=<CLIENT_SECRET> -d code=<CODE> -d grant_type=authorization_code -d redirect_uri=http://localhost` and use the `refresh_token` from the answer.
+
+From then on every change to the extension on `main` uploads a new version (`0.<run>.<attempt>`) and submits it. Review usually takes a few hours to days; the previous version stays live meanwhile. The store keeps one pending submission at a time, so a push while one is in review fails the upload step (the zip is still an artifact).
+
 ### Log
 
 The server writes one line per request to stderr: time (UTC), client address,
