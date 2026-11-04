@@ -18,6 +18,32 @@ bookmoor-server --state /data/state.json --dynacat-file /dynacat/config/bookmoor
 # or BOOKMOOR_DYNACAT_FILE=...
 ```
 
+## One file per Dynacat page
+
+`--dynacat-output SPEC` can be given several times (or one spec per line in
+`BOOKMOOR_DYNACAT_OUTPUTS`). A spec is `file=PATH[;profile=NAME][;folder=A/B/C]`
+(a bare `PATH` works too). `--dynacat-file PATH` and `BOOKMOOR_DYNACAT_FILE` take a plain path
+without any options. Two outputs must not write the same file.
+
+```
+--dynacat-output /dynacat/config/bookmoor.yml
+--dynacat-output "file=/dynacat/config/dev.yml;folder=Bookmarks Bar/Dev"
+--dynacat-output "file=/dynacat/config/work.yml;profile=Work"
+```
+
+- `profile` picks the profile (default: `--dynacat-profile`, see
+  docs/multi-user.md); `--dynacat-user` stays global.
+- `folder` limits the file to that folder (titles from the root, trimmed, case
+  insensitive, separated by `/`, so a folder name containing `/` cannot be
+  selected). Its own bookmarks form the untitled first group and its
+  subfolders are titled relative to it (`Rust`, not `Bookmarks Bar / Dev / Rust`).
+- Of several sibling folders with the same title the first one is used; an
+  untitled folder is selected as `(unnamed)`.
+- A folder that does not exist (yet, or renamed) is logged as a warning and
+  the old file stays as it is.
+
+Each Dynacat page then includes the file it needs.
+
 In the Dynacat config, put the widget wherever it should appear:
 
 ```yaml
@@ -39,7 +65,7 @@ Dynacat groups are flat (a title, optional color, a list of links).
 |---|---|
 | bookmarks directly under the root | one leading group without title |
 | folder | group titled with its path, e.g. `Bookmarks Bar / Dev` |
-| subfolder | its own group, listed after its parent (depth first) |
+| subfolder | its own group, listed after its parent (depth first), title = path below the chosen folder |
 | bookmark | link with `title` and `url` |
 | empty folder, bookmark without http(s) URL | left out |
 | folder without name | `(unnamed)` |
