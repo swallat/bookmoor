@@ -153,6 +153,29 @@ itself) and the server port must not be reachable around the proxy. Browsers
 and the extension present the certificate from the browser or OS certificate
 store, so install it there; Chrome asks once which certificate to use.
 
+### Pangolin
+
+Pangolin can use a client certificate as the only login of a resource: enable
+"Client Certificate (mTLS)" on the Bookmoor resource, upload your CA, and turn
+the other methods (SSO, PIN) off. The extension then reaches Bookmoor without a
+Pangolin login; the Bookmoor token stays required. Pangolin checks the
+certificate in the TLS handshake and forwards its details in
+`X-Forwarded-Tls-Client-Cert-Info`, so this also works as the extra check above:
+
+```bash
+BOOKMOOR_CLIENT_CERT_HEADER='X-Forwarded-Tls-Client-Cert-Info=*'
+```
+
+Install the client certificate (PKCS#12) in the browser or OS store. If the
+extension's requests fail with a TLS error because no certificate prompt
+appears for background requests, select the certificate automatically (Chrome:
+the `AutoSelectCertificateForUrls` policy; Firefox: "Select one automatically"
+under Settings > Privacy & Security > Certificates). Not tested in a real browser.
+
+NetBird's reverse proxy has no client-certificate authentication yet; use its
+header authentication (`Authorization: Bearer` with a Bookmoor token) or
+NetBird-Only access.
+
 ## Layout
 
 | Path | Content |
