@@ -3,7 +3,8 @@ name: Extension package
 # Builds the installable extension when its code changes on main (or by hand):
 # a Chrome zip, an unsigned Firefox zip and, if Mozilla credentials are set as
 # repository secrets, a signed Firefox .xpi. Download them from the run's
-# "Artifacts" section. Pull requests do not run this: they have no secrets and
+# "Artifacts" section. If the Chrome Web Store secrets are set, the Chrome zip
+# is also uploaded and submitted for review there (see README). Pull requests do not run this: they have no secrets and
 # every signing uses up a version number at Mozilla.
 
 on:
@@ -36,6 +37,11 @@ jobs:
       # and add them under Settings > Secrets and variables > Actions.
       WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
       WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+      # Optional. Chrome Web Store upload, see README "Chrome Web Store".
+      CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+      CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+      CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+      CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -74,6 +80,27 @@ jobs:
       - name: Say why there is no signed file
         if: env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == ''
         run: echo "::notice::No Firefox .xpi was signed because the secrets WEB_EXT_API_KEY and WEB_EXT_API_SECRET are not set."
+      - name: Upload to the Chrome Web Store
+        if: env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
+        run: |
+          set -euo pipefail
+          ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip"
+          TOKEN=$(curl -fsS https://oauth2.googleapis.com/token \
+            -d client_id="$CWS_CLIENT_ID" -d client_secret="$CWS_CLIENT_SECRET" \
+            -d refresh_token="$CWS_REFRESH_TOKEN" -d grant_type=refresh_token | jq -er .access_token)
+          echo "::add-mask::$TOKEN"
+          UP=$(curl -fsS -X PUT -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" \
+            -T "$ZIP" "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CWS_EXTENSION_ID")
+          echo "$UP" | jq -c '{uploadState, itemError}'
+          [ "$(echo "$UP" | jq -r .uploadState)" = "SUCCESS" ] || { echo "::error::Chrome Web Store upload failed"; exit 1; }
+          PUB=$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish")
+          echo "$PUB" | jq -c '{status, statusDetail}'
+          echo "$PUB" | jq -e '.status | index("OK") or index("ITEM_PENDING_REVIEW")' >/dev/null \
+            || { echo "::error::Chrome Web Store did not accept the submission"; exit 1; }
+      - name: Say why nothing went to the Chrome Web Store
+        if: env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == ''
+        run: echo "::notice::Nothing was uploaded to the Chrome Web Store because one of CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN is not set."
       - uses: actions/upload-artifact@v4
         with:
           name: bookmoor-extension-${{ steps.version.outputs.version }}
