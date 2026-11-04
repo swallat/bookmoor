@@ -125,6 +125,14 @@ Chrome: load `extension/dist` via `chrome://extensions` > Developer mode > Load
 unpacked. Firefox: `about:debugging` > This Firefox > Load Temporary Add-on,
 then pick `extension/dist-firefox/manifest.json` (gone after a restart).
 
+### Download a built extension
+
+Every change to the extension on `main` runs the "Extension package" workflow
+(Actions tab > latest run > Artifacts): a Chrome zip (unzip it and load the
+folder unpacked), an unsigned Firefox zip and, once the repository secrets
+`WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET` are set, a signed Firefox `.xpi`
+that stays installed across restarts. The version is `0.<run>.<attempt>`.
+
 ### Firefox: keep the extension after a restart
 
 A temporarily loaded add-on is gone after a restart. For a permanent install
