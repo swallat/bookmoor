@@ -11,5 +11,5 @@ test("describe explains the common failures", () => {
     /no device.*scope sync/,
   );
   assert.match(describe("auth", new HttpError(403, "forbidden")), /scope sync/);
-  assert.match(describe("retry", new TypeError("Failed to fetch")), /Failed to fetch/);
+  assert.match(describe("retry", new TypeError("Failed to fetch")), /Could not reach the server.*Failed to fetch/);
 });

@@ -22,5 +22,8 @@ export function describe(outcome: Outcome, error: unknown): string {
       : "The server refuses this token (403). Use a token with scope sync.";
   }
   const why = error instanceof Error ? error.message : String(error);
+  if (error instanceof TypeError) {
+    return `Could not reach the server (${why}). Is it running, is the URL right, and does the extension have access to it?`;
+  }
   return `Sync failed, trying again later: ${why}`;
 }

@@ -4,7 +4,7 @@ use crate::auth::{random_id, Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, SyncError};
 use crate::ratelimit::client_key;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -141,6 +141,56 @@ async fn require_auth(
     Ok(resp)
 }
 
+/// Answers the CORS preflight of browser extensions and lets them read the
+/// replies. A browser sends the preflight, without credentials, when an
+/// extension has no host permission for the server (Firefox leaves it optional
+/// until the user grants it), so it must not need authentication. Only
+/// `chrome-extension://` and `moz-extension://` origins get this: web pages
+/// stay locked out, and every real request still needs its bearer token.
+async fn cors_for_extensions(req: Request, next: Next) -> Response {
+    let origin = req
+        .headers()
+        .get(header::ORIGIN)
+        .filter(|o| {
+            o.to_str().is_ok_and(|o| {
+                o.starts_with("chrome-extension://") || o.starts_with("moz-extension://")
+            })
+        })
+        .cloned();
+    let Some(origin) = origin else {
+        return next.run(req).await;
+    };
+    let preflight = req.method() == Method::OPTIONS;
+    let wanted = req
+        .headers()
+        .get(header::ACCESS_CONTROL_REQUEST_HEADERS)
+        .cloned();
+    let mut resp = if preflight {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        next.run(req).await
+    };
+    let h = resp.headers_mut();
+    h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    h.insert(header::VARY, HeaderValue::from_static("Origin"));
+    if preflight {
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            HeaderValue::from_static("GET, POST, DELETE"),
+        );
+        // Reflect what the extension wants to send (it may add proxy headers).
+        h.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            wanted.unwrap_or_else(|| HeaderValue::from_static("authorization, content-type")),
+        );
+        h.insert(
+            header::ACCESS_CONTROL_MAX_AGE,
+            HeaderValue::from_static("600"),
+        );
+    }
+    resp
+}
+
 /// Name of the token that made a request, passed outwards to the log line.
 #[derive(Clone)]
 struct TokenName(String);
@@ -246,6 +296,7 @@ pub fn router(state: Shared) -> Router {
         .route("/health", get(health))
         .merge(v1)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(middleware::from_fn(cors_for_extensions))
         .layer(middleware::from_fn(log_requests))
         .with_state(state)
 }
@@ -410,6 +461,64 @@ mod tests {
         let (st, v) = call(&app, "POST", "/v1/endpoints", Some(&read), None).await;
         assert_eq!(st, StatusCode::FORBIDDEN);
         assert!(v["error"].as_str().unwrap().contains("scope sync"));
+    }
+
+    #[tokio::test]
+    async fn extensions_get_an_unauthenticated_preflight_and_readable_replies() {
+        let (s, admin) = setup();
+        let app = router(s);
+        let preflight = |origin: &str| {
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/v1/endpoints")
+                .header("origin", origin)
+                .header("access-control-request-method", "POST")
+                .header(
+                    "access-control-request-headers",
+                    "authorization,x-proxy-key",
+                )
+                .body(Body::empty())
+                .unwrap()
+        };
+        let r = app
+            .clone()
+            .oneshot(preflight("moz-extension://abc"))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+        let h = r.headers();
+        assert_eq!(h["access-control-allow-origin"], "moz-extension://abc");
+        assert_eq!(
+            h["access-control-allow-headers"],
+            "authorization,x-proxy-key"
+        );
+        // A web page gets nothing: no CORS headers, and the normal 401/405.
+        let r = app
+            .clone()
+            .oneshot(preflight("https://evil.example"))
+            .await
+            .unwrap();
+        assert!(r.headers().get("access-control-allow-origin").is_none());
+        assert_ne!(r.status(), StatusCode::NO_CONTENT);
+        // The real reply is readable by the extension, and still needs a token.
+        let real = |token: Option<&str>| {
+            let mut b = Request::builder()
+                .method("GET")
+                .uri("/v1/tree")
+                .header("origin", "chrome-extension://abc");
+            if let Some(t) = token {
+                b = b.header("authorization", format!("Bearer {t}"));
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        let r = app.clone().oneshot(real(None)).await.unwrap();
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            r.headers()["access-control-allow-origin"],
+            "chrome-extension://abc"
+        );
+        let r = app.oneshot(real(Some(&admin))).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
     }
 
     #[test]

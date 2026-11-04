@@ -1,5 +1,5 @@
 import { flush, last, type Outcome } from "./flow.ts";
-import { loadSettings } from "./settings.ts";
+import { loadSettings, originPatterns } from "./settings.ts";
 import { chromeBookmarks, chromeStateStore } from "./storage.ts";
 import { describe, STATUS_KEY, type SyncStatus } from "./status.ts";
 import { httpTransport } from "./transport.ts";
@@ -30,6 +30,18 @@ async function round(): Promise<void> {
   const settings = await loadSettings();
   if (!settings.serverUrl || !settings.token) {
     await setStatus("unconfigured", "Enter the server URL and a token in these settings.");
+    return;
+  }
+  // Without host access the browser blocks the request and the error says
+  // little ("NetworkError"), so check it first and say what is missing.
+  const hostPatterns = originPatterns(settings.serverUrl);
+  if (!(await chrome.permissions.contains({ origins: hostPatterns }).catch(() => true))) {
+    await setStatus(
+      "auth",
+      `The extension has no access to ${new URL(settings.serverUrl).host}. ` +
+        "Open the settings and save again to grant it, or allow it under Permissions in the browser's add-on page.",
+    );
+    await chrome.action.setBadgeText({ text: "!" });
     return;
   }
   const outcome: Outcome = await flush(

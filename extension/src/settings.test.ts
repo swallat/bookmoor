@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildHeaders, endpointUrl } from "./settings.ts";
+import { buildHeaders, endpointUrl, originPattern, originPatterns } from "./settings.ts";
 
 describe("endpointUrl", () => {
   it("keeps a path prefix and ignores trailing slashes", () => {
@@ -37,5 +37,13 @@ describe("buildHeaders", () => {
   it("strips whitespace around a pasted token", () => {
     const h = buildHeaders({ serverUrl: "http://h", token: "  bkm_a_b\n", headers: [], query: [] });
     assert.equal(h.get("Authorization"), "Bearer bkm_a_b");
+  });
+});
+
+describe("originPattern", () => {
+  it("drops the port, and lists the old port-specific form too", () => {
+    assert.equal(originPattern("http://127.0.0.1:8787/bookmoor"), "http://127.0.0.1/*");
+    assert.deepEqual(originPatterns("http://127.0.0.1:8787"), ["http://127.0.0.1/*", "http://127.0.0.1:8787/*"]);
+    assert.deepEqual(originPatterns("https://h.example"), ["https://h.example/*"]);
   });
 });
