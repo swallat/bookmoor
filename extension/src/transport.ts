@@ -11,7 +11,10 @@ export function httpTransport(settings: Settings, fetchImpl: typeof fetch = fetc
       headers: buildHeaders(settings),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!res.ok) throw new HttpError(res.status);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      throw new HttpError(res.status, typeof body?.error === "string" ? body.error : undefined);
+    }
     return (await res.json()) as T;
   };
   return {

@@ -1,3 +1,4 @@
+import { STATUS_KEY, type SyncStatus } from "./status";
 import { loadSettings, originPattern, saveSettings, type HeaderEntry } from "./settings";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -26,7 +27,21 @@ function readPairs(container: string): HeaderEntry[] {
     .filter((h) => h.name.trim() !== "");
 }
 
+function showSync(status: SyncStatus | undefined): void {
+  const el = $("sync");
+  el.textContent = status
+    ? `${status.message} (${new Date(status.at).toLocaleString()})`
+    : "No sync has run yet. Save the settings and change a bookmark.";
+  el.className = status && status.outcome !== "ok" ? "bad" : "";
+}
+
 async function init(): Promise<void> {
+  const stored = await chrome.storage.local.get(STATUS_KEY);
+  showSync(stored[STATUS_KEY] as SyncStatus | undefined);
+  chrome.storage.onChanged.addListener((changes) => {
+    const change = changes[STATUS_KEY];
+    if (change) showSync(change.newValue as SyncStatus | undefined);
+  });
   const s = await loadSettings();
   $<HTMLInputElement>("url").value = s.serverUrl;
   $<HTMLInputElement>("token").value = s.token;

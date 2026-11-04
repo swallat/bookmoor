@@ -20,9 +20,12 @@ import type { Op, SyncRequest, SyncResponse, TreeResponse } from "./wire.ts";
 
 export class HttpError extends Error {
   status: number;
-  constructor(status: number) {
-    super(`HTTP ${status}`);
+  /** The server's own explanation (`error` in its JSON body), if any. */
+  detail: string | undefined;
+  constructor(status: number, detail?: string) {
+    super(detail ? `HTTP ${status}: ${detail}` : `HTTP ${status}`);
     this.status = status;
+    this.detail = detail;
   }
 }
 
