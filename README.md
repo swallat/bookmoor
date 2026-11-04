@@ -91,6 +91,37 @@ Then load `extension/dist` via `chrome://extensions` > Developer mode > Load
 unpacked, and enter the server URL and a device token in the extension
 options. Create device tokens as described under [Tokens](#tokens).
 
+## Docker
+
+A multi-stage image is published to `ghcr.io/swallat/bookmoor` (`edge` follows
+`main`; release tags `vX.Y.Z` give `latest`, `X.Y.Z` and `X.Y`; pre-releases do not move `latest`). It runs as a
+non-root user, keeps its state in the volume `/data` (`/data/state.json`) and
+listens on `0.0.0.0:8787` with `--insecure-http`, because the server refuses a
+non-loopback address without TLS in front. **Always put a reverse proxy with
+TLS in front of it** and do not publish the port directly.
+
+```bash
+cp docker-compose.example.yml docker-compose.yml
+docker compose up -d
+docker compose logs bookmoor | grep 'admin token'   # shown once on first start; or set BOOKMOOR_ADMIN_TOKEN
+```
+
+Commands run in the same image, with the server stopped:
+
+```bash
+docker compose stop bookmoor
+docker compose run --rm -T bookmoor token create --name laptop --scope sync --user anna --yes
+echo 'a long password' | docker compose run --rm -T bookmoor user create --name anna --admin
+docker compose start bookmoor
+```
+
+For the Dynacat adapter, mount a writable directory (uid 10001) and point
+`BOOKMOOR_DYNACAT_OUTPUTS` at files in it (one `file=PATH[;profile=NAME][;folder=A/B/C]`
+per line, see [docs/adapters/dynacat.md](docs/adapters/dynacat.md)); mount the same
+directory into Dynacat. The example compose file shows both. Build locally with
+`docker build -t bookmoor .`. If a command overrides `--bind` with another port, the
+image's healthcheck (port 8787) reports unhealthy.
+
 ## Layout
 
 | Path | Content |
