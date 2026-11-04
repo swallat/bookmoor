@@ -1,5 +1,5 @@
 import { STATUS_KEY, type SyncStatus } from "./status";
-import { loadSettings, originPattern, saveSettings, type HeaderEntry } from "./settings";
+import { loadSettings, originPattern, hasHostAccess, saveSettings, type HeaderEntry } from "./settings";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -85,7 +85,13 @@ async function init(): Promise<void> {
       const serverUrl = $<HTMLInputElement>("url").value.trim();
       // Must run inside the click handler: permission requests need a user gesture.
       const granted = await chrome.permissions.request({ origins: [originPattern(serverUrl)] });
-      if (!granted) throw new Error("Permission for the server origin was denied.");
+      // Some browsers answer yes without keeping the grant, so ask again.
+      if (!granted || !(await hasHostAccess(serverUrl))) {
+        throw new Error(
+          `The browser did not give the extension access to ${new URL(serverUrl).host}. ` +
+            "Allow it for this extension (Firefox: about:addons > bookmoor > Permissions; Chrome: Details > Site access) and save again.",
+        );
+      }
       await saveSettings({
         serverUrl,
         token: $<HTMLInputElement>("token").value.trim(),

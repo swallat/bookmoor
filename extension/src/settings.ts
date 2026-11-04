@@ -38,9 +38,27 @@ export function buildHeaders(s: Settings): Headers {
   return h;
 }
 
+/**
+ * Host permission to ask for: the server's host without its port, which
+ * browsers treat as covering every port (the end-to-end tests rely on it).
+ */
 export function originPattern(serverUrl: string): string {
   const u = new URL(serverUrl);
-  return `${u.protocol}//${u.host}/*`;
+  return `${u.protocol}//${u.hostname}/*`;
+}
+
+/** Every pattern whose grant lets the extension reach the server: the port-less one and, from older versions, the one with the port. */
+export function originPatterns(serverUrl: string): string[] {
+  const u = new URL(serverUrl);
+  return [...new Set([originPattern(serverUrl), `${u.protocol}//${u.host}/*`])];
+}
+
+/** Whether any grant covers the server; `contains` alone wants every pattern granted. */
+export async function hasHostAccess(serverUrl: string): Promise<boolean> {
+  for (const origin of originPatterns(serverUrl)) {
+    if (await chrome.permissions.contains({ origins: [origin] })) return true;
+  }
+  return false;
 }
 
 /**
