@@ -47,7 +47,13 @@ impl ClientCertCheck {
         for v in headers.get_all(&self.header) {
             seen = true;
             let ok = match &self.value {
-                None => !v.as_bytes().iter().all(u8::is_ascii_whitespace),
+                None => v.to_str().is_ok_and(|t| {
+                    let t = t.trim();
+                    // nginx and Apache send these when there is no good certificate.
+                    !t.is_empty()
+                        && !matches!(t, "NONE" | "0" | "(null)")
+                        && !t.starts_with("FAILED")
+                }),
                 Some(want) => bool::from(v.as_bytes().ct_eq(want.as_bytes())),
             };
             if !ok {
@@ -78,6 +84,22 @@ pub(crate) async fn require_client_cert(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn any_value_mode_still_refuses_failure_verdicts() {
+        let c = ClientCertCheck::parse("X-Cert=*").unwrap();
+        let with = |v: &'static str| {
+            let mut h = axum::http::HeaderMap::new();
+            h.insert("x-cert", v.parse().unwrap());
+            h
+        };
+        assert!(c.accepts(&with("MIIB...")));
+        assert!(c.accepts(&with("SUCCESS")));
+        for bad in ["NONE", "FAILED:expired", "0", " "] {
+            assert!(!c.accepts(&with(bad)), "{bad}");
+        }
+        assert!(!c.accepts(&axum::http::HeaderMap::new()));
+    }
 
     #[test]
     fn parses_the_spec() {

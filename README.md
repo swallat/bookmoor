@@ -130,7 +130,7 @@ against your client CA and tells the server the result in a header. With
 `--client-cert-header NAME[=VALUE]` (or `BOOKMOOR_CLIENT_CERT_HEADER`) every request
 except `/health` must carry that header with the expected value, otherwise it
 gets 403 before the token is looked at. `NAME` alone expects `SUCCESS`;
-`NAME=*` accepts any non-empty value (proxies that set the header only for a
+`NAME=*` accepts any value except empty, `NONE`, `0` and `FAILED...` (for proxies that set the header only for a
 verified certificate).
 
 nginx:
