@@ -52,8 +52,11 @@ chrome.bookmarks.onCreated.addListener(schedulePush);
 chrome.bookmarks.onChanged.addListener(schedulePush);
 chrome.bookmarks.onMoved.addListener(schedulePush);
 chrome.bookmarks.onRemoved.addListener(schedulePush);
-chrome.bookmarks.onChildrenReordered.addListener(schedulePush);
-chrome.bookmarks.onImportEnded.addListener(schedulePush);
+// Chrome-only events: Firefox has no such properties, and calling
+// addListener on undefined would abort the whole script (found by the
+// Firefox end-to-end test).
+chrome.bookmarks.onChildrenReordered?.addListener(schedulePush);
+chrome.bookmarks.onImportEnded?.addListener(schedulePush);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === PUSH || a.name === PULL) run();
 });

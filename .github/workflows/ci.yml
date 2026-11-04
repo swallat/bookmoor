@@ -86,7 +86,7 @@ jobs:
       - run: npx playwright-core install --with-deps chromium
         if: matrix.browser == 'chromium'
       - name: Run the real extension in a real browser
-        run: npm run test:e2e -- --test-name-pattern="${{ matrix.browser == 'chromium' && 'Chromium' || 'Firefox' }}"
+        run: npm run test:e2e:${{ matrix.browser }}
         env:
           BOOKMOOR_E2E_REQUIRED: "1"
           MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: "1"
