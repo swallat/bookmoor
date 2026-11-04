@@ -110,6 +110,23 @@ describe("two real Chromium profiles", { skip: !BIN && !required }, () => {
     assert.deepEqual(await bar(b), []);
   });
 
+  it("syncs from the toolbar popup and shows the result", async () => {
+    await a.worker.evaluate(() => chrome.bookmarks.create({ parentId: "1", title: "Via popup", url: "https://popup.example/" }));
+    const page = await a.ctx.newPage();
+    await page.goto(`chrome-extension://${a.id}/popup.html`);
+    await page.click("#syncnow");
+    await page.waitForFunction(() => document.getElementById("sync")?.textContent?.startsWith("Last sync succeeded."));
+    await page.close();
+    await sync(b);
+    assert.ok((await bar(b)).some((m) => m.title === "Via popup"));
+    await b.worker.evaluate(async () => {
+      const [m] = (await chrome.bookmarks.getChildren("1")).filter((k) => k.title === "Via popup");
+      if (m) await chrome.bookmarks.remove(m.id);
+    });
+    await sync(b);
+    await sync(a);
+  });
+
   it("keeps edits made on both sides", async () => {
     await a.worker.evaluate(() => chrome.bookmarks.create({ parentId: "1", title: "From A", url: "https://a.example/" }));
     await b.worker.evaluate(() => chrome.bookmarks.create({ parentId: "1", title: "From B", url: "https://b.example/" }));

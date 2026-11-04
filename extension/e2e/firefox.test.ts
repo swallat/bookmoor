@@ -16,6 +16,7 @@ const ADDON_ID = "bookmoor@wallat.de";
 // A fixed internal UUID makes the options page URL predictable.
 const UUID = "6a1c1c25-3a0a-4d3c-9d7e-2d8f5e0b7a11";
 const OPTIONS = `moz-extension://${UUID}/options.html`;
+const POPUP = `moz-extension://${UUID}/popup.html`;
 const BAR = "toolbar_____";
 
 const enabled = process.env.BOOKMOOR_E2E_FIREFOX === "1";
@@ -129,6 +130,33 @@ describe("two real Firefox profiles", { skip: !enabled }, () => {
     await sync(b);
     await sync(a);
     assert.deepEqual(await bar(a), [{ title: "Renamed", url: "https://example.com/" }]);
+  });
+
+  it("syncs from the toolbar popup and shows the result", async () => {
+    await create(a, "Via popup", "https://popup.example/");
+    await openOptions(a);
+    const optionsTab = await a.getWindowHandle();
+    const before = await a.getAllWindowHandles();
+    const ff = a as WebDriver & { setContext(c: unknown): Promise<void> };
+    await ff.setContext(Context.CHROME);
+    await a.executeScript(
+      `gBrowser.selectedTab = gBrowser.addTab(arguments[0], { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });`,
+      POPUP,
+    );
+    await ff.setContext(Context.CONTENT);
+    const handle = await a.wait(async () => (await a.getAllWindowHandles()).find((h) => !before.includes(h)), 15_000);
+    await a.switchTo().window(handle as string);
+    await a.wait(async () => (await a.findElements({ id: "syncnow" })).length > 0, 15_000);
+    await a.findElement({ id: "syncnow" }).click();
+    await a.wait(async () => (await a.findElement({ id: "sync" }).getText()).startsWith("Last sync succeeded."), 15_000);
+    await a.close();
+    await a.switchTo().window(optionsTab);
+    await sync(b);
+    assert.ok((await bar(b)).some((m) => m.title === "Via popup"));
+    const [m] = (await api<{ id: string; title: string }[]>(b, "bookmarks.getChildren", BAR)).filter((k) => k.title === "Via popup");
+    await api(b, "bookmarks.remove", m!.id);
+    await sync(b);
+    await sync(a);
   });
 
   it("syncs a deletion", async () => {

@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 // dist-firefox/ for Firefox, which has no service workers and runs the
 // background script as an event page instead.
 await build({
-  entryPoints: { background: "src/background.ts", options: "src/options.ts" },
+  entryPoints: { background: "src/background.ts", options: "src/options.ts", popup: "src/popup.ts" },
   outdir: "dist",
   bundle: true,
   format: "esm",
@@ -14,6 +14,7 @@ await build({
 });
 cpSync("manifest.json", "dist/manifest.json");
 cpSync("src/options.html", "dist/options.html");
+cpSync("src/popup.html", "dist/popup.html");
 cpSync("icons", "dist/icons", { recursive: true });
 
 mkdirSync("dist-firefox", { recursive: true });
