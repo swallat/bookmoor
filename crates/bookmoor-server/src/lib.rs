@@ -6,3 +6,4 @@ pub mod cli;
 pub mod engine;
 pub mod ratelimit;
 pub mod store;
+pub mod users;

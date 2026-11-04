@@ -60,6 +60,10 @@ pub struct TokenRecord {
     pub id: String,
     pub name: String,
     pub scope: Scope,
+    /// The user whose bookmarks this token reaches. Admin tokens belong to
+    /// no user: they manage the server, not a bookmark tree.
+    #[serde(default)]
+    pub user_id: Option<String>,
     /// A sync token maps to exactly one endpoint (revocation = stop a device).
     pub endpoint_id: Option<String>,
     #[serde(with = "hex_hash")]
@@ -116,6 +120,7 @@ impl Tokens {
         &mut self,
         name: &str,
         scope: Scope,
+        user_id: Option<String>,
         endpoint_id: Option<String>,
     ) -> (String, TokenRecord) {
         let id = random_hex(8);
@@ -124,6 +129,7 @@ impl Tokens {
             id: id.clone(),
             name: name.to_string(),
             scope,
+            user_id,
             endpoint_id,
             secret_hash: hash(&secret),
         };
@@ -142,6 +148,7 @@ impl Tokens {
             id: id.to_string(),
             name: name.to_string(),
             scope,
+            user_id: None,
             endpoint_id: None,
             secret_hash: hash(secret),
         };
@@ -187,6 +194,39 @@ impl Tokens {
             .retain(|_, r| !(r.name == name && r.scope == scope));
     }
 
+    pub fn for_user(&self, user_id: &str) -> Vec<TokenRecord> {
+        let mut v: Vec<_> = self
+            .by_id
+            .values()
+            .filter(|r| r.user_id.as_deref() == Some(user_id))
+            .cloned()
+            .collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        v
+    }
+
+    pub fn get(&self, id: &str) -> Option<&TokenRecord> {
+        self.by_id.get(id)
+    }
+
+    /// Revoke one token; true if it existed.
+    pub fn revoke(&mut self, id: &str) -> bool {
+        self.by_id.remove(id).is_some()
+    }
+
+    /// Revoke every token of a user; returns their endpoint ids.
+    pub fn revoke_user(&mut self, user_id: &str) -> Vec<String> {
+        let mut eps = Vec::new();
+        self.by_id.retain(|_, r| {
+            let mine = r.user_id.as_deref() == Some(user_id);
+            if mine {
+                eps.extend(r.endpoint_id.clone());
+            }
+            !mine
+        });
+        eps
+    }
+
     /// Revoke every token bound to `endpoint_id`.
     pub fn revoke_endpoint(&mut self, endpoint_id: &str) -> bool {
         let before = self.by_id.len();
@@ -203,7 +243,12 @@ mod tests {
     #[test]
     fn created_token_authenticates_and_wrong_ones_do_not() {
         let mut t = Tokens::new();
-        let (text, rec) = t.create("laptop", Scope::Sync, Some("ep_1".into()));
+        let (text, rec) = t.create(
+            "laptop",
+            Scope::Sync,
+            Some("u_1".into()),
+            Some("ep_1".into()),
+        );
         assert!(text.starts_with("bkm_"));
         assert_eq!(t.authenticate(&text).unwrap().id, rec.id);
         let tampered = format!("{}0", &text[..text.len() - 1]);
@@ -224,7 +269,12 @@ mod tests {
     #[test]
     fn revoking_an_endpoint_kills_its_tokens() {
         let mut t = Tokens::new();
-        let (text, _) = t.create("laptop", Scope::Sync, Some("ep_1".into()));
+        let (text, _) = t.create(
+            "laptop",
+            Scope::Sync,
+            Some("u_1".into()),
+            Some("ep_1".into()),
+        );
         t.revoke_endpoint("ep_1");
         assert!(t.authenticate(&text).is_none());
     }

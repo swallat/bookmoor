@@ -3,6 +3,8 @@
 use crate::auth::{random_id, Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, SyncError};
 use crate::ratelimit::client_key;
+use crate::users::User;
+use crate::users::Users;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -12,6 +14,7 @@ use axum::Extension;
 use axum::{Json, Router};
 use bookmoor_core::wire::{SyncRequest, SyncResponse, TreeResponse};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,7 +24,9 @@ pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub struct AppState {
-    pub engine: Engine,
+    pub users: Users,
+    /// One bookmark tree per user id.
+    pub engines: BTreeMap<String, Engine>,
     pub tokens: Tokens,
     /// Where state is saved after every change; `None` keeps it in memory.
     pub store: Option<crate::store::Store>,
@@ -29,9 +34,30 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// A new token; a sync token comes with its own endpoint.
+    /// A new user together with an empty bookmark tree.
+    pub fn add_user(
+        &mut self,
+        name: &str,
+        admin: bool,
+        password: Option<&str>,
+    ) -> Result<User, String> {
+        let user = self.users.create(name, admin, password)?;
+        self.engines.insert(user.id.clone(), Engine::new());
+        Ok(user)
+    }
+
+    /// Remove a user with their tree and all their tokens.
+    pub fn remove_user(&mut self, id: &str) -> bool {
+        self.engines.remove(id);
+        self.tokens.revoke_user(id);
+        self.users.remove(id)
+    }
+
+    /// A new token for `user_id`; a sync token comes with its own endpoint.
+    /// Admin tokens belong to no user.
     pub fn issue_token(
         &mut self,
+        user_id: Option<&str>,
         name: &str,
         scope: Scope,
     ) -> Result<(String, TokenRecord), String> {
@@ -39,11 +65,20 @@ impl AppState {
         if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
             return Err("token name must be 1 to 64 characters without control characters".into());
         }
+        let user_id = match (scope, user_id) {
+            (Scope::Admin, _) => None,
+            (_, Some(u)) if self.users.get(u).is_some() => Some(u.to_string()),
+            (_, Some(_)) => return Err("no such user".into()),
+            (_, None) => return Err("a read or sync token needs a user".into()),
+        };
         let endpoint_id = (scope == Scope::Sync).then(|| random_id("ep_"));
-        if let Some(ep) = &endpoint_id {
-            self.engine.register_endpoint(ep);
+        if let (Some(ep), Some(uid)) = (&endpoint_id, &user_id) {
+            self.engines
+                .get_mut(uid)
+                .ok_or("user has no tree")?
+                .register_endpoint(ep);
         }
-        Ok(self.tokens.create(name, scope, endpoint_id))
+        Ok(self.tokens.create(name, scope, user_id, endpoint_id))
     }
 }
 
@@ -291,6 +326,16 @@ pub fn router(state: Shared) -> Router {
             "/v1/tokens",
             post(create_token).route_layer(gate(Scope::Admin)),
         )
+        .route(
+            "/v1/users",
+            get(list_users)
+                .post(create_user)
+                .route_layer(gate(Scope::Admin)),
+        )
+        .route(
+            "/v1/users/{id}",
+            delete(delete_user).route_layer(gate(Scope::Admin)),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
     Router::new()
         .route("/health", get(health))
@@ -314,13 +359,21 @@ async fn health() -> &'static str {
     "ok"
 }
 
+/// The user whose tree a token reaches.
+fn user_id(who: &TokenRecord) -> Result<&str, ApiError> {
+    who.user_id.as_deref().ok_or(ApiError::Denied(
+        "this token belongs to no user and has no bookmarks: use a read or sync token",
+    ))
+}
+
 async fn tree(
     State(s): State<Shared>,
     Extension(who): Extension<TokenRecord>,
 ) -> Result<Json<TreeResponse>, ApiError> {
     need(&who, Scope::Read)?;
     let st = s.lock().unwrap();
-    Ok(Json(st.engine.tree()))
+    let engine = st.engines.get(user_id(&who)?).ok_or(ApiError::Forbidden)?;
+    Ok(Json(engine.tree()))
 }
 
 async fn sync(
@@ -334,12 +387,14 @@ async fn sync(
     if who.endpoint_id.as_deref() != Some(req.endpoint_id.as_str()) {
         return Err(ApiError::Forbidden);
     }
-    let before = st.engine.rev();
-    match st.engine.sync(&req) {
+    let uid = user_id(&who)?.to_string();
+    let engine = st.engines.get_mut(&uid).ok_or(ApiError::Forbidden)?;
+    let before = engine.rev();
+    match engine.sync(&req) {
         Ok(resp) => {
             // Rejected or repeated ops leave the canonical state as it was;
             // a retry after a restart is judged the same way again.
-            if st.engine.rev() != before {
+            if st.engines[&uid].rev() != before {
                 save(&mut st)?;
             }
             Ok(Json(resp))
@@ -383,7 +438,17 @@ async fn delete_endpoint(
     if who.scope != Scope::Admin && who.endpoint_id.as_deref() != Some(id.as_str()) {
         return Err(ApiError::Forbidden);
     }
-    let known = st.engine.remove_endpoint(&id);
+    let known = match who.user_id.as_deref() {
+        // A device token only ever reaches its own user's tree.
+        Some(uid) if who.scope != Scope::Admin => st
+            .engines
+            .get_mut(uid)
+            .is_some_and(|e| e.remove_endpoint(&id)),
+        _ => st
+            .engines
+            .values_mut()
+            .fold(false, |k, e| e.remove_endpoint(&id) | k),
+    };
     let revoked = st.tokens.revoke_endpoint(&id);
     if known || revoked {
         save(&mut st)?;
@@ -395,6 +460,9 @@ async fn delete_endpoint(
 struct NewToken {
     name: String,
     scope: Scope,
+    /// User id or name; required for read and sync tokens unless there is
+    /// only one user.
+    user: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -403,6 +471,7 @@ struct CreatedToken {
     token: String,
     id: String,
     scope: Scope,
+    user_id: Option<String>,
     endpoint_id: Option<String>,
 }
 
@@ -413,8 +482,22 @@ async fn create_token(
 ) -> Result<(StatusCode, Json<CreatedToken>), ApiError> {
     need(&who, Scope::Admin)?;
     let mut st = s.lock().unwrap();
+    let uid = match &body.user {
+        Some(u) => Some(
+            st.users
+                .get(u)
+                .or_else(|| st.users.by_name(u))
+                .map(|u| u.id.clone())
+                .ok_or_else(|| ApiError::Unprocessable("no such user".into()))?,
+        ),
+        // Like before users existed: with a single user, tokens are theirs.
+        None if body.scope != Scope::Admin && st.users.len() == 1 => {
+            st.users.list().next().map(|u| u.id.clone())
+        }
+        None => None,
+    };
     let (token, rec) = st
-        .issue_token(&body.name, body.scope)
+        .issue_token(uid.as_deref(), &body.name, body.scope)
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok((
@@ -423,9 +506,65 @@ async fn create_token(
             token,
             id: rec.id,
             scope: rec.scope,
+            user_id: rec.user_id,
             endpoint_id: rec.endpoint_id,
         }),
     ))
+}
+
+#[derive(Serialize)]
+struct UserInfo {
+    id: String,
+    name: String,
+    admin: bool,
+    has_password: bool,
+}
+
+impl From<&User> for UserInfo {
+    fn from(u: &User) -> Self {
+        UserInfo {
+            id: u.id.clone(),
+            name: u.name.clone(),
+            admin: u.admin,
+            has_password: u.password_hash.is_some(),
+        }
+    }
+}
+
+async fn list_users(State(s): State<Shared>) -> Json<Vec<UserInfo>> {
+    let st = s.lock().unwrap();
+    Json(st.users.list().map(UserInfo::from).collect())
+}
+
+#[derive(Deserialize)]
+struct NewUser {
+    name: String,
+    #[serde(default)]
+    admin: bool,
+    password: Option<String>,
+}
+
+async fn create_user(
+    State(s): State<Shared>,
+    Json(body): Json<NewUser>,
+) -> Result<(StatusCode, Json<UserInfo>), ApiError> {
+    let mut st = s.lock().unwrap();
+    let user = st
+        .add_user(&body.name, body.admin, body.password.as_deref())
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok((StatusCode::CREATED, Json(UserInfo::from(&user))))
+}
+
+async fn delete_user(
+    State(s): State<Shared>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    if st.remove_user(&id) {
+        save(&mut st)?;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -438,7 +577,8 @@ mod tests {
 
     fn setup() -> (Shared, String) {
         let mut st = AppState::default();
-        let (admin, _) = st.tokens.create("admin", Scope::Admin, None);
+        st.add_user("tester", false, None).unwrap();
+        let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None);
         (Arc::new(Mutex::new(st)), admin)
     }
 
@@ -517,7 +657,16 @@ mod tests {
             r.headers()["access-control-allow-origin"],
             "chrome-extension://abc"
         );
-        let r = app.oneshot(real(Some(&admin))).await.unwrap();
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/v1/tokens",
+            Some(&admin),
+            Some(serde_json::json!({"name":"dash","scope":"read"})),
+        )
+        .await;
+        let read = v["token"].as_str().unwrap().to_string();
+        let r = app.oneshot(real(Some(&read))).await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
     }
 
@@ -799,7 +948,9 @@ mod tests {
         let app = router(s.clone());
         let (dev, ep) = new_device(&app, &admin).await;
         // Simulate a restored database that forgot the endpoint.
-        s.lock().unwrap().engine.remove_endpoint(&ep);
+        s.lock().unwrap().engines.values_mut().for_each(|e| {
+            e.remove_endpoint(&ep);
+        });
         let (_, r) = call(
             &app,
             "POST",
@@ -817,7 +968,7 @@ mod tests {
         let app = router(state);
         let from = |peer: &str, token: &str| {
             let mut req = Request::builder()
-                .uri("/v1/tree")
+                .uri("/v1/users")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap();
@@ -847,12 +998,12 @@ mod tests {
         let app = router(state);
         for _ in 0..3 {
             assert_eq!(
-                call(&app, "GET", "/v1/tree", Some(&admin), None).await.0,
+                call(&app, "GET", "/v1/users", Some(&admin), None).await.0,
                 StatusCode::OK
             );
         }
         let req = Request::builder()
-            .uri("/v1/tree")
+            .uri("/v1/users")
             .header("authorization", format!("Bearer {admin}"))
             .body(Body::empty())
             .unwrap();
@@ -869,5 +1020,93 @@ mod tests {
             call(&app, "GET", "/health", None, None).await.0,
             StatusCode::OK
         );
+    }
+
+    #[tokio::test]
+    async fn users_have_separate_trees_and_only_admins_manage_them() {
+        let (s, admin) = setup();
+        let app = router(s);
+        let (st, v) = call(
+            &app,
+            "POST",
+            "/v1/users",
+            Some(&admin),
+            Some(serde_json::json!({"name":"bob"})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        assert_eq!(v["has_password"], false);
+        // Two users now: a token must say whose it is.
+        let mk = |user: Option<&str>| serde_json::json!({"name":"d","scope":"sync","user":user});
+        let (st, _) = call(&app, "POST", "/v1/tokens", Some(&admin), Some(mk(None))).await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        let (st, ta) = call(
+            &app,
+            "POST",
+            "/v1/tokens",
+            Some(&admin),
+            Some(mk(Some("tester"))),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let (_, tb) = call(
+            &app,
+            "POST",
+            "/v1/tokens",
+            Some(&admin),
+            Some(mk(Some("bob"))),
+        )
+        .await;
+        let (ta_tok, ea) = (
+            ta["token"].as_str().unwrap(),
+            ta["endpoint_id"].as_str().unwrap(),
+        );
+        let tb_tok = tb["token"].as_str().unwrap();
+        let body = serde_json::json!({"endpoint_id": ea, "since_rev": 0, "ops": [{
+            "op_id":"1","type":"add","id":"n1","parent":"toolbar","position":"V",
+            "kind":"bookmark","title":"t","url":"https://example.org/"}]});
+        let (st, _) = call(&app, "POST", "/v1/sync", Some(ta_tok), Some(body)).await;
+        assert_eq!(st, StatusCode::OK);
+        let count = |v: &serde_json::Value| v["nodes"].as_array().unwrap().len();
+        let (_, a) = call(&app, "GET", "/v1/tree", Some(ta_tok), None).await;
+        let (_, b) = call(&app, "GET", "/v1/tree", Some(tb_tok), None).await;
+        assert_eq!(count(&a), count(&b) + 1);
+        // A device token cannot speak for another user's endpoint.
+        let eb = tb["endpoint_id"].as_str().unwrap();
+        let body = serde_json::json!({"endpoint_id": eb, "since_rev": 0, "ops": []});
+        let (st, _) = call(&app, "POST", "/v1/sync", Some(ta_tok), Some(body)).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        // Admin tokens have no tree; device tokens cannot manage users.
+        let (st, _) = call(&app, "GET", "/v1/tree", Some(&admin), None).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let (st, _) = call(&app, "GET", "/v1/users", Some(ta_tok), None).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        // Removing a user revokes their devices and drops their tree.
+        let uid = a_user_id(&app, &admin, "bob").await;
+        let (st, _) = call(
+            &app,
+            "DELETE",
+            &format!("/v1/users/{uid}"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let (st, _) = call(&app, "GET", "/v1/tree", Some(tb_tok), None).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        let (st, _) = call(&app, "GET", "/v1/tree", Some(ta_tok), None).await;
+        assert_eq!(st, StatusCode::OK);
+    }
+
+    async fn a_user_id(app: &Router, admin: &str, name: &str) -> String {
+        let (_, v) = call(app, "GET", "/v1/users", Some(admin), None).await;
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["name"] == name)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
     }
 }

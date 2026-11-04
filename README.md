@@ -174,6 +174,19 @@ token name (`-` if unauthenticated), method, path, status and duration. Query
 strings are left out because proxy setups may carry secrets there; `/health`
 is not logged. Behind a reverse proxy the address is the proxy's.
 
+### Users
+
+Every user has their own bookmark tree; devices and tokens belong to a user
+(see [docs/multi-user.md](docs/multi-user.md)). Older single-user state files
+become the user `owner`. Users are managed with an admin token
+(`POST /v1/users`, `GET /v1/users`, `DELETE /v1/users/{id}`) or, with the
+server stopped:
+
+```bash
+echo 'a long password' | bookmoor-server user create --name anna --admin --state state.json
+echo 'a long password' | bookmoor-server user passwd --name anna --state state.json
+```
+
 ### Tokens
 
 The extension needs a **device token** (scope `sync`), one per browser. The
@@ -186,7 +199,7 @@ is stored, so a lost token cannot be shown again. Device tokens come from
 command line:
 
 ```bash
-mise run token:create -- --name laptop --scope sync
+mise run token:create -- --name laptop --scope sync --user anna
 # or: bookmoor-server token create --name laptop --scope sync --state state.json
 ```
 

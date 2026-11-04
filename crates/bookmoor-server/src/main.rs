@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 /// `bookmoor-server token create --name N --scope S [--state FILE] [--yes] [--allow-admin]`
 fn token_command(mut args: impl Iterator<Item = String>) {
     use bookmoor_server::cli::{confirm_on_terminal, create_token, TokenRequest};
-    const USAGE: &str = "usage: bookmoor-server token create --name NAME --scope read|sync|admin --state FILE [--yes] [--allow-admin]\n\nCreates a token without a running server; refuses while the state is in use.";
+    const USAGE: &str = "usage: bookmoor-server token create --name NAME --scope read|sync|admin [--user USER] --state FILE [--yes] [--allow-admin]\n\nCreates a token without a running server; refuses while the state is in use.";
     match args.next().as_deref() {
         Some("create") => {}
         Some("--help" | "-h") => {
@@ -25,7 +25,7 @@ fn token_command(mut args: impl Iterator<Item = String>) {
         _ => fail(USAGE),
     }
     let mut state = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
-    let (mut name, mut scope) = (None, None);
+    let (mut name, mut scope, mut user) = (None, None, None);
     let (mut yes, mut allow_admin) = (false, false);
     while let Some(a) = args.next() {
         let mut value = |what: &str| {
@@ -34,6 +34,7 @@ fn token_command(mut args: impl Iterator<Item = String>) {
         };
         match a.as_str() {
             "--name" => name = Some(value("--name")),
+            "--user" => user = Some(value("--user")),
             "--scope" => {
                 scope = Some(
                     value("--scope")
@@ -58,6 +59,7 @@ fn token_command(mut args: impl Iterator<Item = String>) {
         state: &state,
         name: &name,
         scope,
+        user: user.as_deref(),
         allow_admin,
         yes,
     };
@@ -67,11 +69,70 @@ fn token_command(mut args: impl Iterator<Item = String>) {
     }
 }
 
+/// `bookmoor-server user create|passwd ...`; the password is the first line
+/// of stdin (or `BOOKMOOR_PASSWORD`), so it never shows up in a process list.
+fn user_command(mut args: impl Iterator<Item = String>) {
+    const USAGE: &str =
+        "usage: bookmoor-server user create --name NAME [--admin] [--no-password] --state FILE
+       bookmoor-server user passwd --name NAME --state FILE
+
+The password is read from the first line of stdin (or BOOKMOOR_PASSWORD).
+Refuses while the state is in use: stop the server first.";
+    let sub = args.next();
+    let mut state = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
+    let (mut name, mut admin, mut no_password) = (None, false, false);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--name" => name = args.next(),
+            "--state" => state = args.next().map(Into::into),
+            "--admin" => admin = true,
+            "--no-password" => no_password = true,
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                return;
+            }
+            other => fail(&format!("unknown argument {other}\n{USAGE}")),
+        }
+    }
+    let name = name.unwrap_or_else(|| fail("--name is required"));
+    let state = state.unwrap_or_else(|| fail("--state FILE (or BOOKMOOR_STATE) is required"));
+    let password = || {
+        std::env::var("BOOKMOOR_PASSWORD").unwrap_or_else(|_| {
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .unwrap_or_else(|e| fail(&format!("cannot read the password: {e}")));
+            line.trim_end_matches(['\r', '\n']).to_string()
+        })
+    };
+    let res = match sub.as_deref() {
+        Some("create") if no_password => {
+            bookmoor_server::cli::create_user(&state, &name, admin, None)
+        }
+        Some("create") => {
+            bookmoor_server::cli::create_user(&state, &name, admin, Some(&password()))
+        }
+        Some("passwd") => bookmoor_server::cli::set_password(&state, &name, &password()),
+        _ => fail(USAGE),
+    };
+    match res {
+        Ok(()) => println!("ok"),
+        Err(e) => fail(&e),
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    if std::env::args().nth(1).as_deref() == Some("token") {
-        token_command(std::env::args().skip(2));
-        return;
+    match std::env::args().nth(1).as_deref() {
+        Some("token") => {
+            token_command(std::env::args().skip(2));
+            return;
+        }
+        Some("user") => {
+            user_command(std::env::args().skip(2));
+            return;
+        }
+        _ => {}
     }
     let mut bind: SocketAddr = "127.0.0.1:8787".parse().unwrap();
     let mut insecure = false;
@@ -94,7 +155,7 @@ async fn main() {
                 );
             }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]\n       bookmoor-server token create --help");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -131,7 +192,7 @@ async fn main() {
         }
         // A state file that already holds an admin token needs no new one.
         Err(_) if !state.tokens.has_admin() => {
-            let (t, _) = state.tokens.create("admin", Scope::Admin, None);
+            let (t, _) = state.tokens.create("admin", Scope::Admin, None, None);
             println!("admin token (shown once): {t}");
         }
         Err(_) => {}
