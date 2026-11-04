@@ -171,6 +171,8 @@ export interface Server {
   stop(): void;
   browser(kind?: Kind): Promise<Browser>;
   settings(token: string): Settings;
+  /** A fresh sync-scope token. */
+  syncToken(): Promise<string>;
 }
 
 export function serverBinary(): string | undefined {
@@ -213,20 +215,23 @@ export async function startServer(bin: string): Promise<Server> {
     if (i > 100) throw new Error("server did not start");
     await new Promise((r) => setTimeout(r, 50));
   }
+  const syncToken = async (): Promise<string> => {
+    const res = await fetch(url + "/v1/tokens", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "test", scope: "sync" }),
+    });
+    return ((await res.json()) as { token: string }).token;
+  };
   const settings = (token: string): Settings => ({ serverUrl: url, token, headers: [], query: [] });
   return {
     url,
     admin,
     stop: () => proc.kill(),
     settings,
+    syncToken,
     async browser(kind: Kind = "chrome") {
-      const res = await fetch(url + "/v1/tokens", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${admin}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "test", scope: "sync" }),
-      });
-      const { token } = (await res.json()) as { token: string };
-      return new Browser(httpTransport(settings(token)), kind);
+      return new Browser(httpTransport(settings(await syncToken())), kind);
     },
   };
 }

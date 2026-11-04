@@ -28,6 +28,24 @@ manifest.browser_specific_settings = {
   },
 };
 writeFileSync("dist-firefox/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+
+// Test-only packages for the end-to-end tests (e2e/): the same code, with the
+// local test server's origin granted up front, because a browser driven by a
+// script cannot click through the permission prompt of the options page.
+if (process.env.BOOKMOOR_E2E) {
+  for (const dir of ["dist", "dist-firefox"]) {
+    const out = `${dir.replace("dist", "dist-e2e")}`;
+    cpSync(dir, out, { recursive: true });
+    const m = JSON.parse(readFileSync(`${dir}/manifest.json`, "utf8"));
+    m.host_permissions = ["http://127.0.0.1/*"];
+    // geckodriver has no access to WebExtension APIs; the bridge lets a test
+    // call them through the DOM (strings only).
+    cpSync("e2e/bridge.js", `${out}/e2e-bridge.js`);
+    const html = readFileSync(`${out}/options.html`, "utf8");
+    writeFileSync(`${out}/options.html`, html.replace("</body>", '  <script src="e2e-bridge.js"></script>\n</body>'));
+    writeFileSync(`${out}/manifest.json`, JSON.stringify(m, null, 2) + "\n");
+  }
+}
 console.log(
   "built -> dist/ (Chrome: chrome://extensions > Load unpacked) and dist-firefox/ (Firefox: about:debugging > Load Temporary Add-on > manifest.json)",
 );

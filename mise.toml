@@ -60,3 +60,9 @@ run = "cargo run --release -p bookmoor-server -- --state state.json"
 [tasks."token:create"]
 description = "Create an API token: mise run token:create -- --name laptop --scope sync"
 run = "cargo run --release -p bookmoor-server -- token create --state state.json"
+
+[tasks.e2e]
+description = "End-to-end tests: the real extension in real Chromium (and Firefox with BOOKMOOR_E2E_FIREFOX=1)"
+depends = ["install"]
+dir = "extension"
+run = ["cargo build -p bookmoor-server", "BOOKMOOR_E2E=1 npm run build", "npm run test:e2e"]

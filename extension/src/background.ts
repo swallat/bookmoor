@@ -39,26 +39,38 @@ async function round(): Promise<void> {
   }
 }
 
-function run(): void {
+function run(): Promise<void> {
   running ??= round()
     .catch((e) => console.warn("bookmoor:", e))
     .finally(() => {
       running = null;
     });
+  return running;
 }
 
 chrome.bookmarks.onCreated.addListener(schedulePush);
 chrome.bookmarks.onChanged.addListener(schedulePush);
 chrome.bookmarks.onMoved.addListener(schedulePush);
 chrome.bookmarks.onRemoved.addListener(schedulePush);
-chrome.bookmarks.onChildrenReordered.addListener(schedulePush);
-chrome.bookmarks.onImportEnded.addListener(schedulePush);
+// Chrome-only events: Firefox has no such properties, and calling
+// addListener on undefined would abort the whole script (found by the
+// Firefox end-to-end test).
+chrome.bookmarks.onChildrenReordered?.addListener(schedulePush);
+chrome.bookmarks.onImportEnded?.addListener(schedulePush);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === PUSH || a.name === PULL) run();
 });
 // Alarms may be gone after a browser restart, so make sure on every start.
 void chrome.alarms.get(PULL).then((a) => {
   if (!a) chrome.alarms.create(PULL, { periodInMinutes: 5 });
+});
+// "Sync now" for the end-to-end tests, which cannot wait for the 30 s alarm.
+// Only the extension's own pages can send this (onMessage, not
+// onMessageExternal).
+chrome.runtime.onMessage.addListener((msg: unknown, _sender, respond) => {
+  if ((msg as { type?: string } | null)?.type !== "bookmoor-sync-now") return false;
+  void run().then(() => respond({ ok: true }));
+  return true;
 });
 chrome.runtime.onStartup.addListener(run);
 chrome.runtime.onInstalled.addListener(run);
