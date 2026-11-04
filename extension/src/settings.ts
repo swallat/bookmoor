@@ -29,7 +29,9 @@ export async function saveSettings(s: Settings): Promise<void> {
 
 export function buildHeaders(s: Settings): Headers {
   const h = new Headers({ "Content-Type": "application/json" });
-  if (s.token) h.set("Authorization", `Bearer ${s.token}`);
+  // A pasted token often carries a trailing space or newline, which is not a valid header value.
+  const token = s.token.trim();
+  if (token) h.set("Authorization", `Bearer ${token}`);
   for (const { name, value } of s.headers) {
     if (name.trim()) h.set(name.trim(), value);
   }
