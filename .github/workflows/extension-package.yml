@@ -1,0 +1,82 @@
+name: Extension package
+
+# Builds the installable extension when its code changes on main (or by hand):
+# a Chrome zip, an unsigned Firefox zip and, if Mozilla credentials are set as
+# repository secrets, a signed Firefox .xpi. Download them from the run's
+# "Artifacts" section. Pull requests do not run this: they have no secrets and
+# every signing uses up a version number at Mozilla.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extension/**"
+      - "schema/**"
+      - ".github/workflows/extension-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a run midway through signing.
+concurrency:
+  group: extension-package
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package (Chrome zip, Firefox xpi)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: extension
+    env:
+      # Optional. Create them at https://addons.mozilla.org/developers/addon/api/key/
+      # and add them under Settings > Secrets and variables > Actions.
+      WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+      WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      # Mozilla accepts each version once and it must grow, so the version
+      # comes from the run: 0.<run number>.<attempt>.
+      - name: Set the version
+        id: version
+        run: |
+          VERSION="0.${{ github.run_number }}.${{ github.run_attempt }}"
+          node -e '
+            const fs = require("node:fs");
+            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            m.version = process.argv[1];
+            fs.writeFileSync("manifest.json", JSON.stringify(m, null, 2) + "\n");
+          ' "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - run: npm run build
+      - name: Chrome zip
+        run: |
+          mkdir -p ../artifacts
+          (cd dist && zip -qr "../../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip" .)
+      - name: Firefox zip (unsigned)
+        run: |
+          npm run package:firefox
+          cp web-ext-artifacts/*.zip ../artifacts/
+      - name: Sign the Firefox add-on
+        if: env.WEB_EXT_API_KEY != '' && env.WEB_EXT_API_SECRET != ''
+        run: |
+          npm run sign:firefox
+          cp web-ext-artifacts/*.xpi ../artifacts/
+      - name: Say why there is no signed file
+        if: env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == ''
+        run: echo "::notice::No Firefox .xpi was signed because the secrets WEB_EXT_API_KEY and WEB_EXT_API_SECRET are not set."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bookmoor-extension-${{ steps.version.outputs.version }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 90
