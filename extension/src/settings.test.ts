@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { endpointUrl } from "./settings.ts";
+import { buildHeaders, endpointUrl } from "./settings.ts";
 
 describe("endpointUrl", () => {
   it("keeps a path prefix and ignores trailing slashes", () => {
@@ -30,5 +30,12 @@ describe("endpointUrl", () => {
 
   it("copes with settings saved before query parameters existed", () => {
     assert.equal(endpointUrl({ serverUrl: "https://h.example", query: undefined as never }, "/v1/tree"), "https://h.example/v1/tree");
+  });
+});
+
+describe("buildHeaders", () => {
+  it("strips whitespace around a pasted token", () => {
+    const h = buildHeaders({ serverUrl: "http://h", token: "  bkm_a_b\n", headers: [], query: [] });
+    assert.equal(h.get("Authorization"), "Bearer bkm_a_b");
   });
 });

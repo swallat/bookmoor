@@ -35,6 +35,33 @@ function showSync(status: SyncStatus | undefined): void {
   el.className = status && status.outcome !== "ok" ? "bad" : "";
 }
 
+/** What is stored, without showing the secret: lets the user see that the token arrived intact. */
+function showToken(token: string): void {
+  const el = $("tokeninfo");
+  if (!token) {
+    el.textContent = "No token stored.";
+    el.className = "";
+  } else if (!token.startsWith("bkm_")) {
+    el.textContent = `Stored: ${token.length} characters. Tokens normally start with "bkm_", check that you pasted the whole token.`;
+    el.className = "bad";
+  } else {
+    el.textContent = `Stored: ${token.slice(0, 8)}\u2026 (${token.length} characters)`;
+    el.className = "";
+  }
+}
+
+/** Ask the background script for an immediate sync; its result arrives as the sync status. */
+async function syncNow(): Promise<void> {
+  $("sync").textContent = "Syncing\u2026";
+  $("sync").className = "";
+  try {
+    await chrome.runtime.sendMessage({ type: "bookmoor-sync-now" });
+  } catch (e) {
+    $("sync").textContent = `Could not reach the background script: ${e instanceof Error ? e.message : String(e)}`;
+    $("sync").className = "bad";
+  }
+}
+
 async function init(): Promise<void> {
   chrome.storage.onChanged.addListener((changes) => {
     const change = changes[STATUS_KEY];
@@ -47,6 +74,7 @@ async function init(): Promise<void> {
   const token = $<HTMLInputElement>("token");
   if (!url.value) url.value = s.serverUrl;
   if (!token.value) token.value = s.token;
+  showToken(s.token);
   for (const h of s.headers) $("headers").append(pairRow(h));
   for (const q of s.query) $("query").append(pairRow(q, "Parameter"));
   $("add").addEventListener("click", () => $("headers").append(pairRow()));
@@ -60,15 +88,19 @@ async function init(): Promise<void> {
       if (!granted) throw new Error("Permission for the server origin was denied.");
       await saveSettings({
         serverUrl,
-        token: $<HTMLInputElement>("token").value,
+        token: $<HTMLInputElement>("token").value.trim(),
         headers: readPairs("headers"),
         query: readPairs("query"),
       });
+      showToken($<HTMLInputElement>("token").value.trim());
       status.textContent = "Saved.";
+      void syncNow();
     } catch (e) {
       status.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
     }
   });
 }
+
+$("syncnow").addEventListener("click", () => void syncNow());
 
 void init();
