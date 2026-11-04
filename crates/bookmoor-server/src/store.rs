@@ -3,7 +3,7 @@
 //! owner only because it holds token hashes.
 
 use crate::api::AppState;
-use crate::auth::{random_id, Scope, TokenRecord, Tokens};
+use crate::auth::{Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, Snapshot};
 use crate::users::{User, Users};
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ impl Store {
             // Earlier versions had one tree for everyone: keep it, owned by
             // a user without a password (set one with `user passwd`).
             let owner = User {
-                id: random_id("u_"),
+                id: "u_owner".into(),
                 name: "owner".into(),
                 admin: true,
                 password_hash: None,

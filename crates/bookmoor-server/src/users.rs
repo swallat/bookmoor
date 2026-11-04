@@ -81,6 +81,10 @@ pub fn verify_password(stored: Option<&str>, pw: &str) -> bool {
 
 pub fn check_name(name: &str) -> Result<(), String> {
     let n = name.chars().count();
+    // `u_` is the prefix of generated ids; names must never look like one.
+    if name.starts_with("u_") {
+        return Err("user names cannot start with u_".into());
+    }
     if !(1..=32).contains(&n)
         || !name
             .chars()
@@ -134,19 +138,29 @@ impl Users {
         self.by_id.values().find(|u| u.name.to_lowercase() == key)
     }
 
-    pub fn any_password(&self) -> bool {
-        self.by_id.values().any(|u| u.password_hash.is_some())
-    }
-
-    pub fn admin_count(&self) -> usize {
-        self.by_id.values().filter(|u| u.admin).count()
-    }
-
     pub fn create(
         &mut self,
         name: &str,
         admin: bool,
         password: Option<&str>,
+    ) -> Result<User, String> {
+        let hash = match password {
+            Some(p) => {
+                check_password(p)?;
+                Some(hash_password(p)?)
+            }
+            None => None,
+        };
+        self.create_hashed(name, admin, hash)
+    }
+
+    /// Like [`create`](Self::create) with a hash made earlier, so the slow
+    /// hashing can happen outside the state lock.
+    pub fn create_hashed(
+        &mut self,
+        name: &str,
+        admin: bool,
+        password_hash: Option<String>,
     ) -> Result<User, String> {
         let name = name.trim();
         check_name(name)?;
@@ -156,13 +170,6 @@ impl Users {
         if self.by_id.len() >= MAX_USERS {
             return Err(format!("at most {MAX_USERS} users"));
         }
-        let password_hash = match password {
-            Some(p) => {
-                check_password(p)?;
-                Some(hash_password(p)?)
-            }
-            None => None,
-        };
         let user = User {
             id: random_id("u_"),
             name: name.to_string(),
@@ -178,12 +185,6 @@ impl Users {
         let hash = hash_password(password)?;
         let u = self.by_id.get_mut(id).ok_or("no such user")?;
         u.password_hash = Some(hash);
-        Ok(())
-    }
-
-    pub fn set_admin(&mut self, id: &str, admin: bool) -> Result<(), String> {
-        let u = self.by_id.get_mut(id).ok_or("no such user")?;
-        u.admin = admin;
         Ok(())
     }
 

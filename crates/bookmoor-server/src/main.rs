@@ -79,6 +79,10 @@ fn user_command(mut args: impl Iterator<Item = String>) {
 The password is read from the first line of stdin (or BOOKMOOR_PASSWORD).
 Refuses while the state is in use: stop the server first.";
     let sub = args.next();
+    if matches!(sub.as_deref(), Some("--help" | "-h")) {
+        println!("{USAGE}");
+        return;
+    }
     let mut state = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let (mut name, mut admin, mut no_password) = (None, false, false);
     while let Some(a) = args.next() {
@@ -94,16 +98,25 @@ Refuses while the state is in use: stop the server first.";
             other => fail(&format!("unknown argument {other}\n{USAGE}")),
         }
     }
+    if no_password && sub.as_deref() != Some("create") {
+        fail("--no-password only makes sense for user create");
+    }
     let name = name.unwrap_or_else(|| fail("--name is required"));
     let state = state.unwrap_or_else(|| fail("--state FILE (or BOOKMOOR_STATE) is required"));
     let password = || {
-        std::env::var("BOOKMOOR_PASSWORD").unwrap_or_else(|_| {
-            let mut line = String::new();
-            std::io::stdin()
-                .read_line(&mut line)
-                .unwrap_or_else(|e| fail(&format!("cannot read the password: {e}")));
-            line.trim_end_matches(['\r', '\n']).to_string()
-        })
+        std::env::var_os("BOOKMOOR_PASSWORD").map_or_else(
+            || {
+                let mut line = String::new();
+                std::io::stdin()
+                    .read_line(&mut line)
+                    .unwrap_or_else(|e| fail(&format!("cannot read the password: {e}")));
+                line.trim_end_matches(['\r', '\n']).to_string()
+            },
+            |v| {
+                v.into_string()
+                    .unwrap_or_else(|_| fail("BOOKMOOR_PASSWORD is not valid UTF-8"))
+            },
+        )
     };
     let res = match sub.as_deref() {
         Some("create") if no_password => {

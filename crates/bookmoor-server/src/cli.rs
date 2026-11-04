@@ -80,23 +80,8 @@ pub fn confirm_on_terminal(name: &str) -> impl FnOnce(&str) -> Result<bool, Stri
     }
 }
 
-/// The named user, or the only one.
 fn pick_user(state: &crate::api::AppState, name: Option<&str>) -> Result<String, String> {
-    match name {
-        Some(n) => state
-            .users
-            .by_name(n)
-            .map(|u| u.id.clone())
-            .ok_or_else(|| format!("no user called {n}")),
-        None => {
-            let mut all = state.users.list();
-            match (all.next(), all.next()) {
-                (Some(u), None) => Ok(u.id.clone()),
-                (None, _) => Err("there is no user yet: create one with `user create`".into()),
-                _ => Err("several users exist: pass --user NAME".into()),
-            }
-        }
-    }
+    state.resolve_user(name)
 }
 
 /// `user create`: add a user (and optionally a web UI password).

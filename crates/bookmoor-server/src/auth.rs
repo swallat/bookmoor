@@ -194,37 +194,10 @@ impl Tokens {
             .retain(|_, r| !(r.name == name && r.scope == scope));
     }
 
-    pub fn for_user(&self, user_id: &str) -> Vec<TokenRecord> {
-        let mut v: Vec<_> = self
-            .by_id
-            .values()
-            .filter(|r| r.user_id.as_deref() == Some(user_id))
-            .cloned()
-            .collect();
-        v.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-        v
-    }
-
-    pub fn get(&self, id: &str) -> Option<&TokenRecord> {
-        self.by_id.get(id)
-    }
-
-    /// Revoke one token; true if it existed.
-    pub fn revoke(&mut self, id: &str) -> bool {
-        self.by_id.remove(id).is_some()
-    }
-
-    /// Revoke every token of a user; returns their endpoint ids.
-    pub fn revoke_user(&mut self, user_id: &str) -> Vec<String> {
-        let mut eps = Vec::new();
-        self.by_id.retain(|_, r| {
-            let mine = r.user_id.as_deref() == Some(user_id);
-            if mine {
-                eps.extend(r.endpoint_id.clone());
-            }
-            !mine
-        });
-        eps
+    /// Revoke every token of a user.
+    pub fn revoke_user(&mut self, user_id: &str) {
+        self.by_id
+            .retain(|_, r| r.user_id.as_deref() != Some(user_id));
     }
 
     /// Revoke every token bound to `endpoint_id`.

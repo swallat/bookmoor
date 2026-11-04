@@ -33,12 +33,17 @@ keeps working unchanged. Set a password with
 The file is written in the new layout on the next save; going back to an older
 server version is not supported afterwards (keep a copy).
 
+Admin tokens never had a device, but they could read `/v1/tree`; they now get
+403 there, because no tree is theirs. Use a read token instead.
+
 ## API changes
 
 - `POST /v1/tokens` takes `user` (id or name). It may be left out while there is
   exactly one user, so existing callers keep working.
 - `GET|POST /v1/users`, `DELETE /v1/users/{id}` (admin token). Deleting a user
   removes their tree and revokes all their tokens.
+- Names starting with `u_` are reserved (generated ids look like that).
+  `user` is rejected for admin tokens.
 - CLI: `user create|passwd`, and `token create --user NAME`.
 
 ## Web UI (PR 2)

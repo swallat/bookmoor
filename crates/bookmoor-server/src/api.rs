@@ -34,6 +34,26 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The user a request names by id or name; with no name, the only user.
+    pub fn resolve_user(&self, user: Option<&str>) -> Result<String, String> {
+        match user {
+            Some(u) => self
+                .users
+                .get(u)
+                .or_else(|| self.users.by_name(u))
+                .map(|u| u.id.clone())
+                .ok_or_else(|| format!("no user called {u}")),
+            None => {
+                let mut all = self.users.list();
+                match (all.next(), all.next()) {
+                    (Some(u), None) => Ok(u.id.clone()),
+                    (None, _) => Err("there is no user yet: create one first".into()),
+                    _ => Err("several users exist: name the user".into()),
+                }
+            }
+        }
+    }
+
     /// A new user together with an empty bookmark tree.
     pub fn add_user(
         &mut self,
@@ -41,7 +61,23 @@ impl AppState {
         admin: bool,
         password: Option<&str>,
     ) -> Result<User, String> {
-        let user = self.users.create(name, admin, password)?;
+        let hash = match password {
+            Some(p) => {
+                crate::users::check_password(p)?;
+                Some(crate::users::hash_password(p)?)
+            }
+            None => None,
+        };
+        self.add_user_hashed(name, admin, hash)
+    }
+
+    pub fn add_user_hashed(
+        &mut self,
+        name: &str,
+        admin: bool,
+        hash: Option<String>,
+    ) -> Result<User, String> {
+        let user = self.users.create_hashed(name, admin, hash)?;
         self.engines.insert(user.id.clone(), Engine::new());
         Ok(user)
     }
@@ -482,19 +518,18 @@ async fn create_token(
 ) -> Result<(StatusCode, Json<CreatedToken>), ApiError> {
     need(&who, Scope::Admin)?;
     let mut st = s.lock().unwrap();
-    let uid = match &body.user {
-        Some(u) => Some(
-            st.users
-                .get(u)
-                .or_else(|| st.users.by_name(u))
-                .map(|u| u.id.clone())
-                .ok_or_else(|| ApiError::Unprocessable("no such user".into()))?,
-        ),
-        // Like before users existed: with a single user, tokens are theirs.
-        None if body.scope != Scope::Admin && st.users.len() == 1 => {
-            st.users.list().next().map(|u| u.id.clone())
+    let uid = if body.scope == Scope::Admin {
+        if body.user.is_some() {
+            return Err(ApiError::Unprocessable(
+                "an admin token belongs to no user".into(),
+            ));
         }
-        None => None,
+        None
+    } else {
+        Some(
+            st.resolve_user(body.user.as_deref())
+                .map_err(ApiError::Unprocessable)?,
+        )
     };
     let (token, rec) = st
         .issue_token(uid.as_deref(), &body.name, body.scope)
@@ -548,9 +583,21 @@ async fn create_user(
     State(s): State<Shared>,
     Json(body): Json<NewUser>,
 ) -> Result<(StatusCode, Json<UserInfo>), ApiError> {
+    // Hashing is slow on purpose: do it off the runtime and outside the lock.
+    let hash = match body.password {
+        Some(pw) => {
+            crate::users::check_password(&pw).map_err(ApiError::Unprocessable)?;
+            let hashed = tokio::task::spawn_blocking(move || crate::users::hash_password(&pw))
+                .await
+                .map_err(|_| ApiError::Storage)?
+                .map_err(ApiError::Unprocessable)?;
+            Some(hashed)
+        }
+        None => None,
+    };
     let mut st = s.lock().unwrap();
     let user = st
-        .add_user(&body.name, body.admin, body.password.as_deref())
+        .add_user_hashed(&body.name, body.admin, hash)
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok((StatusCode::CREATED, Json(UserInfo::from(&user))))

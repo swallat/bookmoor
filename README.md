@@ -178,7 +178,9 @@ is not logged. Behind a reverse proxy the address is the proxy's.
 
 Every user has their own bookmark tree; devices and tokens belong to a user
 (see [docs/multi-user.md](docs/multi-user.md)). Older single-user state files
-become the user `owner`. Users are managed with an admin token
+become the user `owner`. A fresh install has no user: start the server once (it creates the state file
+and prints the admin token), stop it, and run `user create` before the first
+`token create`; or create the user with the admin token while it runs. Users are managed with an admin token
 (`POST /v1/users`, `GET /v1/users`, `DELETE /v1/users/{id}`) or, with the
 server stopped:
 
