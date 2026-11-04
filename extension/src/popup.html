@@ -3,20 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <title>bookmoor</title>
+  <link rel="stylesheet" href="theme.css" />
   <style>
-    body { font: 14px system-ui, sans-serif; width: 300px; margin: 0; padding: 12px; }
-    h1 { font-size: 16px; margin: 0 0 8px; }
-    button { padding: 6px 12px; }
-    #sync { margin: 10px 0; word-break: break-word; }
-    #sync.bad { color: #b00020; font-weight: 600; }
-    a { color: inherit; }
+    body { width: 300px; padding: 14px; }
+    .brand img { width: 28px; height: 28px; border-radius: 6px; }
+    .brand h1 { font-size: 16px; }
+    #syncnow { margin-top: 14px; width: 100%; }
+    #sync { margin: 12px 0; word-break: break-word; }
+    .foot { font-size: 13px; }
   </style>
 </head>
 <body>
-  <h1>bookmoor</h1>
-  <button id="syncnow" type="button">Sync now</button>
+  <header class="brand"><img src="icons/logo.svg" alt="" /><h1>bookmoor</h1></header>
+  <button id="syncnow" class="primary" type="button">Sync now</button>
   <div id="sync" role="status"></div>
-  <a id="settings" href="#">Settings</a>
+  <div class="foot"><a id="settings" href="#">Settings</a></div>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

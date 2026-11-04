@@ -15,6 +15,7 @@ await build({
 cpSync("manifest.json", "dist/manifest.json");
 cpSync("src/options.html", "dist/options.html");
 cpSync("src/popup.html", "dist/popup.html");
+cpSync("src/theme.css", "dist/theme.css");
 cpSync("icons", "dist/icons", { recursive: true });
 
 mkdirSync("dist-firefox", { recursive: true });

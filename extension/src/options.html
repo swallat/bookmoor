@@ -2,34 +2,57 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>bookmoor settings</title>
+  <link rel="stylesheet" href="theme.css" />
   <style>
-    body { font: 14px system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 16px; }
-    label { display: block; margin-top: 1rem; font-weight: 600; }
-    input { width: 100%; box-sizing: border-box; padding: 6px; }
-    .row { display: flex; gap: 8px; margin-top: 6px; }
-    button { margin-top: 1rem; padding: 6px 12px; }
-    #status { margin-top: 1rem; }
-    #sync.bad { color: #b00020; font-weight: 600; }
+    main { max-width: 680px; margin: 0 auto; padding: 28px 16px 48px; }
+    header { margin-bottom: 20px; }
+    .tag { color: var(--muted); margin: 2px 0 0; }
+    section + section { margin-top: 16px; }
+    #sync { word-break: break-word; }
   </style>
 </head>
 <body>
-  <h1>bookmoor</h1>
-  <label for="url">Server URL</label>
-  <input id="url" type="url" placeholder="https://bookmoor.example.com" />
-  <label for="token">API token</label>
-  <input id="token" name="bookmoor-api-token" type="password" spellcheck="false" />
-  <div id="tokeninfo"></div>
-  <label>Extra headers (e.g. reverse-proxy header auth)</label>
-  <div id="headers"></div>
-  <button id="add" type="button">Add header</button>
-  <label>Extra query parameters (e.g. a share-link token)</label>
-  <div id="query"></div>
-  <button id="addq" type="button">Add parameter</button>
-  <div><button id="save" type="button">Save</button> <button id="syncnow" type="button">Sync now</button></div>
-  <div id="status" role="status"></div>
-  <h2>Sync status</h2>
-  <div id="sync" role="status"></div>
+  <main>
+    <header class="brand">
+      <img src="icons/logo.svg" alt="" />
+      <div>
+        <h1>bookmoor</h1>
+        <p class="tag">Your bookmarks, moored on your own server.</p>
+      </div>
+    </header>
+
+    <section class="card">
+      <h2>Server</h2>
+      <label for="url">Server URL</label>
+      <input id="url" type="url" placeholder="https://bookmoor.example.com" />
+      <label for="token">API token</label>
+      <input id="token" name="bookmoor-api-token" type="password" spellcheck="false" />
+      <div id="tokeninfo" class="hint"></div>
+
+      <label>Extra headers</label>
+      <div class="hint">For example reverse-proxy header auth.</div>
+      <div id="headers"></div>
+      <button id="add" class="add" type="button">Add header</button>
+
+      <label>Extra query parameters</label>
+      <div class="hint">For example a share-link token.</div>
+      <div id="query"></div>
+      <button id="addq" class="add" type="button">Add parameter</button>
+
+      <div class="actions">
+        <button id="save" class="primary" type="button">Save</button>
+        <button id="syncnow" type="button">Sync now</button>
+      </div>
+      <div id="status" role="status"></div>
+    </section>
+
+    <section class="card">
+      <h2>Sync status</h2>
+      <div id="sync" role="status"></div>
+    </section>
+  </main>
   <script type="module" src="options.js"></script>
 </body>
 </html>
