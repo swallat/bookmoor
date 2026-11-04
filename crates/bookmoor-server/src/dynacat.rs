@@ -4,7 +4,7 @@
 use bookmoor_core::dynacat::render_widget;
 use bookmoor_core::wire::TreeResponse;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::Path;
 
 /// Write the widget for `tree` to `path`, replacing the file atomically.
@@ -18,9 +18,18 @@ pub fn publish(path: &Path, tree: &TreeResponse) -> io::Result<bool> {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".tmp");
     let tmp = path.with_file_name(name);
-    fs::write(&tmp, yaml)?;
-    // Rename within one directory: Dynacat never sees a half-written file.
-    fs::rename(&tmp, path)?;
+    let written = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(yaml.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        // Rename within one directory: Dynacat never sees a half-written file.
+        fs::rename(&tmp, path)
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
     Ok(true)
 }
 

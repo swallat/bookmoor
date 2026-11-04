@@ -33,12 +33,11 @@ pub struct AppState {
 impl AppState {
     /// Refresh the Dynacat widget file. A failure is logged and never fails
     /// the sync: the dashboard is a view, the canonical tree is saved.
-    pub fn publish_dynacat(&self) {
+    pub fn publish_dynacat(&self) -> std::io::Result<()> {
         if let Some(path) = &self.dynacat_file {
-            if let Err(e) = crate::dynacat::publish(path, &self.engine.tree()) {
-                eprintln!("warning: cannot write {}: {e}", path.display());
-            }
+            crate::dynacat::publish(path, &self.engine.tree())?;
         }
+        Ok(())
     }
 
     /// A new token; a sync token comes with its own endpoint.
@@ -353,7 +352,9 @@ async fn sync(
             // a retry after a restart is judged the same way again.
             if st.engine.rev() != before {
                 save(&mut st)?;
-                st.publish_dynacat();
+                if let Err(e) = st.publish_dynacat() {
+                    eprintln!("warning: cannot write the Dynacat file: {e}");
+                }
             }
             Ok(Json(resp))
         }

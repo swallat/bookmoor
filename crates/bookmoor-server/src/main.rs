@@ -149,7 +149,9 @@ async fn main() {
     }
 
     state.dynacat_file = dynacat_file;
-    state.publish_dynacat();
+    if let Err(e) = state.publish_dynacat() {
+        fail(&format!("cannot write the Dynacat file: {e}"));
+    }
 
     let app = router(Arc::new(Mutex::new(state)));
     let listener = tokio::net::TcpListener::bind(bind)

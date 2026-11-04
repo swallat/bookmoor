@@ -42,6 +42,9 @@ Dynacat groups are flat (a title, optional color, a list of links).
 | subfolder | its own group, listed after its parent (depth first) |
 | bookmark | link with `title` and `url` |
 | empty folder, bookmark without http(s) URL | left out |
+| folder without name | `(unnamed)` |
+| nesting deeper than 32 levels | not rendered |
+| no bookmarks at all | one group "No bookmarks yet" with an empty link list (unverified that Dynacat accepts it) |
 | bookmark without title | URL used as title |
 
 Icons, descriptions, colors and the exact folder nesting are not represented.
