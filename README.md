@@ -1,34 +1,109 @@
-# bookmoor
+<p align="center">
+  <img src="assets/logo/bookmoor-icon.svg" alt="bookmoor logo" width="128" height="128">
+</p>
 
-Self-hosted bookmark sync: a browser extension plus a small server that keeps
-your bookmarks in sync with the dashboards and tools you actually use.
+<h1 align="center">bookmoor</h1>
 
-> Status: **scaffold (v0.0)**. Nothing is usable yet.
+<p align="center">
+  <strong>Self-hosted bookmark sync. Your bookmarks, moored on your own server.</strong>
+</p>
 
-## Idea
+<p align="center">
+  <a href="https://github.com/swallat/bookmoor/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/swallat/bookmoor/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-1D4E89"></a>
+  <img alt="Status: early alpha" src="https://img.shields.io/badge/status-early%20alpha-FFB703">
+  <img alt="Rust" src="https://img.shields.io/badge/server-Rust-1D4E89">
+  <img alt="TypeScript" src="https://img.shields.io/badge/extension-TypeScript-1D4E89">
+</p>
 
+bookmoor keeps the bookmarks of all your browsers in one canonical tree on a
+server you run yourself. No account with a third party, no cloud, one small
+binary and one JSON file.
+
+> **Status: early alpha (v0.0).** The sync engine, the server and the
+> extension work and are covered by tests, including end-to-end tests against
+> the real server binary. The extension has **not yet been tested in a real
+> Chrome or Firefox**, only against a fake browser API. Expect rough edges and
+> do not make bookmoor your only copy of anything important yet.
+
+## Why bookmoor
+
+- **Yours.** The server stores everything in a single JSON file you can back
+  up with `cp`. Only token hashes are stored, never the tokens.
+- **Convergent.** Several devices edit concurrently and end up with the same
+  tree. Changes merge per field with a three-way diff, so a rename on one
+  laptop and a new URL on another both survive.
+- **Safe by design.** Edit beats delete, folders never silently vanish, and
+  overwritten values are kept in an operation log. See
+  [conflict resolution](docs/sync-architecture.md#4-conflict-resolution).
+- **Offline-tolerant.** A device that was away for days catches up with
+  deltas when it reconnects, and survives MV3 service-worker restarts.
+- **Proxy-friendly.** Run it behind your reverse proxy. The extension can send
+  extra headers (for example Pangolin header auth) and the server supports a
+  path prefix. On top of that sit per-device API tokens with scopes and a
+  rate limit.
+
+## How it works
+
+```mermaid
+flowchart LR
+    C["Chrome extension"] <--> S[("bookmoor server<br/>canonical tree")]
+    F["Firefox extension"] <--> S
+    S -. planned .-> A["Adapters<br/>Dynacat, Dashy"]
 ```
-Chrome / Firefox extension  <->  bookmoor server (canonical tree)  <->  adapters
-                                                                      (Dynacat, Dashy, ...)
+
+Every endpoint is a peer. The extension reports what changed since the last
+sync, the server merges it into the canonical tree, assigns stable ids and
+revisions, and hands every other device only the delta. Positions use
+fractional indexes, so reordering never rewrites siblings.
+
+Details: [docs/sync-architecture.md](docs/sync-architecture.md) and
+[docs/architecture.md](docs/architecture.md).
+
+## What works today
+
+| Area | State |
+|---|---|
+| Core: data model, three-way diff and merge, fractional positions | Done, tested |
+| Server: HTTP API, JSON snapshot persistence, device tokens, rate limit | Done, tested |
+| Chrome extension: delta sync, id map, echo suppression | Done, tested against a fake API and the real server |
+| Firefox: root folder mapping | Partly (manifest still missing) |
+| Real-browser testing, multi-instance service-worker lease | Open |
+| Adapters for Dynacat and Dashy | Planned, requirements in [docs/adapters](docs/adapters) |
+
+## Quick start
+
+You need [mise](https://mise.jdx.dev) (or Rust and Node by hand).
+
+```bash
+git clone https://github.com/swallat/bookmoor && cd bookmoor
+mise install
+mise run build
+mise run server        # prints an admin token once, state in ./state.json
 ```
 
-- Every endpoint, browser or adapter, is a peer. The server merges changes
-  with a three-way diff against the last synced state.
-- Adapters talk to tools that have their own edit UI (Dynacat, Dashy), so
-  sync works in both directions.
-- Authentication has two layers: an optional reverse-proxy layer (custom
-  headers, e.g. Pangolin header auth) and bookmoor's own per-device API tokens.
-
-See [docs/architecture.md](docs/architecture.md) and [docs/sync-architecture.md](docs/sync-architecture.md).
+Then load `extension/dist` via `chrome://extensions` > Developer mode > Load
+unpacked, and enter the server URL and a device token in the extension
+options. Create device tokens as described under [Tokens](#tokens).
 
 ## Layout
 
 | Path | Content |
 |---|---|
-| `crates/bookmoor-core` | Data model, adapter trait, identity strategies, diff (Rust) |
-| `crates/bookmoor-server` | The self-hosted server (Rust, scaffold only) |
+| `crates/bookmoor-core` | Data model, adapter trait, identity strategies, diff and merge (Rust) |
+| `crates/bookmoor-server` | The self-hosted server (Rust) |
 | `extension/` | WebExtension in TypeScript (Chrome first) |
+| `schema/` | JSON Schema generated from the Rust types |
 | `docs/` | Architecture, ADRs, per-adapter requirements analyses |
+
+## Roadmap
+
+- **v0.1** Chrome extension against a real browser, hardening, first release.
+- **v0.2** Dynacat adapter, conflict strategies per endpoint.
+- **v0.3** Firefox, Dashy, a generic exec adapter.
+
+Not planned for v0.1: multi-user tenancy, end-to-end encryption, real-time
+push, and browser-specific fields such as favicons or the reading list.
 
 ## Development
 
@@ -71,6 +146,11 @@ needs `--allow-admin` for an admin token. The token is printed once. To
 replace a lost admin token, start the server with `BOOKMOOR_ADMIN_TOKEN` set to
 a new `bkm_<id>_<64 hex characters>`, or use the command above with
 `--scope admin --allow-admin`.
+
+## Contributing
+
+Issues and pull requests are welcome. Run `mise run check` before opening a PR;
+it runs what CI runs.
 
 ## License
 
