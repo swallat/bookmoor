@@ -42,6 +42,8 @@ pub struct AppState {
     pub dynacat_user: Option<String>,
     /// Default profile of an output that names none; the only one if unset.
     pub dynacat_profile: Option<String>,
+    /// Require the reverse proxy's client-certificate verdict (see `mtls`).
+    pub client_cert: Option<crate::mtls::ClientCertCheck>,
 }
 
 impl AppState {
@@ -476,6 +478,7 @@ async fn scope_gate(required: Scope, req: Request, next: Next) -> Result<Respons
 }
 
 pub fn router(state: Shared) -> Router {
+    let client_cert = state.lock().unwrap().client_cert.clone();
     let gate = |scope: Scope| {
         middleware::from_fn(move |req: Request, next: Next| scope_gate(scope, req, next))
     };
@@ -503,12 +506,20 @@ pub fn router(state: Shared) -> Router {
             delete(delete_user).route_layer(gate(Scope::Admin)),
         )
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
-    Router::new()
+    let app = Router::new()
         .route("/health", get(health))
         .merge(v1)
         .merge(crate::web::routes())
-        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(middleware::from_fn(cors_for_extensions))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
+    // Inside the CORS layer, so a refusal stays readable for the extension.
+    let app = match client_cert {
+        Some(check) => app.layer(middleware::from_fn_with_state(
+            check,
+            crate::mtls::require_client_cert,
+        )),
+        None => app,
+    };
+    app.layer(middleware::from_fn(cors_for_extensions))
         .layer(middleware::from_fn(log_requests))
         .with_state(state)
 }
@@ -773,6 +784,43 @@ mod tests {
         st.add_user("tester", false, None).unwrap();
         let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None, None);
         (Arc::new(Mutex::new(st)), admin)
+    }
+
+    #[tokio::test]
+    async fn client_cert_check_gates_everything_but_health() {
+        let (s, admin) = setup();
+        s.lock().unwrap().client_cert =
+            Some(crate::mtls::ClientCertCheck::parse("X-SSL-Client-Verify").unwrap());
+        let app = router(s);
+        let get = |uri: &str, hdr: Option<&str>| {
+            let mut b = Request::builder().uri(uri.to_string());
+            b = b.header("authorization", format!("Bearer {admin}"));
+            if let Some(h) = hdr {
+                b = b.header("x-ssl-client-verify", h);
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        let status = |r: Request<Body>| {
+            let app = app.clone();
+            async move { app.oneshot(r).await.unwrap().status() }
+        };
+        assert_eq!(status(get("/health", None)).await, StatusCode::OK);
+        assert_eq!(status(get("/v1/users", None)).await, StatusCode::FORBIDDEN);
+        assert_eq!(
+            status(get("/v1/users", Some("FAILED:certificate has expired"))).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(get("/v1/users", Some("SUCCESS"))).await,
+            StatusCode::OK
+        );
+        // Still needs the token on top of the certificate.
+        let no_token = Request::builder()
+            .uri("/v1/users")
+            .header("x-ssl-client-verify", "SUCCESS")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status(no_token).await, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

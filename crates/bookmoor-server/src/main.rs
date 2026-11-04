@@ -154,6 +154,9 @@ async fn main() {
     let mut state_path = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let mut dynacat_user = std::env::var("BOOKMOOR_DYNACAT_USER").ok();
     let mut dynacat_profile = std::env::var("BOOKMOOR_DYNACAT_PROFILE").ok();
+    let mut client_cert = std::env::var("BOOKMOOR_CLIENT_CERT_HEADER")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
     // `BOOKMOOR_DYNACAT_FILE` is a plain path; `BOOKMOOR_DYNACAT_OUTPUTS` holds
     // one spec per line (see `Output::parse`).
     let mut dynacat_outputs: Vec<bookmoor_server::dynacat::Output> = Vec::new();
@@ -188,6 +191,12 @@ async fn main() {
                         .into(),
                 );
             }
+            "--client-cert-header" => {
+                client_cert = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--client-cert-header needs NAME[=VALUE]")),
+                );
+            }
             "--dynacat-profile" => {
                 dynacat_profile = Some(
                     args.next()
@@ -218,7 +227,7 @@ async fn main() {
                 );
             }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]... [--dynacat-user USER] [--dynacat-profile PROFILE]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]... [--dynacat-user USER] [--dynacat-profile PROFILE] [--client-cert-header NAME[=VALUE|=*]]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -273,6 +282,10 @@ async fn main() {
             ));
         }
     }
+    state.client_cert = client_cert.map(|spec| {
+        bookmoor_server::mtls::ClientCertCheck::parse(&spec)
+            .unwrap_or_else(|e| fail(&format!("--client-cert-header: {e}")))
+    });
     state.dynacat_outputs = dynacat_outputs;
     state.dynacat_user = dynacat_user;
     state.dynacat_profile = dynacat_profile;
