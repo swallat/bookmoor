@@ -53,6 +53,8 @@ pub type Shared = Arc<Mutex<AppState>>;
 pub enum ApiError {
     Unauthorized,
     Forbidden,
+    /// 403 with a reason the caller may show to the user.
+    Denied(&'static str),
     Unprocessable(String),
     Storage,
     /// Seconds until the caller may try again.
@@ -73,6 +75,7 @@ impl IntoResponse for ApiError {
             // Uniform body so callers cannot tell why authentication failed.
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
+            ApiError::Denied(why) => (StatusCode::FORBIDDEN, why.to_string()),
             ApiError::Unprocessable(m) => (StatusCode::UNPROCESSABLE_ENTITY, m),
             ApiError::Storage => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -228,10 +231,8 @@ pub fn router(state: Shared) -> Router {
     let v1 = Router::new()
         .route("/v1/tree", get(tree).route_layer(gate(Scope::Read)))
         .route("/v1/sync", post(sync).route_layer(gate(Scope::Sync)))
-        .route(
-            "/v1/endpoints",
-            post(register_endpoint).route_layer(gate(Scope::Sync)),
-        )
+        // The handler checks the scope itself to explain a refusal.
+        .route("/v1/endpoints", post(register_endpoint))
         .route(
             "/v1/endpoints/{id}",
             delete(delete_endpoint).route_layer(gate(Scope::Sync)),
@@ -307,10 +308,17 @@ struct EndpointInfo {
 async fn register_endpoint(
     Extension(who): Extension<TokenRecord>,
 ) -> Result<Json<EndpointInfo>, ApiError> {
-    need(&who, Scope::Sync)?;
+    if !who.scope.allows(Scope::Sync) {
+        return Err(ApiError::Denied(
+            "this token cannot sync: create a device token with scope sync",
+        ));
+    }
     match who.endpoint_id {
         Some(endpoint_id) => Ok(Json(EndpointInfo { endpoint_id })),
-        None => Err(ApiError::Forbidden),
+        // Admin tokens manage tokens; only sync tokens come with a device.
+        None => Err(ApiError::Denied(
+            "this token has no device and cannot sync: create a device token with scope sync",
+        )),
     }
 }
 
@@ -381,6 +389,27 @@ mod tests {
         let mut st = AppState::default();
         let (admin, _) = st.tokens.create("admin", Scope::Admin, None);
         (Arc::new(Mutex::new(st)), admin)
+    }
+
+    #[tokio::test]
+    async fn tokens_without_a_device_are_told_why() {
+        let (s, admin) = setup();
+        let app = router(s);
+        let (st, v) = call(&app, "POST", "/v1/endpoints", Some(&admin), None).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(v["error"].as_str().unwrap().contains("scope sync"));
+        let (_, v) = call(
+            &app,
+            "POST",
+            "/v1/tokens",
+            Some(&admin),
+            Some(serde_json::json!({"name":"dash","scope":"read"})),
+        )
+        .await;
+        let read = v["token"].as_str().unwrap().to_string();
+        let (st, v) = call(&app, "POST", "/v1/endpoints", Some(&read), None).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(v["error"].as_str().unwrap().contains("scope sync"));
     }
 
     #[test]

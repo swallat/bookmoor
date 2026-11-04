@@ -134,6 +134,10 @@ is not logged. Behind a reverse proxy the address is the proxy's.
 
 ### Tokens
 
+The extension needs a **device token** (scope `sync`), one per browser. The
+admin token only manages tokens and has no device, so the server answers 403
+when it is used for syncing. The extension options show the last sync status.
+
 The first start with a new state file prints an admin token once. Only a hash
 is stored, so a lost token cannot be shown again. Device tokens come from
 `POST /v1/tokens` (admin token required) or, with the server stopped, from the

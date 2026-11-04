@@ -10,6 +10,7 @@
     .row { display: flex; gap: 8px; margin-top: 6px; }
     button { margin-top: 1rem; padding: 6px 12px; }
     #status { margin-top: 1rem; }
+    #sync.bad { color: #b00020; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -26,6 +27,8 @@
   <button id="addq" type="button">Add parameter</button>
   <div><button id="save" type="button">Save</button></div>
   <div id="status" role="status"></div>
+  <h2>Sync status</h2>
+  <div id="sync" role="status"></div>
   <script type="module" src="options.js"></script>
 </body>
 </html>

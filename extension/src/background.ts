@@ -1,6 +1,7 @@
-import { flush, type Outcome } from "./flow.ts";
+import { flush, last, type Outcome } from "./flow.ts";
 import { loadSettings } from "./settings.ts";
 import { chromeBookmarks, chromeStateStore } from "./storage.ts";
+import { describe, STATUS_KEY, type SyncStatus } from "./status.ts";
 import { httpTransport } from "./transport.ts";
 
 // Events only trigger a sync; what to send is computed from the bookmark
@@ -17,18 +18,27 @@ function schedulePush(): void {
   chrome.alarms.create(PUSH, { delayInMinutes: 0.5 });
 }
 
+async function setStatus(outcome: SyncStatus["outcome"], message: string): Promise<void> {
+  const status: SyncStatus = { at: new Date().toISOString(), outcome, message };
+  await chrome.storage.local.set({ [STATUS_KEY]: status });
+}
+
 // One round at a time; the service worker may be asked twice at once.
 let running: Promise<void> | null = null;
 
 async function round(): Promise<void> {
   const settings = await loadSettings();
-  if (!settings.serverUrl || !settings.token) return;
+  if (!settings.serverUrl || !settings.token) {
+    await setStatus("unconfigured", "Enter the server URL and a token in these settings.");
+    return;
+  }
   const outcome: Outcome = await flush(
     chromeBookmarks,
     chromeStateStore,
     httpTransport(settings),
     `${settings.serverUrl}\n${settings.token}\n${JSON.stringify(settings.query)}`,
   );
+  await setStatus(outcome, describe(outcome, last.error));
   const stored = await chrome.storage.local.get(FAILURES);
   const failures = outcome === "retry" ? ((stored[FAILURES] as number | undefined) ?? 0) + 1 : 0;
   await chrome.storage.local.set({ [FAILURES]: failures });
