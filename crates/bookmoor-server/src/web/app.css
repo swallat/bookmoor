@@ -62,12 +62,14 @@ p { margin: 0; }
 .brand { font-weight: 700; font-size: 1.125rem; letter-spacing: .01em; }
 .bar .who { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 32px; overflow-x: auto; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 32px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
 .tab {
   appearance: none; background: none; border: 0; cursor: pointer;
   padding: 10px 14px; font: inherit; color: var(--muted);
   border-bottom: 3px solid transparent; margin-bottom: -1px;
 }
+@media (max-width: 30rem) { .tab { padding: 10px 10px; } }
 .tab:hover { color: var(--ink); }
 .tab[aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--yellow); }
 
@@ -115,6 +117,7 @@ input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var
 .row .main { min-width: 0; }
 .row .name { font-weight: 600; overflow-wrap: anywhere; }
 .row .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row.stacked { flex-direction: column; align-items: flex-start; justify-content: flex-start; }
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); font-size: .8125rem; color: var(--muted); }
 .tag.warn { border-color: var(--yellow); color: var(--ink); background: var(--yellow-wash); }

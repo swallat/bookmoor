@@ -278,7 +278,7 @@ async function profilesView() {
       try { await api("POST", "profiles/" + p.id + "/rename", { name: input.value }); toast("Renamed to " + input.value.trim()); render(); }
       catch (x) { toast(x.message); }
     } }, input, h("button", { class: "btn small", type: "submit", text: "Save" }));
-    return h("div", { class: "row" },
+    return h("div", { class: "row stacked" },
       h("div", { class: "main" },
         h("div", { class: "name", text: p.name }),
         h("div", { class: "muted small", text: p.devices + (p.devices === 1 ? " device" : " devices") + ", " + p.bookmarks + (p.bookmarks === 1 ? " bookmark" : " bookmarks") })),
