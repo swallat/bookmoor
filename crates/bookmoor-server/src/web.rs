@@ -985,10 +985,24 @@ struct DynacatRow {
     /// `None` for outputs from the command line (read only here).
     id: Option<String>,
     file: String,
+    /// Where the file is written: the full path.
+    path: String,
+    /// When the file on disk was last changed (Unix seconds); `None` if it does not exist.
+    written: Option<u64>,
     profile: String,
     folder: String,
     style: bookmoor_core::dynacat::Style,
     error: Option<String>,
+}
+
+/// Modification time of an output file, in Unix seconds.
+fn file_written(path: &std::path::Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
 }
 
 #[derive(Serialize)]
@@ -1030,6 +1044,8 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
         outputs.push(DynacatRow {
             id: None,
             error: st.dynacat_errors.get(&file).cloned(),
+            path: file.clone(),
+            written: file_written(&o.file),
             file,
             profile,
             folder: o.folder.join("/"),
@@ -1037,9 +1053,12 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
         });
     }
     for o in &st.dynacat_ui {
+        let path = st.dynacat_dir.as_ref().map(|d| d.join(&o.file));
         outputs.push(DynacatRow {
             id: Some(o.id.clone()),
             file: o.file.clone(),
+            path: st.dynacat_key(&o.file),
+            written: path.as_deref().and_then(file_written),
             profile: profile_label(&st, &o.profile_id),
             folder: o.folder.join("/"),
             style: o.style.clone(),
