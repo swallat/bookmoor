@@ -62,7 +62,7 @@ jobs:
       # One release number: [workspace.package] version in Cargo.toml (see
       # scripts/sync-version.mjs). A release must come from the matching tag
       # vX.Y.Z and is built with exactly that version. Other runs (main, manual)
-      # are dev builds X.Y.Z.<run number>.<attempt>: browsers accept four-part
+      # are dev builds X.Y.Z.<run number>: browsers accept four-part
       # versions, Mozilla accepts each version once, and they sort after the
       # last release X.Y.Z, so bump Cargo.toml when you cut the next release.
       - name: Set the version
@@ -74,7 +74,7 @@ jobs:
             node scripts/sync-version.mjs --tag "${{ github.event.release.tag_name }}"
             VERSION="$BASE"
           else
-            VERSION="$BASE.${{ github.run_number }}.${{ github.run_attempt }}"
+            VERSION="$BASE.${{ github.run_number }}"
           fi
           node scripts/sync-version.mjs --check
           node -e '
