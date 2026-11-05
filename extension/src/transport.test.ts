@@ -34,7 +34,23 @@ test("a redirect or an HTML page means login required", async () => {
 test("an HTML error page is a plain error, not a login", async () => {
   const html = (status: number) => new Response("<html>", { status, headers: { "content-type": "text/html" } });
   assert.ok(!isLoginPage(html(502)));
-  assert.ok(isLoginPage(html(401)));
+  assert.ok(!isLoginPage(html(401)));
   const t = httpTransport(settings(), (async () => html(502)) as typeof fetch);
   await assert.rejects(t.tree(), HttpError);
+});
+
+test("a redirect inside the server is followed, one to a foreign login is a login", async () => {
+  const redirect = { type: "opaqueredirect", status: 0, headers: new Headers(), ok: false } as unknown as Response;
+  let calls = 0;
+  const same = httpTransport(settings(), (async (_u: unknown, i?: RequestInit) => {
+    calls++;
+    return i?.redirect === "manual" ? redirect : json({ rev: 1, nodes: [] });
+  }) as typeof fetch);
+  await same.tree();
+  assert.equal(calls, 2);
+  const foreign = httpTransport(settings(), (async (_u: unknown, i?: RequestInit) => {
+    if (i?.redirect === "manual") return redirect;
+    throw new TypeError("Failed to fetch");
+  }) as typeof fetch);
+  await assert.rejects(foreign.tree(), LoginRequired);
 });

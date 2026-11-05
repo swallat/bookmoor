@@ -48,7 +48,7 @@ function showToken(token: string): void {
     $<HTMLDetailsElement>("advanced").open = true;
     el.className = "hint bad";
   } else {
-    el.textContent = `Signed in. Device token ${token.slice(0, 8)}\u2026 is stored.`;
+    el.textContent = `Token stored: ${token.slice(0, 8)}\u2026`;
     el.className = "hint";
   }
 }
