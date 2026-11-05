@@ -118,3 +118,27 @@ mode 0600; the API never returns it, an empty one keeps it, and it carries
 over only to the same issuer and client ID) and applied live; flows in
 progress end. Environment/flags win: `oidc_env` makes PUT/DELETE answer 422
 and the saved config stays unused.
+
+## Editing users and two-factor authentication
+
+- **Admins edit users** in the Users tab: rename, set a password, make admin,
+  disable or enable (`POST /ui/api/users/{id}/edit`), remove. A disabled user
+  cannot sign in, their web sessions end and their device tokens answer 401;
+  nothing is deleted, so enabling brings everything back. Admins cannot
+  disable themselves.
+- **TOTP for the password login** (RFC 6238: SHA-1, 6 digits, 30 s, one step
+  of clock drift). Users set it up in the Account tab (secret to type in or an
+  `otpauth://` link; no QR code, because the strict CSP allows no library) and
+  confirm with a code. They get 10 single-use recovery codes, shown once and
+  stored as SHA-256 hashes. A code works once (replay guard). The secret is
+  kept in the state file in clear, because it must be readable to verify a
+  code: protect the file like the tokens.
+- **Login:** a correct password with an authenticator on answers
+  `{"state":"mfa","ticket":...}` and no cookie; `POST /ui/api/login/mfa` with
+  ticket and code finishes it. A ticket lives 5 minutes and takes 5 tries.
+- **Admins can require it** per user. Until the user has set it up, their
+  session may only call `/ui/api/mfa/*` and log out, and they cannot turn it
+  off again. An admin can **reset** it for another user (lost phone): the
+  authenticator and recovery codes go and their sessions end.
+- **Single sign-on** logins skip all this; the identity provider is the second
+  factor. Device tokens are unaffected (they are long random secrets).

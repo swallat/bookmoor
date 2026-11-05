@@ -25,6 +25,35 @@ pub struct User {
     /// Who the OIDC identity provider says this user is (single sign-on).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oidc: Option<crate::oidc::Identity>,
+    /// Cannot sign in, and their tokens stop working; nothing is deleted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
+    /// Password logins need a second factor; set by an admin.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mfa_required: bool,
+    /// Authenticator app for the password login (two-factor authentication).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp: Option<crate::mfa::Totp>,
+    /// SHA-256 hashes of the unused recovery codes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovery: Vec<String>,
+}
+
+impl User {
+    /// Defaults for the fields a caller usually does not care about.
+    pub fn blank() -> User {
+        User {
+            id: String::new(),
+            name: String::new(),
+            admin: false,
+            password_hash: None,
+            oidc: None,
+            disabled: false,
+            mfa_required: false,
+            totp: None,
+            recovery: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -178,7 +207,7 @@ impl Users {
             name: name.to_string(),
             admin,
             password_hash,
-            oidc: None,
+            ..User::blank()
         };
         self.by_id.insert(user.id.clone(), user.clone());
         Ok(user)
@@ -203,6 +232,21 @@ impl Users {
         let u = self.by_id.get_mut(id).ok_or("no such user")?;
         u.admin = admin;
         Ok(())
+    }
+
+    pub fn rename(&mut self, id: &str, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        check_name(name)?;
+        if self.by_name(name).is_some_and(|u| u.id != id) {
+            return Err(format!("user {name} already exists"));
+        }
+        let u = self.by_id.get_mut(id).ok_or("no such user")?;
+        u.name = name.to_string();
+        Ok(())
+    }
+
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut User> {
+        self.by_id.get_mut(id)
     }
 
     pub fn admin_count(&self) -> usize {

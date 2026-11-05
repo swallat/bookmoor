@@ -21,6 +21,8 @@ use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
+mod mfa;
+
 const INDEX: &str = include_str!("web/index.html");
 const APP_JS: &str = include_str!("web/app.js");
 const APP_CSS: &str = include_str!("web/app.css");
@@ -74,6 +76,7 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/users/{id}", delete(remove_user))
         .route("/ui/api/users/{id}/password", post(reset_password))
         .route("/ui/api/users/{id}/admin", post(set_admin))
+        .merge(mfa::routes())
         .layer(middleware::from_fn(page_headers))
 }
 
@@ -156,8 +159,18 @@ impl FromRequestParts<Shared> for Authed {
             .sessions
             .user_for(&session, Instant::now())
             .and_then(|id| st.users.get(id))
+            .filter(|u| !u.disabled)
             .cloned()
             .ok_or(ApiError::Unauthorized)?;
+        // An admin can require a second factor: until it is set up, the
+        // session may only do what the setup needs.
+        if user.mfa_required
+            && user.totp.is_none()
+            && !st.sessions.is_sso(&session)
+            && !mfa::allowed_before_setup(parts.uri.path())
+        {
+            return Err(ApiError::Denied("set up two-factor authentication first"));
+        }
         Ok(Authed { user, session })
     }
 }
@@ -192,6 +205,12 @@ struct Me {
     admin: bool,
     /// Linked to a single sign-on account.
     oidc: bool,
+    /// Has an authenticator app for the password login.
+    mfa: bool,
+    /// An admin requires one.
+    mfa_required: bool,
+    /// Required but not set up yet: the UI offers nothing else.
+    mfa_setup_needed: bool,
 }
 
 impl From<&User> for Me {
@@ -201,6 +220,9 @@ impl From<&User> for Me {
             name: u.name.clone(),
             admin: u.admin,
             oidc: u.oidc.is_some(),
+            mfa: u.totp.is_some(),
+            mfa_required: u.mfa_required,
+            mfa_setup_needed: u.mfa_required && u.totp.is_none(),
         }
     }
 }
@@ -263,11 +285,19 @@ async fn verify_blocking(hash: Option<String>, pw: String) -> bool {
 
 async fn session(State(s): State<Shared>, headers: HeaderMap) -> Json<serde_json::Value> {
     let st = s.lock().unwrap();
-    let user = cookie_value(&headers)
-        .and_then(|c| st.sessions.user_for(&c, Instant::now()).map(String::from))
+    let cookie = cookie_value(&headers);
+    let user = cookie
+        .as_deref()
+        .and_then(|c| st.sessions.user_for(c, Instant::now()).map(String::from))
         .and_then(|id| st.users.get(&id));
+    let sso = cookie.as_deref().is_some_and(|c| st.sessions.is_sso(c));
     let mut out = match user {
-        Some(u) => serde_json::json!({ "state": "user", "user": Me::from(u) }),
+        Some(u) => {
+            let mut me = Me::from(u);
+            // Single sign-on leaves the second factor to the provider.
+            me.mfa_setup_needed &= !sso;
+            serde_json::json!({ "state": "user", "user": me })
+        }
         None if !st.users.any_login() => serde_json::json!({ "state": "setup" }),
         None => serde_json::json!({ "state": "login" }),
     };
@@ -294,14 +324,20 @@ async fn login(
         throttle(&mut st, peer)?;
         st.users
             .by_name(&b.name)
+            .filter(|u| !u.disabled)
             .map(|u| (u.id.clone(), u.password_hash.clone()))
     };
     let ok = verify_blocking(found.as_ref().and_then(|f| f.1.clone()), b.password).await;
     let mut st = s.lock().unwrap();
     match found {
         Some((id, _)) if ok => match st.users.get(&id).cloned() {
-            Some(user) => Ok(signed_in(&mut st, &user)),
-            None => Err(ApiError::Unauthorized),
+            // The password was right; the second factor comes next.
+            Some(user) if user.totp.is_some() && !user.disabled => {
+                let ticket = st.sessions.start_ticket(&user.id, Instant::now());
+                Ok(Json(serde_json::json!({ "state": "mfa", "ticket": ticket })).into_response())
+            }
+            Some(user) if !user.disabled => Ok(signed_in(&mut st, &user)),
+            _ => Err(ApiError::Unauthorized),
         },
         _ => Err(ApiError::Unauthorized),
     }
@@ -699,8 +735,11 @@ fn finish_sso(
         }
         None => return back_to("", Some("unlinked")),
     };
+    if user.disabled {
+        return back_to("", Some("disabled"));
+    }
     let mut resp = back_to(ret, None);
-    let token = st.sessions.create(&user.id, Instant::now());
+    let token = st.sessions.create_with(&user.id, Instant::now(), true);
     resp.headers_mut().append(
         header::SET_COOKIE,
         set_cookie(
@@ -1155,6 +1194,12 @@ struct UserRow {
     admin: bool,
     has_password: bool,
     devices: usize,
+    disabled: bool,
+    /// Has an authenticator app.
+    mfa: bool,
+    mfa_required: bool,
+    /// Linked to a single sign-on account.
+    oidc: bool,
 }
 
 async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
@@ -1169,6 +1214,10 @@ async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
                 admin: u.admin,
                 has_password: u.password_hash.is_some(),
                 devices: counts.get(u.id.as_str()).copied().unwrap_or(0),
+                disabled: u.disabled,
+                mfa: u.totp.is_some(),
+                mfa_required: u.mfa_required,
+                oidc: u.oidc.is_some(),
             })
             .collect(),
     )
