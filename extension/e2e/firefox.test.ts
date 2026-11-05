@@ -74,6 +74,7 @@ async function configure(d: WebDriver, server: Server): Promise<void> {
   const token = await server.syncToken();
   await openOptions(d);
   await d.findElement({ id: "url" }).sendKeys(server.url);
+  await d.findElement({ css: "#advanced summary" }).click();
   await d.findElement({ id: "token" }).sendKeys(token);
   await d.findElement({ id: "save" }).click();
   const status = () => d.findElement({ id: "status" }).getText();

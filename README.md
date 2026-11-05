@@ -232,10 +232,10 @@ under Settings > Privacy & Security > Certificates). Not tested in a real browse
 
 Instead of a certificate you can keep Pangolin's normal login (Platform SSO or
 your OIDC provider) in front of Bookmoor, without shareable links. In the
-extension settings, turn on "Server is behind a login page". Sign in once to
-the Bookmoor URL in a browser tab; Pangolin sets its resource-session cookie
-(30 days by default), and the extension sends it with every request. The
-Bookmoor token stays required.
+extension settings, press "Sign in with Bookmoor": the sign-in window passes
+Pangolin's login and Bookmoor's, and Pangolin's resource-session cookie (30 days
+by default) is sent with every request afterwards. There is no setting for it;
+the extension notices a login in front of the server by itself.
 
 When the session ends (expiry, logout, revocation by the identity provider),
 the sync stops with "Sign in again", the toolbar icon shows a `!`, and the
@@ -254,7 +254,7 @@ NetBird's reverse proxy has no client-certificate authentication. Options, best 
   `X-Proxy-Key` on the service and add the same name and value under "Extra
   headers" in the extension. Do not use the `Authorization` presets: the proxy
   strips the matching header, so the Bookmoor token would never arrive.
-- **SSO:** turn on "Server is behind a login page" (see Pangolin SSO above).
+- **SSO:** just sign in with Bookmoor (see Pangolin SSO above).
   NetBird sessions last 24 hours, so expect a sign-in about once a day.
 
 ### Cloudflare Tunnel with Cloudflare Access
@@ -264,8 +264,8 @@ Put a Cloudflare Access application in front of the tunnel hostname.
 - **Service token:** create a service token with a policy of action "Service
   Auth" and add `CF-Access-Client-Id` and `CF-Access-Client-Secret` under
   "Extra headers". No browser login, and it works with the extension as it is.
-- **Browser login:** with an Allow policy and your identity provider, turn on
-  "Server is behind a login page". Cloudflare answers with a redirect to its
+- **Browser login:** with an Allow policy and your identity provider, sign in
+  with Bookmoor in the extension. Cloudflare answers with a redirect to its
   login, which the extension reports as "Sign in again"; the session length is
   set on the Access application. Not tested in a real browser; Cloudflare's
   cookie is sent to the app domain, so browsers that block third-party cookies

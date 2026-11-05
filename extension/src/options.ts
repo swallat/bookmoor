@@ -53,13 +53,14 @@ let applyingChoice = false;
 function showToken(token: string): void {
   const el = $("tokeninfo");
   if (!token) {
-    el.textContent = "No token stored.";
+    el.textContent = "Not signed in yet.";
     el.className = "hint";
   } else if (!token.startsWith("bkm_")) {
     el.textContent = `Stored: ${token.length} characters. Tokens normally start with "bkm_", check that you pasted the whole token.`;
+    $<HTMLDetailsElement>("advanced").open = true;
     el.className = "hint bad";
   } else {
-    el.textContent = `Stored: ${token.slice(0, 8)}\u2026 (${token.length} characters)`;
+    el.textContent = `Token stored: ${token.slice(0, 8)}\u2026`;
     el.className = "hint";
   }
 }
@@ -90,7 +91,7 @@ async function init(): Promise<void> {
   if (!url.value) url.value = s.serverUrl;
   if (!token.value) token.value = s.token;
   showToken(s.token);
-  $<HTMLInputElement>("sso").checked = s.sso;
+  if (s.headers.length || s.query.length) $<HTMLDetailsElement>("advanced").open = true;
   for (const h of s.headers) $("headers").append(pairRow(h));
   for (const q of s.query) $("query").append(pairRow(q, "Parameter"));
   $("add").addEventListener("click", () => $("headers").append(pairRow()));
@@ -113,7 +114,6 @@ async function init(): Promise<void> {
         token: $<HTMLInputElement>("token").value.trim(),
         headers: readPairs("headers"),
         query: readPairs("query"),
-        sso: $<HTMLInputElement>("sso").checked,
       });
       showToken($<HTMLInputElement>("token").value.trim());
       status.textContent = "Saved.";
