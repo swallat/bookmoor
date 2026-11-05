@@ -102,13 +102,19 @@ fn asset(kind: &'static str, body: &'static str) -> Response {
 /// Strict headers for the UI: nothing but our own files may load or run.
 async fn page_headers(req: Request, next: Next) -> Response {
     let is_api = req.uri().path().starts_with("/ui/api/");
+    let is_page = req.uri().path() == "/";
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
+    // Only the page itself may load images from other sites: the opt-in
+    // site icons of the Bookmarks tab. Scripts, styles and connections stay
+    // limited to this server.
     h.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-        ),
+        HeaderValue::from_static(if is_page {
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: https: http:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        } else {
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        }),
     );
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -1912,6 +1918,11 @@ mod tests {
                 "{csp}"
             );
             assert_eq!(r.headers()["x-frame-options"], "DENY");
+            // Remote images (site icons) are allowed on the page only.
+            assert_eq!(
+                csp.contains("img-src 'self' data: https: http:"),
+                path == "/"
+            );
         }
     }
 
