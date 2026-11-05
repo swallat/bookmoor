@@ -1,6 +1,6 @@
 {
   "name": "bookmoor-extension",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "private": true,
   "description": "Browser extension for bookmoor (Chrome first, Firefox later)",
   "license": "Apache-2.0",
