@@ -89,7 +89,7 @@ are kept but unused until the variables are removed.
   Cloudflare Access can use OIDC providers) the second sign-in runs without
   typing anything. The extension's "Sign in with bookmoor" works with it too.
 
-## Client certificates (mTLS)
+## Reverse proxies and client certificates (mTLS)
 
 Optionally the server can require a client certificate in addition to the
 token. TLS ends at your reverse proxy, so the proxy checks the certificate
@@ -183,14 +183,15 @@ Put a Cloudflare Access application in front of the tunnel hostname.
   may need an exception.
 
 In both cases the Bookmoor token stays required.
-### Log
+
+## Log
 
 The server writes one line per request to stderr: time (UTC), client address,
 token name (`-` if unauthenticated), method, path, status and duration. Query
 strings are left out because proxy setups may carry secrets there; `/health`
 is not logged. Behind a reverse proxy the address is the proxy's.
 
-### Web UI
+## Web UI
 
 The server serves a small admin page at `/` (behind your reverse proxy at the
 same path prefix; links are relative). Sign in with a user name and password to
@@ -202,7 +203,7 @@ memory, so a restart signs everyone out. The session cookie is `HttpOnly`,
 `SameSite=Strict` and `Secure` unless `--insecure-http` is set; pages are
 served with a strict Content-Security-Policy and no external resources.
 
-### Users
+## Users
 
 Every user has their own bookmark tree; devices and tokens belong to a user
 (see [multi-user.md](multi-user.md)). Older single-user state files
@@ -217,7 +218,7 @@ echo 'a long password' | bookmoor-server user create --name anna --admin --state
 echo 'a long password' | bookmoor-server user passwd --name anna --state state.json
 ```
 
-### Tokens
+## Tokens
 
 The extension needs a **device token** (scope `sync`), one per browser. The
 admin token only manages tokens and has no device, so the server answers 403

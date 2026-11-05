@@ -33,17 +33,19 @@ separate bookmark *apps*: you save links into them and manage them there. bookmo
 is different: your **browser's own bookmark bar stays the source of truth**, and
 bookmoor keeps every browser in step.
 
-| | bookmoor | typical bookmark manager |
+bookmoor does not replace those: they are for saving, tagging and archiving
+links. bookmoor is for keeping the bookmarks you already have in your browsers
+in sync, and for publishing them on a dashboard.
+
+| | bookmoor | bookmark manager apps |
 |---|---|---|
 | Where you work | The browser's normal bookmark bar and manager | The tool's web UI or its own extension |
-| Existing bookmarks | Synced as they are, folders and order included | Import once, then two copies |
-| Chrome and Firefox together | Yes, one tree for both | Rarely sync, mostly "save to" |
-| Dashboard output | Generates a Dynacat page per profile, kept current | Manual copy or none |
-| Server | One Rust binary, one JSON file, no database | Often a database, sometimes several containers |
-| Sign-in | Password, OIDC, TOTP, passkeys, proxy SSO | Varies |
+| Existing bookmarks | Synced as they are, folders and order included | Usually imported once |
+| Chrome and Firefox together | One tree for both | Depends on the tool |
+| Dashboard output | Dynacat page per profile, kept current | Not a goal |
+| Server | One Rust binary, one JSON file, no database | Varies |
 
-Closest in spirit is SyncMarks; bookmoor adds multiple profiles, merge-safe
-three-way sync, the dashboard output and the sign-in options above.
+SyncMarks, also on that list, is the closest in purpose (browser bookmark sync).
 
 ### What sets it apart
 
@@ -107,7 +109,7 @@ mise install && mise run build
 mise run server        # prints an admin token once, state in ./state.json
 ```
 
-Then open the web UI, create the first admin with the admin token, install the
+Then open the web UI, create the first admin with the admin token (CLI users and tokens: see [Users](docs/deployment.md#users)), install the
 extension and press **Sign in with bookmoor** in its settings. Extension builds
 come from the *Extension package* workflow and from releases; load Chrome's
 `extension/dist` unpacked. Everything about proxies, SSO, users and tokens:
