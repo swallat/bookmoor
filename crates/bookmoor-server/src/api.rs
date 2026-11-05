@@ -203,13 +203,7 @@ impl AppState {
     pub fn edit_profile(&mut self, profile: &str, edit: UiEdit) -> Result<(), String> {
         let engine = self.engines.get_mut(profile).ok_or("no such profile")?;
         let before = match &edit {
-            UiEdit::Remove { id } => {
-                let nodes = engine.tree().nodes;
-                nodes
-                    .iter()
-                    .any(|n| n.parent.as_deref() == Some(id.as_str()))
-                    .then_some(nodes)
-            }
+            UiEdit::Remove { id } if engine.has_children(id) => Some(engine.tree().nodes),
             _ => None,
         };
         engine.ui_edit(edit, &random_id("bk_"))?;

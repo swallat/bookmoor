@@ -24,7 +24,7 @@ function bmIndex(nodes) {
 }
 
 function bmTitle(n) {
-  return ROLE_LABELS[n.id] || n.title || (n.kind === "folder" ? "(unnamed folder)" : n.url);
+  return (Object.hasOwn(ROLE_LABELS, n.id) ? ROLE_LABELS[n.id] : null) || n.title || (n.kind === "folder" ? "(unnamed folder)" : n.url);
 }
 
 function bmHost(url) {
@@ -61,7 +61,7 @@ async function bookmarksView() {
     catch (e) { toast(e.message); render(); }
   };
   bmEdit = edit;
-  bmCurrent = ix;
+  bmFill = fill;
   fill();
 
   const search = h("input", { id: "bm-search", type: "text", placeholder: "Search titles and URLs", value: bmQuery,
@@ -74,7 +74,7 @@ async function bookmarksView() {
       profiles.length > 1 && h("select", { class: "bm-profile", "aria-label": "Profile",
         onchange: (e) => { bmProfile = e.target.value; bmQuery = ""; bmClosed.clear(); render(); } },
         profiles.map((p) => h("option", { value: p.id, text: p.name, selected: p.id === bmProfile })))),
-    h("p", { class: "muted", text: "This is what the server has saved for the profile. Changes here reach every browser of the profile on its next sync. Deleting a folder keeps a copy you can bring back with Restore under Profiles." }),
+    h("p", { class: "muted", text: "This is what the server has saved for the profile. Changes here reach every browser of the profile on its next sync. Deleting a folder that holds bookmarks saves the tree as the copy for Restore under Profiles, replacing an older copy, and Restore replaces everything." }),
     h("div", { class: "bm-tools" }, search,
       h("button", { class: "btn small", type: "button", text: "Add bookmark",
         onclick: () => bmDialog(ix, { kind: "bookmark", parent: "toolbar" }) }),
@@ -84,7 +84,7 @@ async function bookmarksView() {
 }
 
 let bmEdit = null;
-let bmCurrent = null;
+let bmFill = null;
 
 function bmRows(ix, q) {
   const out = [];
@@ -109,7 +109,7 @@ function bmRows(ix, q) {
 }
 
 function bmRow(ix, n, depth, searching, siblings, i) {
-  const protectedNode = n.id in ROLE_LABELS;
+  const protectedNode = Object.hasOwn(ROLE_LABELS, n.id);
   const row = h("div", { class: "row bm-row" + (n.kind === "folder" ? " folder" : "") });
   row.style.paddingLeft = (16 + depth * 20) + "px";
   const acts = h("div", { class: "actions" });
@@ -118,7 +118,7 @@ function bmRow(ix, n, depth, searching, siblings, i) {
     const open = !bmClosed.has(n.id);
     const nkids = (ix.kids.get(n.id) || []).length;
     main = h("button", { class: "bm-fold", type: "button", "aria-expanded": String(open),
-      onclick: () => { open ? bmClosed.add(n.id) : bmClosed.delete(n.id); render(); } },
+      onclick: () => { open ? bmClosed.add(n.id) : bmClosed.delete(n.id); bmFill(); } },
       h("span", { class: "bm-caret", "aria-hidden": "true", text: open ? "▾" : "▸" }),
       h("span", { class: "name", text: bmTitle(n) }), " ",
       h("span", { class: "tag", text: String(nkids) }));
@@ -195,7 +195,10 @@ function bmDialog(ix, init) {
       if (title !== n.title) body.title = title;
       if (isBookmark && url !== n.url) body.url = url;
       if (body.title !== undefined || body.url !== undefined) await api("POST", "profiles/" + bmProfile + "/edit", body);
-      if (target !== n.parent) await api("POST", "profiles/" + bmProfile + "/edit", { type: "move", id: n.id, parent: target });
+      if (target !== n.parent) {
+        try { await api("POST", "profiles/" + bmProfile + "/edit", { type: "move", id: n.id, parent: target }); }
+        catch (e) { close(); toast("Saved the changes, but moving failed: " + e.message); render(); return; }
+      }
     } else {
       await api("POST", "profiles/" + bmProfile + "/edit", { type: "add", parent: target, kind, title, url });
     }

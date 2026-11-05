@@ -374,6 +374,13 @@ impl Engine {
         }
     }
 
+    /// Whether `id` is a folder with something alive inside.
+    pub fn has_children(&self, id: &str) -> bool {
+        self.nodes
+            .values()
+            .any(|r| r.alive() && r.parent.as_deref() == Some(id))
+    }
+
     /// How many bookmarks (not folders) are alive.
     pub fn bookmark_count(&self) -> usize {
         self.nodes
