@@ -224,7 +224,7 @@ export async function startServer(bin: string): Promise<Server> {
     });
     return ((await res.json()) as { token: string }).token;
   };
-  const settings = (token: string): Settings => ({ serverUrl: url, token, headers: [], query: [], sso: false });
+  const settings = (token: string): Settings => ({ serverUrl: url, token, headers: [], query: [] });
   return {
     url,
     admin,
