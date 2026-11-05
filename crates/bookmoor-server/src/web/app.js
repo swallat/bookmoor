@@ -153,7 +153,7 @@ function setupView() {
 // ---- signed in ------------------------------------------------------------
 
 function shell(content) {
-  const tabs = [["devices", "Devices"], ["profiles", "Profiles"], ...(me.admin ? [["users", "Users"]] : []), ["account", "Account"]];
+  const tabs = [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -424,9 +424,9 @@ function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, profiles: profilesView, users: usersView, account: async () => accountView() };
+  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, account: async () => accountView() };
   if (tab === "users" && !me.admin) tab = "devices";
-  document.title = { devices: "Devices", profiles: "Profiles", users: "Users", account: "Account" }[tab] + " · bookmoor";
+  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }

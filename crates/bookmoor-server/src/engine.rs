@@ -121,6 +121,38 @@ pub struct Snapshot {
     seen: Vec<(String, String, Option<RejectReason>)>,
 }
 
+/// A change requested in the web UI.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum UiEdit {
+    Add {
+        parent: String,
+        kind: Kind,
+        title: String,
+        #[serde(default)]
+        url: Option<String>,
+        /// Sibling to insert before; `None` appends.
+        #[serde(default)]
+        before: Option<String>,
+    },
+    Update {
+        id: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+    },
+    Move {
+        id: String,
+        parent: String,
+        #[serde(default)]
+        before: Option<String>,
+    },
+    Remove {
+        id: String,
+    },
+}
+
 #[derive(Debug)]
 pub struct Engine {
     nodes: BTreeMap<String, Rec>,
@@ -348,6 +380,113 @@ impl Engine {
             .values()
             .filter(|r| r.alive() && r.kind == Kind::Bookmark)
             .count()
+    }
+
+    /// An edit made by the user in the web UI. It runs through the same
+    /// operations as a device's sync request, so every device receives it as
+    /// a normal change. `new_id` names the node of an add.
+    pub fn ui_edit(&mut self, edit: UiEdit, new_id: &str) -> Result<(), String> {
+        let rev = self.rev + 1;
+        let op_id = format!("ui_{rev}");
+        let body = match edit {
+            UiEdit::Add {
+                parent,
+                kind,
+                title,
+                url,
+                before,
+            } => {
+                let position = self.position_in(&parent, before.as_deref(), None)?;
+                OpBody::Add {
+                    id: new_id.to_string(),
+                    parent,
+                    position,
+                    kind,
+                    title,
+                    url,
+                }
+            }
+            UiEdit::Update { id, title, url } => OpBody::Update { id, title, url },
+            UiEdit::Move { id, parent, before } => {
+                if self.is_within(&parent, &id) {
+                    return Err("a folder cannot be moved into itself".into());
+                }
+                let position = self.position_in(&parent, before.as_deref(), Some(&id))?;
+                OpBody::Move {
+                    id,
+                    parent,
+                    position,
+                }
+            }
+            UiEdit::Remove { id } => OpBody::Remove { id },
+        };
+        if op_too_long(&body) {
+            return Err("a field is too long".into());
+        }
+        // Whatever is in the tree now is the newest state: nothing the
+        // server holds can be concurrent with this edit.
+        let since = self.rev;
+        let id = match &body {
+            OpBody::Add { id, .. }
+            | OpBody::Update { id, .. }
+            | OpBody::Move { id, .. }
+            | OpBody::Remove { id } => id.clone(),
+        };
+        if let OpBody::Update { .. } | OpBody::Move { .. } | OpBody::Remove { .. } = &body {
+            match self.nodes.get(&id) {
+                Some(r) if r.alive() => {}
+                _ => return Err("that bookmark no longer exists".into()),
+            }
+        }
+        if let OpBody::Add { parent, .. } | OpBody::Move { parent, .. } = &body {
+            match self.nodes.get(parent) {
+                Some(r) if r.alive() && r.kind == Kind::Folder => {}
+                _ => return Err("the target folder no longer exists".into()),
+            }
+        }
+        let op = Op { op_id, body };
+        self.apply("server", since, &op).map_err(|r| {
+            match r {
+                RejectReason::Invalid => {
+                    "that change is not allowed (is the URL complete, like https://example.com?)"
+                }
+                RejectReason::ConflictLost => "a folder cannot be moved into itself",
+                RejectReason::Gone => "that bookmark no longer exists",
+            }
+            .to_string()
+        })
+    }
+
+    /// A position in `parent` right before the sibling `before` (at the end
+    /// if `None`), ignoring the node `skip` that is being moved.
+    fn position_in(
+        &self,
+        parent: &str,
+        before: Option<&str>,
+        skip: Option<&str>,
+    ) -> Result<String, String> {
+        let mut kids: Vec<&Rec> = self
+            .nodes
+            .values()
+            .filter(|r| {
+                r.alive() && r.parent.as_deref() == Some(parent) && Some(r.id.as_str()) != skip
+            })
+            .collect();
+        kids.sort_by(|a, b| position::cmp_siblings((&a.position, &a.id), (&b.position, &b.id)));
+        let (prev, next) = match before {
+            None => (kids.last().map(|r| r.position.as_str()), None),
+            Some(b) => {
+                let i = kids
+                    .iter()
+                    .position(|r| r.id == b)
+                    .ok_or("the bookmark to place it before is not in that folder")?;
+                (
+                    i.checked_sub(1).map(|j| kids[j].position.as_str()),
+                    Some(kids[i].position.as_str()),
+                )
+            }
+        };
+        position::between(prev, next).map_err(|_| "cannot place it there".to_string())
     }
 
     /// Replace the whole tree by `nodes` (parent-first or not, as
