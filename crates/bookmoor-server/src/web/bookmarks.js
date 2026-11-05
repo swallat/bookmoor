@@ -135,7 +135,8 @@ function bmRows(ix, q) {
 function bmRow(ix, n, depth, searching, siblings, i) {
   const protectedNode = Object.hasOwn(ROLE_LABELS, n.id);
   const row = h("div", { class: "row bm-row" + (n.kind === "folder" ? " folder" : "") });
-  row.style.paddingLeft = (16 + depth * 20) + "px";
+  row.style.setProperty("--d", String(depth));
+  if (depth) row.classList.add("nested");
   const acts = h("div", { class: "actions" });
   let main;
   if (n.kind === "folder") {
@@ -144,6 +145,7 @@ function bmRow(ix, n, depth, searching, siblings, i) {
     main = h("button", { class: "bm-fold", type: "button", "aria-expanded": String(open),
       onclick: () => { open ? bmClosed.add(n.id) : bmClosed.delete(n.id); bmFill(); } },
       h("span", { class: "bm-caret", "aria-hidden": "true", text: open ? "▾" : "▸" }),
+      h("span", { class: "bm-folder-icon", "aria-hidden": "true", text: open ? "📂" : "📁" }),
       h("span", { class: "name", text: bmTitle(n) }), " ",
       h("span", { class: "tag", text: String(nkids) }));
     acts.append(
