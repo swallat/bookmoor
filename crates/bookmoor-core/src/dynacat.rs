@@ -450,7 +450,7 @@ mod tests {
             render_folder(&sample(), &[])
         );
         assert!(Style {
-            title: Some("a;b".into()),
+            title: Some(" ".into()),
             ..Style::default()
         }
         .check()
