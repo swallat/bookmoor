@@ -722,7 +722,8 @@ async function dynacatView() {
   // Without a directory the form cannot work, so say how to switch it on. A
   // command-line output already shows which directory Dynacat reads.
   const cli = info.outputs.find((o) => !o.id);
-  const guess = cli ? cli.file.replace(/[\\/][^\\/]*$/, "") || "/" : "/dynacat";
+  let guess = cli ? cli.file.replace(/[\\/][^\\/]*$/, "") : "";
+  if (!guess || guess === cli.file) guess = "/dynacat";
   let create = h("div", { class: "notice stack-sm", role: "note" },
     h("p", { text: "Adding and changing outputs here is switched off: the server does not know which directory Dynacat reads." }),
     h("p", { class: "small" }, "Set ", h("code", { text: "BOOKMOOR_DYNACAT_DIR=" + guess }),
