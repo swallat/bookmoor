@@ -56,6 +56,24 @@
       <div id="sync" role="status"></div>
       <button id="signin" type="button" hidden>Sign in</button>
     </section>
+
+    <section class="card">
+      <h2>Start over</h2>
+      <div class="hint">
+        Normally the first sync merges this browser with the server: links that are on both sides stay single,
+        the rest is added on both sides, and nothing is deleted. If that is not what you want:
+      </div>
+      <div class="actions">
+        <button id="adopt" type="button">Use the server's bookmarks here</button>
+        <button id="overwrite" type="button">Overwrite the server with this browser</button>
+      </div>
+      <div class="hint">
+        The first replaces this browser's synced bookmarks (toolbar, other, mobile) with what the server has.
+        The second empties the server's profile and uploads this browser's bookmarks; other devices of the
+        profile then follow. The server keeps a copy that can be restored in its web UI under Profiles.
+      </div>
+      <div id="startover" role="status"></div>
+    </section>
   </main>
   <script type="module" src="options.js"></script>
 </body>

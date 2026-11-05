@@ -294,6 +294,32 @@ everything. Matching algorithm:
    unmatched server nodes become local creates. Nothing is deleted in this
    phase, since there is no base to tell "deleted" from "never existed".
 
+#### Starting over, tidying, undoing
+
+Matching never deletes, so some situations need an explicit step:
+
+- **Synced into the wrong profile.** Give the browser a token of the right
+  profile (the device starts afresh and merges, nothing is deleted), then
+  clear the wrong profile in the web UI (Profiles > Clear). Its other devices
+  follow. Clear, Tidy up and Restore keep one backup per profile (the tree
+  before the change); Restore brings it back and becomes the new backup.
+- **Repeated links after merging hosts.** Web UI: Profiles > Tidy up. Within
+  one folder, bookmarks with the same URL collapse to the first and folders
+  with the same title are merged (recursively). Other folders are untouched.
+- **Rebuild from the server / overwrite the server.** Extension options >
+  Start over. "Use the server's bookmarks here" empties the synced roots of
+  the browser and takes the server's tree. "Overwrite the server" calls
+  `POST /v1/tree/reset` (sync scope, empties the token's profile, keeps a
+  backup) and uploads the browser's tree.
+
+- **Backup files.** Web UI > Profiles > Download saves a profile as a
+  JSON file (`format: bookmoor-profile`); Import replaces a profile by such a
+  file (validated first; the old tree becomes the Restore copy).
+
+All server-side tree replacements keep node ids, drop the change log and raise
+the horizon, so every device resyncs (`resync: true`) and then removes what is
+gone and creates what is new.
+
 ### 5.5 Applying remote changes without echo
 
 Writes made by the extension itself trigger the same `onCreated` etc. events.

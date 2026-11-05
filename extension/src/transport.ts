@@ -26,11 +26,13 @@ export function httpTransport(settings: Settings, fetchImpl: typeof fetch = fetc
       const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
       throw new HttpError(res.status, typeof body?.error === "string" ? body.error : undefined);
     }
+    if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   };
   return {
     endpoint: async () => (await call<{ endpoint_id: string }>("POST", "/v1/endpoints")).endpoint_id,
     sync: (req: SyncRequest) => call<SyncResponse>("POST", "/v1/sync", req),
     tree: () => call<TreeResponse>("GET", "/v1/tree"),
+    reset: () => call<void>("POST", "/v1/tree/reset"),
   };
 }

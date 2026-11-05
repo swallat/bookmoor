@@ -57,6 +57,42 @@ describe(`end to end (${kind})`, { skip: bin ? false : "bookmoor-server is not b
     }
   });
 
+  it("can take over the server's bookmarks and drop the browser's own", async () => {
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    await add(a, a.api.bar, "Kept", "https://kept.example/");
+    await sync(a);
+    await add(b, b.api.other, "Only here", "https://here.example/");
+    assert.equal(await b.startOver("adopt"), "ok");
+    await sync(a, b);
+    same(a, b);
+    const titles = [...b.api.nodes.values()].map((n) => n.title);
+    assert.ok(titles.includes("Kept") && !titles.includes("Only here"));
+  });
+
+  it("does not empty the browser when the server has nothing to take over", async () => {
+    const fresh = await server.browser(kind);
+    // A new token of the shared test profile sees what other tests left, so
+    // use a throwaway server tree: clear it first.
+    await fresh.transport.reset();
+    await add(fresh, fresh.api.bar, "Mine", "https://mine.example/");
+    assert.notEqual(await fresh.startOver("adopt"), "ok");
+    assert.ok([...fresh.api.nodes.values()].some((n) => n.title === "Mine"));
+  });
+
+  it("can overwrite the server and the other devices with one browser", async () => {
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    await add(a, a.api.bar, "Old", "https://old.example/");
+    await sync(a);
+    await add(b, b.api.other, "New", "https://new.example/");
+    assert.equal(await b.startOver("overwrite"), "ok");
+    await sync(a, b);
+    same(a, b);
+    const titles = [...a.api.nodes.values()].map((n) => n.title);
+    assert.ok(titles.includes("New") && !titles.includes("Old"));
+  });
+
   it("propagates renames, moves, reorders and deletes", async () => {
     const a = await server.browser(kind);
     const b = await server.browser(kind);
@@ -119,6 +155,7 @@ describe(`end to end (${kind})`, { skip: bin ? false : "bookmoor-server is not b
     const flaky: Transport = {
       endpoint: () => real.endpoint(),
       tree: () => real.tree(),
+      reset: () => real.reset(),
       sync: async (req) => {
         const resp = await real.sync(req);
         if (failNext && req.ops.length > 0) {

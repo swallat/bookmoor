@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::Extension;
 use axum::{Json, Router};
-use bookmoor_core::wire::{SyncRequest, SyncResponse, TreeResponse};
+use bookmoor_core::wire::{SyncRequest, SyncResponse, TreeResponse, WireNode};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -23,6 +23,25 @@ use std::time::{Duration, Instant};
 /// Largest accepted request body.
 pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
+/// A profile's tree as it was before a destructive change, so that the change
+/// can be undone (one per profile; the next change replaces it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Backup {
+    /// When it was taken, UTC.
+    pub at: String,
+    pub nodes: Vec<bookmoor_core::wire::WireNode>,
+}
+
+impl Backup {
+    /// Bookmarks (not folders) in the saved tree.
+    pub fn bookmarks(&self) -> usize {
+        self.nodes
+            .iter()
+            .filter(|n| n.kind == bookmoor_core::model::Kind::Bookmark)
+            .count()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct AppState {
     pub users: Users,
@@ -30,6 +49,8 @@ pub struct AppState {
     /// One bookmark tree per profile id.
     pub engines: BTreeMap<String, Engine>,
     pub tokens: Tokens,
+    /// The tree a profile had before its last clear, tidy-up or restore.
+    pub backups: BTreeMap<String, Backup>,
     /// Where state is saved after every change; `None` keeps it in memory.
     pub store: Option<crate::store::Store>,
     pub limits: crate::ratelimit::Limits,
@@ -152,6 +173,66 @@ impl AppState {
         Ok(p)
     }
 
+    /// Replace a profile's tree by `nodes`, keeping the old one as the
+    /// backup. Devices of the profile resync and then follow the new tree.
+    fn replace_tree(&mut self, profile: &str, nodes: &[WireNode]) -> Result<(), String> {
+        let engine = self.engines.get_mut(profile).ok_or("no such profile")?;
+        let had_content = engine.bookmark_count() > 0;
+        let before = engine.tree().nodes;
+        engine.replace_tree(nodes)?;
+        // An empty tree is no backup: a repeated clear must not push out the
+        // copy that was taken before the first one.
+        if had_content {
+            self.backups.insert(
+                profile.to_string(),
+                Backup {
+                    at: utc_now(),
+                    nodes: before,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Empty a profile (the tree stays recoverable with `restore_profile`).
+    pub fn clear_profile(&mut self, profile: &str) -> Result<(), String> {
+        let fresh = Engine::new().tree().nodes;
+        self.replace_tree(profile, &fresh)
+    }
+
+    /// Merge folders of the same name and drop repeated bookmarks; returns
+    /// what was done. A tree that is already tidy changes nothing.
+    pub fn dedupe_profile(&mut self, profile: &str) -> Result<crate::tidy::Tidied, String> {
+        let current = self
+            .engines
+            .get(profile)
+            .ok_or("no such profile")?
+            .tree()
+            .nodes;
+        let (nodes, done) = crate::tidy::dedupe(&current);
+        if done.total() > 0 {
+            self.replace_tree(profile, &nodes)?;
+        }
+        Ok(done)
+    }
+
+    /// Replace a profile's tree by an imported one (the old one becomes the
+    /// backup). Refused, with nothing changed, if the tree is not valid.
+    pub fn import_profile(&mut self, profile: &str, nodes: &[WireNode]) -> Result<(), String> {
+        self.replace_tree(profile, nodes)
+    }
+
+    /// Bring back the tree saved before the last clear or tidy-up (which
+    /// becomes the new backup, so restoring twice undoes itself).
+    pub fn restore_profile(&mut self, profile: &str) -> Result<(), String> {
+        let b = self
+            .backups
+            .get(profile)
+            .ok_or("there is no backup of this profile")?
+            .clone();
+        self.replace_tree(profile, &b.nodes)
+    }
+
     /// Remove a profile with its tree and tokens. A user keeps at least one.
     pub fn remove_profile(&mut self, user_id: &str, id: &str) -> Result<bool, String> {
         let mine = self.profiles.get(id).is_some_and(|p| p.user_id == user_id);
@@ -163,6 +244,7 @@ impl AppState {
         }
         self.tokens.revoke_profile(id);
         self.engines.remove(id);
+        self.backups.remove(id);
         Ok(self.profiles.remove(id))
     }
 
@@ -427,7 +509,7 @@ async fn log_requests(req: Request, next: Next) -> Response {
 }
 
 /// `2026-11-03T20:35:16Z` without a date library.
-fn utc_now() -> String {
+pub(crate) fn utc_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -484,6 +566,10 @@ pub fn router(state: Shared) -> Router {
     };
     let v1 = Router::new()
         .route("/v1/tree", get(tree).route_layer(gate(Scope::Read)))
+        .route(
+            "/v1/tree/reset",
+            post(reset_tree).route_layer(gate(Scope::Sync)),
+        )
         .route("/v1/sync", post(sync).route_layer(gate(Scope::Sync)))
         // The handler checks the scope itself to explain a refusal.
         .route("/v1/endpoints", post(register_endpoint))
@@ -555,6 +641,23 @@ async fn tree(
         .get(profile_id(&who)?)
         .ok_or(ApiError::Forbidden)?;
     Ok(Json(engine.tree()))
+}
+
+/// Empty the token's profile (an old tree stays restorable in the web UI).
+/// For a device that wants to start the server's data from its own bookmarks.
+async fn reset_tree(
+    State(s): State<Shared>,
+    Extension(who): Extension<TokenRecord>,
+) -> Result<StatusCode, ApiError> {
+    need(&who, Scope::Sync)?;
+    let mut st = s.lock().unwrap();
+    let pid = profile_id(&who)?.to_string();
+    st.clear_profile(&pid).map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    if let Err(e) = st.publish_dynacat(Some(&pid)) {
+        eprintln!("warning: cannot write the Dynacat file: {e}");
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn sync(
