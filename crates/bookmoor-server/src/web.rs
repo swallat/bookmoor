@@ -510,12 +510,7 @@ async fn connect(
         )));
     }
     let (token, rec) = st
-        .issue_token(
-            Some(&a.user.id),
-            b.profile.as_deref(),
-            &b.name,
-            Scope::Sync,
-        )
+        .issue_token(Some(&a.user.id), b.profile.as_deref(), &b.name, Scope::Sync)
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok(Json(serde_json::json!({
@@ -1653,31 +1648,43 @@ mod tests {
     async fn the_extension_signs_in_and_gets_a_fresh_sync_token() {
         let u = ui();
         let cookie = u.setup("anna").await;
-        let body = |redirect: &str, state: &str| {
-            serde_json::json!({"redirect": redirect, "state": state, "name": "Chrome on Linux"})
-        };
+        let body = |redirect: &str, state: &str| serde_json::json!({"redirect": redirect, "state": state, "name": "Chrome on Linux"});
         let good = "https://abcdefghijklmnop.chromiumapp.org/";
 
         // Needs a session and the request header.
         let (st, _, _) = u.post("/ui/api/connect", None, body(good, "s1")).await;
         assert_eq!(st, StatusCode::UNAUTHORIZED);
         let (st, _, _) = u
-            .call("POST", "/ui/api/connect", Some(&cookie), Some(body(good, "s1")), false)
+            .call(
+                "POST",
+                "/ui/api/connect",
+                Some(&cookie),
+                Some(body(good, "s1")),
+                false,
+            )
             .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
 
         // A foreign redirect or a bad state gets no token.
         let (st, _, _) = u
-            .post("/ui/api/connect", Some(&cookie), body("https://evil.example/", "s1"))
+            .post(
+                "/ui/api/connect",
+                Some(&cookie),
+                body("https://evil.example/", "s1"),
+            )
             .await;
         assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
-        let (st, _, _) = u.post("/ui/api/connect", Some(&cookie), body(good, "a b")).await;
+        let (st, _, _) = u
+            .post("/ui/api/connect", Some(&cookie), body(good, "a b"))
+            .await;
         assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
 
         // Every sign-in issues a new device token, handed back in the fragment.
         let mut tokens = Vec::new();
         for _ in 0..2 {
-            let (st, v, _) = u.post("/ui/api/connect", Some(&cookie), body(good, "s1")).await;
+            let (st, v, _) = u
+                .post("/ui/api/connect", Some(&cookie), body(good, "s1"))
+                .await;
             assert_eq!(st, StatusCode::OK);
             let url = v["url"].as_str().unwrap();
             let (base, frag) = url.split_once('#').unwrap();
@@ -1690,7 +1697,9 @@ mod tests {
             tokens.push(token.to_string());
         }
         assert_ne!(tokens[0], tokens[1]);
-        let (_, devices, _) = u.call("GET", "/ui/api/devices", Some(&cookie), None, false).await;
+        let (_, devices, _) = u
+            .call("GET", "/ui/api/devices", Some(&cookie), None, false)
+            .await;
         assert_eq!(devices.as_array().unwrap().len(), 2);
     }
 }
