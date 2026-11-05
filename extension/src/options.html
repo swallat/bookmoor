@@ -86,7 +86,7 @@
     <h2 id="choicetitle">The server already has bookmarks</h2>
     <p class="hint">
       This profile on the server and this browser both contain bookmarks. Nothing has been synced yet.
-      Choose how to start (the server keeps a copy of what it replaces, restorable in its web UI under Profiles):
+      Choose how to start:
     </p>
     <div class="choices">
       <button id="choice-merge" type="button" class="primary">Merge both</button>
@@ -94,7 +94,7 @@
       <button id="choice-adopt" type="button">Replace this browser's bookmarks</button>
       <p class="hint">Takes over the server's bookmarks. Links that only exist here are removed from this browser.</p>
       <button id="choice-overwrite" type="button">Replace the server's bookmarks</button>
-      <p class="hint">Uploads this browser's bookmarks. Links that only exist on the server are removed from the profile and its other devices.</p>
+      <p class="hint">Uploads this browser's bookmarks. Links that only exist on the server are removed from the profile and its other devices; the server keeps a copy, restorable in its web UI under Profiles.</p>
     </div>
     <div class="actions"><button id="choice-later" type="button">Decide later</button></div>
   </dialog>

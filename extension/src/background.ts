@@ -26,7 +26,7 @@ async function setStatus(outcome: SyncStatus["outcome"], message: string): Promi
 // One round at a time; the service worker may be asked twice at once.
 let running: Promise<void> | null = null;
 
-async function round(restart?: Restart): Promise<void> {
+async function round(restart?: Restart, manual = false): Promise<void> {
   const settings = await loadSettings();
   if (!settings.serverUrl || !settings.token) {
     await setStatus("unconfigured", "Enter the server URL and a token in these settings.");
@@ -42,6 +42,12 @@ async function round(restart?: Restart): Promise<void> {
     );
     await chrome.action.setBadgeText({ text: "!" });
     return;
+  }
+  // While the first-sync question is open, background rounds change nothing:
+  // only "Sync now" or Save look again.
+  if (!restart && !manual) {
+    const prior = (await chrome.storage.local.get(STATUS_KEY))[STATUS_KEY] as SyncStatus | undefined;
+    if (prior?.outcome === "decide") return;
   }
   const identity = `${settings.serverUrl}\n${settings.token}\n${JSON.stringify(settings.query)}`;
   const outcome: Outcome = restart
@@ -60,8 +66,8 @@ async function round(restart?: Restart): Promise<void> {
   }
 }
 
-function run(restart?: Restart): Promise<void> {
-  running ??= round(restart)
+function run(restart?: Restart, manual = false): Promise<void> {
+  running ??= round(restart, manual)
     .catch((e) => console.warn("bookmoor:", e))
     .finally(() => {
       running = null;
@@ -105,7 +111,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, respond) => {
     return true;
   }
   if (m?.type === "bookmoor-sync-now") {
-    void run().then(() => respond({ ok: true }));
+    void run(undefined, true).then(() => respond({ ok: true }));
     return true;
   }
   if (m?.type === "bookmoor-start-over" && (m.mode === "adopt" || m.mode === "overwrite" || m.mode === "merge")) {

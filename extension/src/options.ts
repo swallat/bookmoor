@@ -37,14 +37,17 @@ function showSync(status: SyncStatus | undefined): void {
   $("signin").hidden = status?.outcome !== "login";
   const dialog = $<HTMLDialogElement>("choice");
   if (status?.outcome === "decide") {
-    if (!dialog.open && !dismissedChoice) dialog.showModal();
-  } else if (dialog.open) {
-    dialog.close();
+    if (!dialog.open && !dismissedChoice && !applyingChoice) dialog.showModal();
+  } else {
+    dismissedChoice = false;
+    if (dialog.open) dialog.close();
   }
 }
 
 /** The user closed the dialog with "Decide later"; do not reopen it until the next sync. */
-let dismissedChoice = false
+let dismissedChoice = false;
+/** A choice from the dialog is being applied; the status still says "decide" until it is done. */
+let applyingChoice = false;
 
 /** What is stored, without showing the secret: lets the user see that the token arrived intact. */
 function showToken(token: string): void {
@@ -165,7 +168,10 @@ $("adopt").addEventListener("click", () => void startOver("adopt"));
 for (const mode of ["merge", "adopt", "overwrite"] as const) {
   $(`choice-${mode}`).addEventListener("click", () => {
     $<HTMLDialogElement>("choice").close();
-    void startOver(mode, false);
+    applyingChoice = true;
+    void startOver(mode, false).finally(() => {
+      applyingChoice = false;
+    });
   });
 }
 $("choice").addEventListener("cancel", () => {
