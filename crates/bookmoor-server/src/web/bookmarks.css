@@ -39,3 +39,24 @@
 .bm-dialog .btn { margin-top: 12px; }
 .bm-icon { width: 20px; height: 20px; vertical-align: -4px; margin-right: 8px; border-radius: 3px; }
 .bm-icon.missing { display: none; }
+
+/* Folder sidebar + folder contents, like a tag tree next to its list. */
+.bm-split { display: grid; grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr); gap: 16px; align-items: start; }
+.bm-side { padding: 8px; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; }
+.bm-node { display: flex; align-items: center; padding-left: calc(var(--d) * 14px); }
+.bm-twist { appearance: none; background: none; border: 0; font: inherit; color: var(--blue); width: 1.6em; min-height: 32px; flex: none; cursor: pointer; padding: 0; }
+.bm-pick {
+  appearance: none; background: none; border: 0; font: inherit; color: var(--ink); cursor: pointer; text-align: left;
+  display: flex; flex: 1; justify-content: space-between; gap: 8px; align-items: center; min-height: 32px;
+  padding: 2px 8px; border-radius: 6px; min-width: 0;
+}
+.bm-pick .name { font-weight: 500; overflow-wrap: anywhere; }
+.bm-pick:hover { background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.bm-node.sel .bm-pick { background: color-mix(in srgb, var(--blue) 22%, transparent); }
+.bm-node.sel .name { font-weight: 700; }
+.bm-crumbs { margin: 0 0 8px; min-height: 1.5em; }
+.bm-crumb { appearance: none; background: none; border: 0; font: inherit; color: var(--blue); cursor: pointer; padding: 0; text-decoration: underline; }
+@media (max-width: 52rem) {
+  .bm-split { grid-template-columns: minmax(0, 1fr); }
+  .bm-side { position: static; max-height: 14rem; }
+}

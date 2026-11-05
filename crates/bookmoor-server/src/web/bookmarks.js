@@ -5,7 +5,8 @@
 
 let bmProfile = null; // profile id being shown
 let bmQuery = "";
-const bmClosed = new Set(); // folder ids the user collapsed
+const bmClosed = new Set(); // folder ids the user collapsed in the sidebar
+let bmSel = "toolbar"; // folder shown in the main pane
 
 // Site icons are off until the user turns them on: each one is fetched by the
 // browser from the bookmarked site itself (/favicon.ico), which tells that
@@ -72,8 +73,15 @@ async function bookmarksView() {
   const ix = bmIndex(tree.nodes);
   const count = tree.nodes.filter((n) => n.kind === "bookmark").length;
 
+  if (!ix.byId.has(bmSel) || ix.byId.get(bmSel).kind !== "folder") bmSel = ix.root.id;
   const list = h("div", { class: "list bm-list" });
-  const fill = () => list.replaceChildren(...bmRows(ix, bmQuery.trim().toLowerCase()));
+  const side = h("nav", { class: "bm-side list", "aria-label": "Folders" });
+  const crumbs = h("nav", { class: "bm-crumbs", "aria-label": "Folder path" });
+  const fill = () => {
+    side.replaceChildren(...bmSide(ix));
+    crumbs.replaceChildren(...bmCrumbs(ix));
+    list.replaceChildren(...bmRows(ix, bmQuery.trim().toLowerCase()));
+  };
 
   const edit = async (body, done) => {
     try { await api("POST", "profiles/" + bmProfile + "/edit", body); if (done) toast(done); render(); }
@@ -91,7 +99,7 @@ async function bookmarksView() {
     h("div", { class: "head" },
       h("h2", { text: count + (count === 1 ? " bookmark" : " bookmarks") }),
       profiles.length > 1 && h("select", { class: "bm-profile", "aria-label": "Profile",
-        onchange: (e) => { bmProfile = e.target.value; bmQuery = ""; bmClosed.clear(); render(); } },
+        onchange: (e) => { bmProfile = e.target.value; bmQuery = ""; bmClosed.clear(); bmSel = "toolbar"; render(); } },
         profiles.map((p) => h("option", { value: p.id, text: p.name, selected: p.id === bmProfile })))),
     h("p", { class: "muted", text: "This is what the server has saved for the profile. Changes here reach every browser of the profile on its next sync. Deleting a folder that holds bookmarks saves the tree as the copy for Restore under Profiles, replacing an older copy, and Restore replaces everything." }),
     h("label", { class: "check" },
@@ -101,10 +109,57 @@ async function bookmarksView() {
       h("span", { class: "hint", text: " Your browser then asks each site for its icon, so those sites see your IP address. Off by default." })),
     h("div", { class: "bm-tools" }, search,
       h("button", { class: "btn small", type: "button", text: "Add bookmark",
-        onclick: () => bmDialog(ix, { kind: "bookmark", parent: "toolbar" }) }),
+        onclick: () => bmDialog(ix, { kind: "bookmark", parent: bmSel }) }),
       h("button", { class: "btn quiet small", type: "button", text: "Add folder",
-        onclick: () => bmDialog(ix, { kind: "folder", parent: "toolbar" }) })),
-    list);
+        onclick: () => bmDialog(ix, { kind: "folder", parent: bmSel }) })),
+    h("div", { class: "bm-split" }, side, h("div", { class: "bm-main" }, crumbs, list)));
+}
+
+/** Count of bookmarks in a folder, including everything below it. */
+function bmCount(ix, f) {
+  let c = 0;
+  for (const n of ix.kids.get(f.id) || []) c += n.kind === "folder" ? bmCount(ix, n) : 1;
+  return c;
+}
+
+/** Sidebar: the folder tree with counts. Click selects, the caret folds. */
+function bmSide(ix) {
+  const out = [];
+  const walk = (f, depth) => {
+    for (const n of ix.kids.get(f.id) || []) {
+      if (n.kind !== "folder") continue;
+      const sub = (ix.kids.get(n.id) || []).some((k) => k.kind === "folder");
+      const open = !bmClosed.has(n.id);
+      const row = h("div", { class: "bm-node" + (n.id === bmSel ? " sel" : "") });
+      row.style.setProperty("--d", String(depth));
+      row.append(
+        sub ? h("button", { class: "bm-twist", type: "button", "aria-label": (open ? "Fold " : "Unfold ") + bmTitle(n),
+          "aria-expanded": String(open), text: open ? "▾" : "▸",
+          onclick: () => { open ? bmClosed.add(n.id) : bmClosed.delete(n.id); bmFill(); } })
+          : h("span", { class: "bm-twist" }),
+        h("button", { class: "bm-pick", type: "button", "aria-current": n.id === bmSel ? "true" : null,
+          onclick: () => { bmSel = n.id; bmFill(); } },
+          h("span", { class: "name", text: bmTitle(n) }),
+          h("span", { class: "tag", text: String(bmCount(ix, n)) })));
+      out.push(row);
+      if (sub && open) walk(n, depth + 1);
+    }
+  };
+  walk(ix.root, 0);
+  return out;
+}
+
+function bmCrumbs(ix) {
+  const chain = [];
+  for (let n = ix.byId.get(bmSel); n && n.parent != null; n = ix.byId.get(n.parent)) chain.unshift(n);
+  const out = [];
+  chain.forEach((n, i) => {
+    if (i) out.push(h("span", { class: "muted", "aria-hidden": "true", text: " / " }));
+    out.push(i === chain.length - 1
+      ? h("strong", { text: bmTitle(n) })
+      : h("button", { class: "bm-crumb", type: "button", text: bmTitle(n), onclick: () => { bmSel = n.id; bmFill(); } }));
+  });
+  return out;
 }
 
 let bmEdit = null;
@@ -120,15 +175,9 @@ function bmRows(ix, q) {
     if (hits.length > 200) out.push(h("p", { class: "empty", text: "Showing 200 of " + hits.length + ". Narrow the search." }));
     return out;
   }
-  const walk = (folder, depth) => {
-    const kids = ix.kids.get(folder.id) || [];
-    kids.forEach((n, i) => {
-      out.push(bmRow(ix, n, depth, false, kids, i));
-      if (n.kind === "folder" && !bmClosed.has(n.id)) walk(n, depth + 1);
-    });
-  };
-  walk(ix.root, 0);
-  if (!out.length) out.push(h("p", { class: "empty", text: "No bookmarks saved yet." }));
+  const kids = ix.kids.get(bmSel) || [];
+  kids.forEach((n, i) => out.push(bmRow(ix, n, 0, false, kids, i)));
+  if (!out.length) out.push(h("p", { class: "empty", text: "This folder is empty." }));
   return out;
 }
 
@@ -139,14 +188,11 @@ function bmRow(ix, n, depth, searching, siblings, i) {
   const acts = h("div", { class: "actions" });
   let main;
   if (n.kind === "folder") {
-    const open = !bmClosed.has(n.id);
-    const nkids = (ix.kids.get(n.id) || []).length;
-    main = h("button", { class: "bm-fold", type: "button", "aria-expanded": String(open),
-      onclick: () => { open ? bmClosed.add(n.id) : bmClosed.delete(n.id); bmFill(); } },
-      h("span", { class: "bm-caret", "aria-hidden": "true", text: open ? "▾" : "▸" }),
-      h("span", { class: "bm-folder-icon", "aria-hidden": "true", text: open ? "📂" : "📁" }),
+    main = h("button", { class: "bm-fold", type: "button", title: "Open folder",
+      onclick: () => { bmSel = n.id; bmFill(); } },
+      h("span", { class: "bm-folder-icon", "aria-hidden": "true", text: "📁" }),
       h("span", { class: "name", text: bmTitle(n) }), " ",
-      h("span", { class: "tag", text: String(nkids) }));
+      h("span", { class: "tag", text: String(bmCount(ix, n)) }));
     acts.append(
       h("button", { class: "btn quiet small", type: "button", text: "Add here", title: "Add a bookmark to this folder",
         onclick: () => bmDialog(ix, { kind: "bookmark", parent: n.id }) }));
