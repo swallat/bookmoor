@@ -140,7 +140,16 @@ input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var
 /* sign in */
 .center { max-width: 24rem; margin: 0 auto; padding: 12vh 16px 48px; }
 .center .logo { width: 56px; height: 56px; display: block; margin-bottom: 20px; }
-.center form { margin-top: 24px; }
+.center > * + * { margin-top: 16px; }
+.center > h1 { margin-top: 0; }
+.center > h1 + p.muted { margin-top: 8px; }
+.center > .logo + h1 { margin-top: 0; }
+.center form { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-top: 24px; }
+.center form .stack-sm { align-self: stretch; }
+.center form .error { min-height: 0; }
+.center .btn { max-width: 100%; }
+.center .or { margin-top: 20px; }
+.center .start-over { margin-top: 24px; }
 .noscript { padding: 24px; }
 .toast {
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);

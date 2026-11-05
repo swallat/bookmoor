@@ -181,7 +181,7 @@ function loginView() {
         await start();
       } catch (x) { toast(passkeyError(x).message); e.currentTarget.disabled = false; }
     } })),
-    (sso || passkeysSupported()) && h("p", { class: "muted", text: "or with a password" }),
+    (sso || passkeysSupported()) && h("p", { class: "muted or", text: "or with a password" }),
     form([
       h("div", { class: "stack-sm" },
         field("name", "User name", { type: "text", autocomplete: "username", required: true, autofocus: true }),
@@ -221,10 +221,10 @@ function mfaLoginView(r) {
     : "Confirm it is you with one of your passkeys.";
   centered(usePasskey && !r.totp ? "Use your passkey" : "Enter your code", text, [
     passkeyBtn && h("p", {}, passkeyBtn),
-    passkeyBtn && codeForm && h("p", { class: "muted", text: "or with a code" }),
+    passkeyBtn && codeForm && h("p", { class: "muted or", text: "or with a code" }),
     codeForm,
     !usePasskey && !r.totp && h("p", { class: "error", role: "alert", text: "This browser cannot use passkeys. Sign in on a device that can, or ask an admin to reset them." }),
-    h("p", {}, h("button", { class: "btn quiet small", type: "button", text: "Start over", onclick: () => start() }))]);
+    h("p", { class: "start-over" }, h("button", { class: "btn quiet small", type: "button", text: "Start over", onclick: () => start() }))]);
 }
 
 function setupView() {
