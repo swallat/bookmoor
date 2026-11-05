@@ -27,6 +27,8 @@ const INDEX: &str = include_str!("web/index.html");
 const APP_JS: &str = include_str!("web/app.js");
 const APP_CSS: &str = include_str!("web/app.css");
 const LOGO: &str = include_str!("web/logo.svg");
+const BOOKMARKS_JS: &str = include_str!("web/bookmarks.js");
+const BOOKMARKS_CSS: &str = include_str!("web/bookmarks.css");
 
 const COOKIE: &str = "bookmoor_session";
 const CSRF_HEADER: &str = "x-bookmoor-ui";
@@ -48,6 +50,14 @@ pub fn routes() -> Router<Shared> {
             get(|| async { asset("text/css; charset=utf-8", APP_CSS) }),
         )
         .route(
+            "/ui/bookmarks.js",
+            get(|| async { asset("text/javascript; charset=utf-8", BOOKMARKS_JS) }),
+        )
+        .route(
+            "/ui/bookmarks.css",
+            get(|| async { asset("text/css; charset=utf-8", BOOKMARKS_CSS) }),
+        )
+        .route(
             "/ui/logo.svg",
             get(|| async { asset("image/svg+xml", LOGO) }),
         )
@@ -66,6 +76,8 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/profiles", get(profiles).post(add_profile))
         .route("/ui/api/profiles/{id}", delete(remove_profile))
         .route("/ui/api/profiles/{id}/rename", post(rename_profile))
+        .route("/ui/api/profiles/{id}/tree", get(profile_tree))
+        .route("/ui/api/profiles/{id}/edit", post(edit_profile))
         .route("/ui/api/profiles/{id}/clear", post(clear_profile))
         .route("/ui/api/profiles/{id}/dedupe", post(dedupe_profile))
         .route("/ui/api/profiles/{id}/restore", post(restore_profile))
@@ -1189,6 +1201,32 @@ fn change_tree<T>(
     Ok(out)
 }
 
+/// The profile's bookmark tree, for the Bookmarks page.
+async fn profile_tree(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+) -> Result<Json<bookmoor_core::wire::TreeResponse>, ApiError> {
+    let st = s.lock().unwrap();
+    if !st.profiles.get(&id).is_some_and(|p| p.user_id == a.user.id) {
+        return Err(ApiError::Forbidden);
+    }
+    let e = st.engines.get(&id).ok_or(ApiError::Forbidden)?;
+    Ok(Json(e.tree()))
+}
+
+/// One edit from the Bookmarks page: add, rename, change the URL, move or
+/// delete. It becomes a normal change for every device of the profile.
+async fn edit_profile(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+    Json(e): Json<crate::engine::UiEdit>,
+) -> Result<StatusCode, ApiError> {
+    change_tree(&s, &a, &id, |st, id| st.edit_profile(id, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Removes every bookmark of the profile. Its devices follow on their next
 /// sync; the old tree stays restorable.
 async fn clear_profile(
@@ -2123,6 +2161,180 @@ mod tests {
             )
             .await;
         assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn bookmarks_are_edited_in_the_ui_and_devices_follow() {
+        let u = ui();
+        let anna = u.setup("anna").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let pid = v[0]["id"].as_str().unwrap().to_string();
+        let dev = serde_json::json!({"name":"laptop","scope":"sync"});
+        let (_, v, _) = u.post("/ui/api/devices", Some(&anna), dev).await;
+        let token = v["token"].as_str().unwrap().to_string();
+        let send = |m: &str, uri: &str, body: serde_json::Value| {
+            let req = Request::builder()
+                .method(m)
+                .uri(uri.to_string())
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let app = u.app.clone();
+            async move {
+                let res = app.oneshot(req).await.unwrap();
+                let b = axum::body::to_bytes(res.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<serde_json::Value>(&b).unwrap_or_default()
+            }
+        };
+        let ep = send("POST", "/v1/endpoints", serde_json::json!({})).await;
+        let ep = ep["endpoint_id"].as_str().unwrap().to_string();
+        let edit_uri = format!("/ui/api/profiles/{pid}/edit");
+        let edit = |body: serde_json::Value| u.post(&edit_uri, Some(&anna), body);
+        let tree = || async {
+            u.call(
+                "GET",
+                &format!("/ui/api/profiles/{pid}/tree"),
+                Some(&anna),
+                None,
+                false,
+            )
+            .await
+            .1
+        };
+
+        let (st, _, _) = edit(
+            serde_json::json!({"type":"add","parent":"toolbar","kind":"folder","title":"News"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let t = tree().await;
+        let folder = t["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["title"] == "News")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for (title, url) in [
+            ("HN", "https://news.ycombinator.com"),
+            ("Zeit", "https://zeit.de"),
+        ] {
+            let (st, _, _) = edit(serde_json::json!({"type":"add","parent":folder,"kind":"bookmark","title":title,"url":url})).await;
+            assert_eq!(st, StatusCode::NO_CONTENT);
+        }
+        let t = tree().await;
+        let kids: Vec<&serde_json::Value> = t["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["parent"] == folder.as_str())
+            .collect();
+        assert_eq!(kids[0]["title"], "HN");
+        assert_eq!(kids[1]["title"], "Zeit");
+        let (hn, zeit) = (
+            kids[0]["id"].as_str().unwrap().to_string(),
+            kids[1]["id"].as_str().unwrap().to_string(),
+        );
+        // A device that has seen nothing gets all of it as normal changes.
+        let r = send(
+            "POST",
+            "/v1/sync",
+            serde_json::json!({"endpoint_id": ep, "since_rev": 0, "ops": []}),
+        )
+        .await;
+        assert_eq!(r["resync"], false);
+        assert_eq!(r["ops"].as_array().unwrap().len(), 3);
+        let seen = r["rev"].as_u64().unwrap();
+
+        // Rename, change the URL, put Zeit first, then reject bad input.
+        edit(serde_json::json!({"type":"update","id":hn,"title":"Hacker News","url":"https://news.ycombinator.com/news"})).await;
+        edit(serde_json::json!({"type":"move","id":zeit,"parent":folder,"before":hn})).await;
+        let t = tree().await;
+        let order: Vec<&str> = t["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["parent"] == folder.as_str())
+            .map(|n| n["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(order, ["Zeit", "Hacker News"]);
+        let (st, _, _) =
+            edit(serde_json::json!({"type":"update","id":zeit,"url":"no scheme"})).await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        let (st, _, _) = edit(serde_json::json!({"type":"move","id":folder,"parent":folder})).await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        let (st, _, _) = edit(serde_json::json!({"type":"remove","id":"toolbar"})).await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        let r = send(
+            "POST",
+            "/v1/sync",
+            serde_json::json!({"endpoint_id": ep, "since_rev": seen, "ops": []}),
+        )
+        .await;
+        assert_eq!(r["resync"], false);
+        let kinds: Vec<&str> = r["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["update", "move"]);
+
+        // Deleting a folder with content keeps a copy.
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        assert!(v[0]["backup"].is_null());
+        let (st, _, _) = edit(serde_json::json!({"type":"remove","id":folder})).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        assert_eq!(v[0]["backup"]["bookmarks"], 2);
+        assert_eq!(v[0]["bookmarks"], 0);
+        // Single bookmarks are deleted without touching the backup.
+        let (st, _, _) = u
+            .post(
+                &format!("/ui/api/profiles/{pid}/restore"),
+                Some(&anna),
+                serde_json::json!({}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let (st, _, _) = edit(serde_json::json!({"type":"remove","id":zeit})).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+
+        // Somebody else cannot read or edit it.
+        let new = serde_json::json!({"name":"bob","password":"another good password"});
+        u.post("/ui/api/users", Some(&anna), new).await;
+        let login = serde_json::json!({"name":"bob","password":"another good password"});
+        let (_, _, set) = u.post("/ui/api/login", None, login).await;
+        let bob = cookie_of(&set.unwrap());
+        let (st, _, _) = u
+            .call(
+                "GET",
+                &format!("/ui/api/profiles/{pid}/tree"),
+                Some(&bob),
+                None,
+                false,
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let (st, _, _) = u
+            .post(
+                &format!("/ui/api/profiles/{pid}/edit"),
+                Some(&bob),
+                serde_json::json!({"type":"remove","id":hn}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 //! HTTP API (`docs/sync-architecture.md`, section 3.2).
 
 use crate::auth::{random_id, Scope, TokenRecord, Tokens};
-use crate::engine::{Engine, SyncError};
+use crate::engine::{Engine, SyncError, UiEdit};
 use crate::profiles::Profiles;
 use crate::ratelimit::client_key;
 use crate::users::User;
@@ -326,6 +326,28 @@ impl AppState {
                 Backup {
                     at: utc_now(),
                     nodes: before,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Apply an edit made in the web UI. Devices receive it as a normal
+    /// change. Deleting a folder that holds something first saves the tree
+    /// as the backup (Restore brings it back).
+    pub fn edit_profile(&mut self, profile: &str, edit: UiEdit) -> Result<(), String> {
+        let engine = self.engines.get_mut(profile).ok_or("no such profile")?;
+        let before = match &edit {
+            UiEdit::Remove { id } if engine.has_children(id) => Some(engine.tree().nodes),
+            _ => None,
+        };
+        engine.ui_edit(edit, &random_id("bk_"))?;
+        if let Some(nodes) = before {
+            self.backups.insert(
+                profile.to_string(),
+                Backup {
+                    at: utc_now(),
+                    nodes,
                 },
             );
         }
