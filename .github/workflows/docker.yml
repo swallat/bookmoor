@@ -32,7 +32,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Tag matches the release version
         if: startsWith(github.ref, 'refs/tags/v')
-        run: node scripts/sync-version.mjs --tag "${{ github.ref_name }}"
+        run: |
+          node scripts/sync-version.mjs --check
+          node scripts/sync-version.mjs --tag "${{ github.ref_name }}"
       - uses: docker/setup-buildx-action@v3
       - id: meta
         uses: docker/metadata-action@v5

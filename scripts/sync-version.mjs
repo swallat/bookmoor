@@ -17,24 +17,28 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cargoPath = join(root, "Cargo.toml");
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
+// [workspace.package] up to the next table header (a line starting with "["),
+// so values like authors = ["x"] above `version` are fine.
+const VERSION_RE = /(^\[workspace\.package\]\n(?:(?!\[).*\n)*?version\s*=\s*")([^"]+)(")/m;
+
 function readCargoVersion() {
-  const m = readFileSync(cargoPath, "utf8").match(/\[workspace\.package\][^[]*?^version\s*=\s*"([^"]+)"/ms);
+  const m = readFileSync(cargoPath, "utf8").match(VERSION_RE);
   if (!m) throw new Error("no [workspace.package] version in Cargo.toml");
-  return m[1];
+  return m[2];
 }
 
 const args = process.argv.slice(2);
+if (args.includes("--set") && (args.includes("--check") || args.includes("--tag"))) {
+  throw new Error("--set cannot be combined with --check or --tag");
+}
 let version = readCargoVersion();
 
 const setIdx = args.indexOf("--set");
 if (setIdx >= 0) {
   const v = args[setIdx + 1];
   if (!SEMVER.test(v ?? "")) throw new Error(`--set needs X.Y.Z, got ${v}`);
-  const text = readFileSync(cargoPath, "utf8").replace(
-    /(\[workspace\.package\][^[]*?^version\s*=\s*")[^"]+(")/ms,
-    `$1${v}$2`,
-  );
-  writeFileSync(cargoPath, text);
+  const old = readFileSync(cargoPath, "utf8");
+  writeFileSync(cargoPath, old.replace(VERSION_RE, `$1${v}$3`));
   version = v;
   console.log(`Cargo.toml -> ${v} (run "cargo update --workspace" to refresh Cargo.lock)`);
 }
