@@ -13,14 +13,13 @@
   background-position: calc(var(--base) - var(--step) / 2 + 2px) 0;
   background-repeat: no-repeat;
 }
-.bm-row.nested.folder { box-shadow: inset 3px 0 0 var(--blue); }
 .bm-row .actions { flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 .bm-row.folder { background-color: color-mix(in srgb, var(--bg) 55%, var(--surface)); }
 .bm-row p { margin: 0; overflow-wrap: anywhere; }
 .bm-full { font-size: .8125rem; word-break: break-all; }
 .bm-url { display: none; }
 @media (max-width: 40rem) {
-  .bm-row { flex-wrap: wrap; --step: 14px; --base: 12px; }
+  .bm-row { flex-wrap: wrap; --step: 16px; }
   .bm-full { display: none; }
   .bm-url { display: block; }
 }

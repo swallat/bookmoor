@@ -136,7 +136,6 @@ function bmRow(ix, n, depth, searching, siblings, i) {
   const protectedNode = Object.hasOwn(ROLE_LABELS, n.id);
   const row = h("div", { class: "row bm-row" + (n.kind === "folder" ? " folder" : "") });
   row.style.setProperty("--d", String(depth));
-  if (depth) row.classList.add("nested");
   const acts = h("div", { class: "actions" });
   let main;
   if (n.kind === "folder") {
