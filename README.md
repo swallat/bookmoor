@@ -420,6 +420,10 @@ a new `bkm_<id>_<64 hex characters>`, or use the command above with
 Issues and pull requests are welcome. Run `mise run check` before opening a PR;
 it runs what CI runs.
 
+## Privacy
+
+bookmoor sends your bookmarks only to the server you configure and the developer receives no data. Details: [PRIVACY.md](PRIVACY.md) ([Deutsch](PRIVACY.de.md)).
+
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE). Do not copy code from Glance/Dynacat
