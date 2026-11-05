@@ -1,18 +1,20 @@
 name: Release
 
-# Start by hand (Actions > Release > Run workflow) on main. Creates the tag
-# vX.Y.Z from the version in Cargo.toml and a GitHub release, then starts the
-# Extension package and Docker image workflows on that tag. Events made with
-# GITHUB_TOKEN do not start other workflows, but dispatching them explicitly is
-# allowed, so that is how they run.
+# Two ways in, same result:
+#  - push a tag vX.Y.Z (git tag v0.11.0 && git push origin v0.11.0), or
+#  - Actions > Release > Run workflow on main: this creates the tag for you.
+# Either way the release page appears on GitHub and the Extension package and
+# Docker image workflows build from the tag. Versions 0.x are marked as
+# pre-release (beta); the first 1.x release is stable.
+#
+# Tags made with GITHUB_TOKEN do not start other workflows, but dispatching
+# them explicitly is allowed, so the manual route does that; a pushed tag
+# starts them by itself.
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      prerelease:
-        description: "Mark the GitHub release as a pre-release (beta)"
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -24,8 +26,8 @@ concurrency:
 
 jobs:
   release:
-    name: Tag, release, build
-    if: github.ref == 'refs/heads/main'
+    name: Release page
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -37,22 +39,26 @@ jobs:
         run: |
           node scripts/sync-version.mjs --check
           VERSION=$(node scripts/sync-version.mjs --print)
-          CREATE=true
-          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
-            # Resume: a previous run made the tag but a build failed. Only allowed
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            node scripts/sync-version.mjs --tag "${{ github.ref_name }}"
+            # A pushed tag already exists; the builds start from the push.
+            echo "create_tag=false" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            # Resume: an earlier run made the tag but a build failed. Only allowed
             # for the same commit, so a tag never moves or gets reused.
             TAGGED=$(git ls-remote origin "refs/tags/v$VERSION^{}" "refs/tags/v$VERSION" | tail -1 | cut -f1)
             if [ "$TAGGED" != "$GITHUB_SHA" ]; then
               echo "::error::Tag v$VERSION already exists on another commit. Raise the version first: node scripts/sync-version.mjs --set X.Y.Z"
               exit 1
             fi
-            echo "::notice::Tag v$VERSION already exists on this commit; skipping creation and starting the builds again."
-            CREATE=false
+            echo "::notice::Tag v$VERSION already exists on this commit; starting the builds again."
+            echo "create_tag=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "create_tag=true" >> "$GITHUB_OUTPUT"
           fi
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "create=$CREATE" >> "$GITHUB_OUTPUT"
+          echo "pre=$(node scripts/sync-version.mjs --prerelease)" >> "$GITHUB_OUTPUT"
       - name: CI must be green on this commit
-        if: steps.v.outputs.create == 'true'
         run: |
           RUNS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --paginate --jq '.check_runs[] | [.name, .conclusion] | @tsv')
           echo "$RUNS"
@@ -62,14 +68,18 @@ jobs:
           if echo "$RUNS" | grep -E "^(Rust|Extension|E2E)" | grep -qv "success$"; then
             echo "::error::CI is not green on $GITHUB_SHA"; exit 1
           fi
-      - name: Create the tag and the release
-        if: steps.v.outputs.create == 'true'
+      - name: Create the GitHub release (and the tag, if needed)
         run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists."
+            exit 0
+          fi
           FLAGS=""
-          [ "${{ inputs.prerelease }}" = "true" ] && FLAGS="--prerelease"
-          gh release create "${{ steps.v.outputs.tag }}" --target "$GITHUB_SHA" --generate-notes \
-            --title "bookmoor ${{ steps.v.outputs.tag }}" $FLAGS
-      - name: Build, sign and publish from the tag
+          [ "${{ steps.v.outputs.pre }}" = "true" ] && FLAGS="--prerelease"
+          gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --title "bookmoor $TAG" $FLAGS
+      - name: Start the builds (manual route only)
+        if: github.ref_type != 'tag'
         run: |
-          gh workflow run extension-package.yml --ref "${{ steps.v.outputs.tag }}" -f release=true
-          gh workflow run docker.yml --ref "${{ steps.v.outputs.tag }}" -f prerelease=${{ inputs.prerelease }}
+          gh workflow run extension-package.yml --ref "${{ steps.v.outputs.tag }}"
+          gh workflow run docker.yml --ref "${{ steps.v.outputs.tag }}"

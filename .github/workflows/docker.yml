@@ -13,11 +13,6 @@ on:
       - crates/**
       - .github/workflows/docker.yml
   workflow_dispatch:
-    inputs:
-      prerelease:
-        description: "Release is a pre-release: do not move the latest tag (set by the Release workflow)"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -40,6 +35,8 @@ jobs:
         run: |
           node scripts/sync-version.mjs --check
           node scripts/sync-version.mjs --tag "${{ github.ref_name }}"
+      - id: pre
+        run: echo "beta=$(node scripts/sync-version.mjs --prerelease)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - id: meta
         uses: docker/metadata-action@v5
@@ -47,7 +44,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false
           tags: |
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && inputs.prerelease != true }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.pre.outputs.beta != 'true' }}
             type=edge,branch=main
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

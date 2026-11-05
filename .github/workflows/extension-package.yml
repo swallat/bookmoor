@@ -4,27 +4,22 @@ name: Extension package
 # a Chrome zip, an unsigned Firefox zip and, if Mozilla credentials are set as
 # repository secrets, a signed Firefox .xpi. Download them from the run's
 # "Artifacts" section. The Chrome zip goes to the Chrome Web Store for review
-# only for a release (published in the UI, or built by the Release workflow
-# with "release" set) or when the run is started by hand with the
+# only for a release (a pushed tag vX.Y.Z) or when the run is started by hand with the
 # "chrome_store" box ticked, and only if the store secrets are set (see README). Pull requests do not run this: they have no secrets and
 # every signing uses up a version number at Mozilla.
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "extension/**"
       - "schema/**"
       - ".github/workflows/extension-package.yml"
-  # A published GitHub release also submits the Chrome build to the Web Store.
-  release:
-    types: [published]
+  # A pushed tag vX.Y.Z is a release build: exact version, signed, and sent to
+  # the Chrome Web Store. Releases made in the GitHub UI create such a tag too.
   workflow_dispatch:
     inputs:
-      release:
-        description: "Release build from a vX.Y.Z tag (set by the Release workflow): exact version, store upload"
-        type: boolean
-        default: false
       chrome_store:
         description: "Also upload the Chrome build to the Web Store and submit it for review"
         type: boolean
@@ -37,7 +32,7 @@ permissions:
 # Release builds get their own group so a dev build can never replace a
 # queued release run (a group keeps only one pending run).
 concurrency:
-  group: extension-package-${{ inputs.release && github.ref || 'dev' }}
+  group: extension-package-${{ startsWith(github.ref, 'refs/tags/v') && github.ref || 'dev' }}
   cancel-in-progress: false
 
 jobs:
@@ -59,11 +54,6 @@ jobs:
       CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
       CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
     steps:
-      - name: A release build needs a version tag
-        if: inputs.release && !startsWith(github.ref, 'refs/tags/v')
-        run: |
-          echo "::error::release=true must run on a vX.Y.Z tag, not ${{ github.ref }}. Use the Release workflow."
-          exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -83,19 +73,22 @@ jobs:
         working-directory: .
         run: |
           BASE=$(node scripts/sync-version.mjs --print)
-          if [ "${{ github.event_name }}" = "release" ] || [ "${{ inputs.release }}" = "true" ]; then
-            node scripts/sync-version.mjs --tag "${{ github.event.release.tag_name || github.ref_name }}"
+          RELEASE=false
+          case "${{ github.ref }}" in refs/tags/v*) RELEASE=true;; esac
+          if [ "$RELEASE" = "true" ]; then
+            node scripts/sync-version.mjs --tag "${{ github.ref_name }}"
             VERSION="$BASE"
           else
             VERSION="$BASE.${{ github.run_number }}"
           fi
           node scripts/sync-version.mjs --check
           SIGN=true
-          if [ "${{ github.event_name }}" != "release" ] && [ "${{ inputs.release }}" != "true" ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$BASE" >/dev/null; then
+          if [ "$RELEASE" != "true" ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$BASE" >/dev/null; then
             SIGN=false
             echo "::notice::v$BASE is not released yet, so this dev build is not signed or uploaded (it would outrank the release)."
           fi
           echo "sign=$SIGN" >> "$GITHUB_OUTPUT"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
           node -e '
             const fs = require("node:fs");
             const m = JSON.parse(fs.readFileSync("extension/manifest.json", "utf8"));
@@ -121,7 +114,7 @@ jobs:
         if: steps.version.outputs.sign == 'true' && (env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == '')
         run: echo "::notice::No Firefox .xpi was signed because the secrets WEB_EXT_API_KEY and WEB_EXT_API_SECRET are not set."
       - name: Upload to the Chrome Web Store
-        if: steps.version.outputs.sign == 'true' && (github.event_name == 'release' || inputs.release || inputs.chrome_store) && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
+        if: steps.version.outputs.sign == 'true' && (steps.version.outputs.release == 'true' || inputs.chrome_store) && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
         run: |
           set -euo pipefail
           ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip"
@@ -139,7 +132,7 @@ jobs:
           echo "$PUB" | jq -e '.status | index("OK") or index("ITEM_PENDING_REVIEW")' >/dev/null \
             || { echo "::error::Chrome Web Store did not accept the submission"; exit 1; }
       - name: Say why nothing went to the Chrome Web Store
-        if: (github.event_name == 'release' || inputs.release || inputs.chrome_store) && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
+        if: (steps.version.outputs.release == 'true' || inputs.chrome_store) && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
         run: echo "::notice::Nothing was uploaded to the Chrome Web Store because one of CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN is not set."
       - uses: actions/upload-artifact@v4
         with:
