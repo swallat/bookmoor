@@ -29,7 +29,7 @@ pub const TICKET_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_TICKETS: usize = 1_000;
 const MAX_TRIES: u8 = 5;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Sessions {
     by_hash: HashMap<[u8; 32], Session>,
     tickets: HashMap<[u8; 32], Ticket>,
@@ -39,6 +39,17 @@ pub struct Sessions {
 
 fn key(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
+}
+
+// Hand-written so that authenticator secrets never reach a log line.
+impl std::fmt::Debug for Sessions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sessions")
+            .field("sessions", &self.by_hash.len())
+            .field("tickets", &self.tickets.len())
+            .field("setups", &self.setups.len())
+            .finish()
+    }
 }
 
 impl Sessions {
@@ -149,7 +160,6 @@ impl Sessions {
     pub fn end_user(&mut self, user_id: &str) {
         self.by_hash.retain(|_, s| s.user_id != user_id);
         self.tickets.retain(|_, t| t.user_id != user_id);
-        self.setups.remove(user_id);
     }
 }
 

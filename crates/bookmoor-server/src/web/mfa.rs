@@ -20,7 +20,7 @@ pub fn routes() -> Router<Shared> {
 
 /// What a session that must still set up its second factor may call.
 pub fn allowed_before_setup(path: &str) -> bool {
-    path.starts_with("/ui/api/mfa") || path == "/ui/api/logout"
+    path == "/ui/api/mfa" || path.starts_with("/ui/api/mfa/") || path == "/ui/api/logout"
 }
 
 fn now_secs() -> u64 {
@@ -48,13 +48,10 @@ struct MfaLogin {
 }
 
 /// The second step of a password login.
-async fn login_mfa(
-    State(s): State<Shared>,
-    Peer(peer): Peer,
-    Json(b): Json<MfaLogin>,
-) -> Result<Response, ApiError> {
+async fn login_mfa(State(s): State<Shared>, Json(b): Json<MfaLogin>) -> Result<Response, ApiError> {
+    // No address bucket here: a ticket only exists after a right password
+    // (which was throttled) and allows a handful of tries.
     let mut st = s.lock().unwrap();
-    throttle(&mut st, peer)?;
     let uid = st
         .sessions
         .try_ticket(&b.ticket, Instant::now())
@@ -82,8 +79,29 @@ async fn status(State(s): State<Shared>, a: Authed) -> Json<serde_json::Value> {
     }))
 }
 
+#[derive(Deserialize)]
+struct Begin {
+    #[serde(default)]
+    password: String,
+}
+
 /// Start setting up an authenticator: a fresh secret to put into the app.
-async fn begin(State(s): State<Shared>, a: Authed) -> Result<Json<serde_json::Value>, ApiError> {
+async fn begin(
+    State(s): State<Shared>,
+    Peer(peer): Peer,
+    a: Authed,
+    Json(b): Json<Begin>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    {
+        let mut st = s.lock().unwrap();
+        throttle(&mut st, peer)?;
+    }
+    // A stolen session cookie alone must not be able to enrol an attacker's app.
+    if a.user.password_hash.is_some()
+        && !verify_blocking(a.user.password_hash.clone(), b.password).await
+    {
+        return Err(ApiError::Denied("the password is wrong"));
+    }
     let mut st = s.lock().unwrap();
     if st.users.get(&a.user.id).is_some_and(|u| u.totp.is_some()) {
         return Err(ApiError::Denied("two-factor authentication is already on"));
@@ -111,6 +129,9 @@ async fn enable(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut st = s.lock().unwrap();
     throttle(&mut st, peer)?;
+    if a.user.totp.is_some() || st.users.get(&a.user.id).is_some_and(|u| u.totp.is_some()) {
+        return Err(ApiError::Denied("two-factor authentication is already on"));
+    }
     let secret = st
         .sessions
         .setup(&a.user.id)
@@ -273,6 +294,7 @@ async fn reset_mfa(
     u.totp = None;
     u.recovery.clear();
     st.sessions.end_user(&id);
+    st.sessions.end_setup(&id);
     save(&mut st)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -288,6 +310,9 @@ mod tests {
     use serde_json::{json, Value};
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
+
+    const ANNA: &str = "correct horse battery";
+    const BOB: &str = "another good password";
 
     struct Ui {
         app: axum::Router,
@@ -408,9 +433,9 @@ mod tests {
         }
 
         /// Turn the authenticator on for a signed-in user; returns the secret and the recovery codes.
-        async fn enroll(&self, cookie: &str) -> (String, Vec<String>) {
+        async fn enroll(&self, cookie: &str, pw: &str) -> (String, Vec<String>) {
             let (st, v, _) = self
-                .post("/ui/api/mfa/begin", Some(cookie), json!({}))
+                .post("/ui/api/mfa/begin", Some(cookie), json!({"password": pw}))
                 .await;
             assert_eq!(st, StatusCode::OK);
             let secret = v["secret"].as_str().unwrap().to_string();
@@ -442,7 +467,7 @@ mod tests {
         u.add_user(&admin, "bob").await;
         let (_, _, bob) = u.login("bob").await;
         let bob = bob.unwrap();
-        let (secret, recovery) = u.enroll(&bob).await;
+        let (secret, recovery) = u.enroll(&bob, BOB).await;
         assert_eq!(recovery.len(), mfa::RECOVERY_CODES);
 
         // The password alone no longer opens a session.
@@ -506,7 +531,7 @@ mod tests {
         let admin = u.setup("anna").await;
         u.add_user(&admin, "bob").await;
         let (_, _, bob) = u.login("bob").await;
-        let (secret, _) = u.enroll(&bob.unwrap()).await;
+        let (secret, _) = u.enroll(&bob.unwrap(), BOB).await;
         let (_, v, _) = u.login("bob").await;
         let t = v["ticket"].as_str().unwrap().to_string();
         for _ in 0..5 {
@@ -542,7 +567,12 @@ mod tests {
             )
             .await;
         assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
-        u.post("/ui/api/mfa/begin", Some(&admin), json!({})).await;
+        u.post(
+            "/ui/api/mfa/begin",
+            Some(&admin),
+            json!({"password": "correct horse battery"}),
+        )
+        .await;
         let (st, ..) = u
             .post(
                 "/ui/api/mfa/enable",
@@ -561,8 +591,14 @@ mod tests {
             .totp
             .is_none());
 
-        let (secret, _) = u.enroll(&admin).await;
-        let (st, ..) = u.post("/ui/api/mfa/begin", Some(&admin), json!({})).await;
+        let (secret, _) = u.enroll(&admin, ANNA).await;
+        let (st, ..) = u
+            .post(
+                "/ui/api/mfa/begin",
+                Some(&admin),
+                json!({"password": "correct horse battery"}),
+            )
+            .await;
         assert_eq!(st, StatusCode::FORBIDDEN, "already on");
 
         let off = |pw: &str, code: String| json!({"password": pw, "code": code});
@@ -598,7 +634,7 @@ mod tests {
     async fn new_recovery_codes_replace_the_old_ones() {
         let u = Ui::new();
         let admin = u.setup("anna").await;
-        let (secret, old) = u.enroll(&admin).await;
+        let (secret, old) = u.enroll(&admin, ANNA).await;
         let (st, v, _) = u
             .post(
                 "/ui/api/mfa/recovery",
@@ -641,7 +677,7 @@ mod tests {
             u.send("GET", "/ui/api/mfa", Some(&bob), None).await.0,
             StatusCode::OK
         );
-        let (secret, _) = u.enroll(&bob).await;
+        let (secret, _) = u.enroll(&bob, BOB).await;
         assert_eq!(
             u.send("GET", "/ui/api/devices", Some(&bob), None).await.0,
             StatusCode::OK

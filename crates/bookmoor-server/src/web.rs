@@ -734,7 +734,7 @@ fn finish_sso(
         None => return back_to("", Some("unlinked")),
     };
     if user.disabled {
-        return back_to("", Some("denied"));
+        return back_to("", Some("disabled"));
     }
     let mut resp = back_to(ret, None);
     let token = st.sessions.create_with(&user.id, Instant::now(), true);

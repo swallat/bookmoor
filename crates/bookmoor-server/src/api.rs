@@ -291,6 +291,7 @@ impl AppState {
     /// Remove a user with their tree and all their tokens.
     pub fn remove_user(&mut self, id: &str) -> bool {
         self.sessions.end_user(id);
+        self.sessions.end_setup(id);
         for p in self.profiles.remove_user(id) {
             self.engines.remove(&p);
         }

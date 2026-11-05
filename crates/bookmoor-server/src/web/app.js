@@ -92,6 +92,7 @@ function centered(title, lead, body) {
 const SSO_ERRORS = {
   unlinked: "That account is not linked to a bookmoor user. Sign in with your password and link it under Account.",
   taken: "That account is already linked to another user.",
+  disabled: "This account is disabled. Ask an admin.",
   denied: "The identity provider refused the sign-in.",
   expired: "The sign-in took too long or was started in another browser. Try again.",
   provider: "Could not reach the identity provider or its answer was not valid.",
@@ -371,7 +372,7 @@ async function usersView() {
     const pw = h("input", { type: "password", "aria-label": "New password for " + u.name, autocomplete: "new-password", placeholder: "New password", class: "inline-pw" });
     const reset = h("form", { class: "actions", hidden: true, onsubmit: async (e) => {
       e.preventDefault();
-      try { await api("POST", "users/" + u.id + "/password", { password: pw.value }); toast("Password changed for " + u.name); render(); }
+      try { await api("POST", "users/" + u.id + "/password", { password: (document.getElementById("mfa-start-pw") || {}).value || "" }); toast("Password changed for " + u.name); render(); }
       catch (x) { toast(x.message); }
     } }, pw, h("button", { class: "btn small", type: "submit", text: "Save" }));
     const nm = h("input", { type: "text", "aria-label": "New name for " + u.name, value: u.name, maxlength: "32", class: "inline-pw" });
@@ -469,8 +470,9 @@ async function mfaSection() {
       return h("div", { class: "stack-sm" },
         h("h2", { text: "Two-factor authentication" }), intro,
         h("p", { class: "muted", text: "Add a second step to the password login with an authenticator app. Signing in with single sign-on is not affected." }),
+        me.has_password !== false && h("div", { class: "stack-sm narrow" }, field("mfa-start-pw", "Your password", { type: "password", autocomplete: "current-password" }, "To make sure it is you.")),
         h("button", { class: "btn", type: "button", text: "Set up", onclick: async () => {
-          try { mfaSetup = await api("POST", "mfa/begin"); render(); } catch (e) { toast(e.message); }
+          try { mfaSetup = await api("POST", "mfa/begin", { password: (document.getElementById("mfa-start-pw") || {}).value || "" }); render(); } catch (e) { toast(e.message); }
         } }));
     }
     return h("div", { class: "stack-sm" },
