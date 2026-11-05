@@ -13,6 +13,10 @@
     details { margin-top: 14px; }
     summary { cursor: pointer; color: var(--muted); }
     #sync { word-break: break-word; }
+    dialog { max-width: 520px; width: calc(100% - 32px); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+    .choices button { width: 100%; text-align: left; margin-top: 12px; }
+    .choices .hint { margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -68,8 +72,8 @@
     <section class="card">
       <h2>Start over</h2>
       <div class="hint">
-        Normally the first sync merges this browser with the server: links that are on both sides stay single,
-        the rest is added on both sides, and nothing is deleted. If that is not what you want:
+        The first sync of a device asks you what to do when the server and this browser both already have
+        bookmarks. You can still replace one side later:
       </div>
       <div class="actions">
         <button id="adopt" type="button">Use the server's bookmarks here</button>
@@ -83,6 +87,23 @@
       <div id="startover" role="status"></div>
     </section>
   </main>
+
+  <dialog id="choice" aria-labelledby="choicetitle">
+    <h2 id="choicetitle">The server already has bookmarks</h2>
+    <p class="hint">
+      This profile on the server and this browser both contain bookmarks. Nothing has been synced yet.
+      Choose how to start:
+    </p>
+    <div class="choices">
+      <button id="choice-merge" type="button" class="primary">Merge both</button>
+      <p class="hint">Links on both sides stay single, the rest is added on both sides. Nothing is deleted.</p>
+      <button id="choice-adopt" type="button">Replace this browser's bookmarks</button>
+      <p class="hint">Takes over the server's bookmarks. Links that only exist here are removed from this browser.</p>
+      <button id="choice-overwrite" type="button">Replace the server's bookmarks</button>
+      <p class="hint">Uploads this browser's bookmarks. Links that only exist on the server are removed from the profile and its other devices; the server keeps a copy, restorable in its web UI under Profiles.</p>
+    </div>
+    <div class="actions"><button id="choice-later" type="button">Decide later</button></div>
+  </dialog>
   <script type="module" src="options.js"></script>
 </body>
 </html>

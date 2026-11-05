@@ -611,12 +611,25 @@ async function mfaSection() {
         m.required && h("p", { class: "muted small", text: "An admin requires it, so it cannot be turned off here." }))));
 }
 
+function dynStyleText(st) {
+  if (!st) return "";
+  const bits = [];
+  if (st.title) bits.push("title “" + st.title + "”");
+  if (st.names === "name") bits.push("short group names");
+  if (st.depth != null) bits.push("depth " + st.depth);
+  if (st.max_title) bits.push("titles ≤ " + st.max_title);
+  if (st.icons) bits.push("icons");
+  if (st.hide_arrow) bits.push("no arrow");
+  if (st.same_tab) bits.push("same tab");
+  return bits.length ? " · " + bits.join(", ") : "";
+}
+
 async function dynacatView() {
   const info = await api("GET", "dynacat");
   const rows = info.outputs.map((o) => h("div", { class: "row" },
     h("div", { class: "main" },
       h("div", { class: "name mono", text: o.file }),
-      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") }),
+      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") + dynStyleText(o.style) }),
       o.error && h("div", { class: "error small", role: "alert", text: o.error })),
     h("div", { class: "actions" },
       o.id
@@ -646,8 +659,37 @@ async function dynacatView() {
         field("dyn-file", "File name", { type: "text", placeholder: "dev.yml", required: true, maxlength: "64", autocapitalize: "off" }),
         h("div", { class: "field" }, h("label", { for: "dyn-profile", text: "Profile" }), profile),
         h("div", { class: "field" }, h("label", { for: "dyn-folder", text: "Folder" }), folder)),
+      h("div", { class: "form-row three" },
+        field("dyn-title", "Widget title", { type: "text", placeholder: "e.g. Work", maxlength: "80" }, "Shown above the bookmarks. Name it after the profile to tell pages apart."),
+        h("div", { class: "field" }, h("label", { for: "dyn-names", text: "Group titles" }),
+          h("select", { id: "dyn-names", name: "names" },
+            h("option", { value: "path", text: "Full path (toolbar / Dev)" }),
+            h("option", { value: "name", text: "Folder name only (Dev)" }))),
+        field("dyn-depth", "Group depth", { type: "number", min: "0", max: "32", placeholder: "no limit" }, "Folders deeper than this are merged into their parent group: fewer, longer groups.")),
+      h("div", { class: "form-row three" },
+        field("dyn-max", "Shorten titles to", { type: "number", min: "8", max: "500", placeholder: "no limit" }, "Characters; longer link titles end in …"),
+        h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-icons" }), h("span", { text: " Site icons" }),
+          h("span", { class: "hint", text: " Dynacat's browser asks each site for /favicon.ico, so those sites see the viewer's IP address." })),
+        h("div", { class: "stack-sm" },
+          h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-arrow" }), h("span", { text: " Hide the arrow" })),
+          h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-tab" }), h("span", { text: " Open in the same tab" })))),
     ], "Add output", async (fd, f) => {
-      await api("POST", "dynacat", { file: fd.get("dyn-file"), profile: profile.value, folder: folder.value });
+      const num = (id, what) => {
+        const v = document.getElementById(id).value.trim();
+        if (v === "") return null;
+        if (!/^\d+$/.test(v)) throw new Error(what + " must be a whole number");
+        return Number(v);
+      };
+      const style = {
+        title: document.getElementById("dyn-title").value.trim() || null,
+        names: document.getElementById("dyn-names").value,
+        depth: num("dyn-depth", "Group depth"),
+        max_title: num("dyn-max", "Shorten titles to"),
+        icons: document.getElementById("dyn-icons").checked,
+        hide_arrow: document.getElementById("dyn-arrow").checked,
+        same_tab: document.getElementById("dyn-tab").checked,
+      };
+      await api("POST", "dynacat", { file: fd.get("dyn-file"), profile: profile.value, folder: folder.value, style });
       toast("Added " + fd.get("dyn-file"));
       f.reset();
       render();
@@ -656,7 +698,7 @@ async function dynacatView() {
   return h("div", { class: "stack" },
     h("div", { class: "stack-sm" },
       h("h2", { text: "Dynacat outputs" }),
-      h("p", { class: "muted", text: "Each output is a file with a Dynacat bookmarks widget, kept up to date after every sync. Include it in a Dynacat page with $include. Choose a profile and, if you like, one folder of it." }),
+      h("p", { class: "muted", text: "Each output is a file with a Dynacat bookmarks widget, kept up to date after every sync. Include it in a Dynacat page with $include. Choose a profile and, if you like, one folder of it. Several outputs of the same profile (each with its own folder) make several pages; give each a widget title." }),
       info.dir && h("p", { class: "hint", text: "Written to " + info.dir }),
       create),
     h("div", { class: "stack-sm" },
