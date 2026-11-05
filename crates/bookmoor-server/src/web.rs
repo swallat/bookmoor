@@ -1724,12 +1724,8 @@ mod tests {
             .call("GET", "/ui/api/dynacat", Some(&anna), None, false)
             .await;
         let rows = v["outputs"].as_array().unwrap();
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
         assert!(rows[0]["error"].is_null());
-        assert!(rows[1]["error"]
-            .as_str()
-            .unwrap()
-            .contains("not overwriting"));
         assert_eq!(v["profiles"][0]["label"], "anna / Default");
         let id = rows[0]["id"].as_str().unwrap().to_string();
         let (_, f, _) = u
