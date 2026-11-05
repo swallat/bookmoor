@@ -644,7 +644,7 @@ async function mfaSection() {
       return h("div", { class: "stack-sm" },
         h("h2", { text: "Two-factor authentication" }), intro,
         h("p", { class: "muted", text: "Add a second step to the password login with an authenticator app. Signing in with single sign-on is not affected." }),
-        me.has_password !== false && h("div", { class: "stack-sm narrow" }, field("mfa-start-pw", "Your password", { type: "password", autocomplete: "current-password" }, "To make sure it is you.")),
+        me.has_password && h("div", { class: "stack-sm narrow" }, field("mfa-start-pw", "Your password", { type: "password", autocomplete: "current-password" }, "To make sure it is you.")),
         h("button", { class: "btn", type: "button", text: "Set up", onclick: async () => {
           try { mfaSetup = await api("POST", "mfa/begin", { password: (document.getElementById("mfa-start-pw") || {}).value || "" }); render(); } catch (e) { toast(e.message); }
         } }));
@@ -775,8 +775,7 @@ async function passkeysSection() {
         rename,
         h("button", { class: "btn quiet small", type: "button", text: "Rename", onclick: () => { rename.hidden = !rename.hidden; if (!rename.hidden) nm.select(); } }),
         confirmButton("Delete", "Yes, delete it", async () => {
-          const password = (document.getElementById("pk-pw") || {}).value || "";
-          await refresh(await api("DELETE", "passkeys/" + p.id, { password }));
+          await refresh(await api("DELETE", "passkeys/" + p.id));
           toast("Passkey deleted");
         })));
   });
@@ -789,7 +788,7 @@ async function passkeysSection() {
     supported && form([
       h("div", { class: "stack-sm narrow" },
         field("pk-name", "Name", { type: "text", maxlength: "40", placeholder: "Laptop, phone, security key" }, "So you can tell them apart."),
-        me.has_password !== false && field("pk-pw", "Your password", { type: "password", autocomplete: "current-password", required: true }, "To make sure it is you. Also needed to delete a passkey.")),
+        me.has_password && field("pk-pw", "Your password", { type: "password", autocomplete: "current-password" }, "To make sure it is you.")),
     ], "Add a passkey", async (fd, f) => {
       let list;
       try {

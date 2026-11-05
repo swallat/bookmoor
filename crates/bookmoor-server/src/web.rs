@@ -226,6 +226,8 @@ struct Me {
     mfa: bool,
     /// Number of passkeys.
     passkeys: usize,
+    /// Has a local password (single sign-on and passkey-only users may not).
+    has_password: bool,
     /// An admin requires one.
     mfa_required: bool,
     /// Required but not set up yet: the UI offers nothing else.
@@ -241,6 +243,7 @@ impl From<&User> for Me {
             oidc: u.oidc.is_some(),
             mfa: u.totp.is_some(),
             passkeys: u.passkeys.len(),
+            has_password: u.password_hash.is_some(),
             mfa_required: u.mfa_required,
             mfa_setup_needed: u.mfa_required && !u.has_second_factor(),
         }

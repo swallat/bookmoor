@@ -7,9 +7,12 @@
 //! works behind any reverse proxy without configuration. A passkey only
 //! ever works on the host it was made for.
 
-use super::mfa::now_secs;
+use super::mfa::{now_secs, Begin};
 use super::*;
 use crate::webauthn::{self as wa, Passkey};
+
+/// Adding a passkey without a password needs a session this young.
+const FRESH_SESSION: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 pub fn routes() -> Router<Shared> {
     Router::new()
@@ -60,12 +63,6 @@ async fn list(State(s): State<Shared>, a: Authed) -> Json<Vec<serde_json::Value>
     Json(rows(st.users.get(&a.user.id).unwrap_or(&a.user)))
 }
 
-#[derive(Deserialize)]
-struct Begin {
-    #[serde(default)]
-    password: String,
-}
-
 /// Start adding a passkey: the options for `navigator.credentials.create`.
 async fn begin(
     State(s): State<Shared>,
@@ -79,11 +76,21 @@ async fn begin(
         let mut st = s.lock().unwrap();
         throttle(&mut st, peer)?;
     }
-    // A stolen session cookie alone must not be able to enrol the thief's key.
-    if a.user.password_hash.is_some()
-        && !verify_blocking(a.user.password_hash.clone(), b.password).await
+    // A stolen session cookie alone must not be able to enrol the thief's
+    // key. Without a password to ask for (single sign-on, passkey-only), the
+    // session has to be fresh instead.
+    if a.user.password_hash.is_some() {
+        if !verify_blocking(a.user.password_hash.clone(), b.password).await {
+            return Err(ApiError::Denied("the password is wrong"));
+        }
+    } else if s
+        .lock()
+        .unwrap()
+        .sessions
+        .age(&a.session, Instant::now())
+        .is_none_or(|age| age > FRESH_SESSION)
     {
-        return Err(ApiError::Denied("the password is wrong"));
+        return Err(ApiError::Denied("sign in again to add a passkey"));
     }
     let mut st = s.lock().unwrap();
     let user = st
@@ -112,7 +119,7 @@ async fn begin(
             },
             "challenge": challenge,
             "pubKeyCredParams": [{ "type": "public-key", "alg": wa::ALG_ES256 }],
-            "timeout": 300_000,
+            "timeout": 120_000,
             "attestation": "none",
             "authenticatorSelection": { "residentKey": "required", "userVerification": "required" },
             "excludeCredentials": credential_ids(&user),
@@ -149,7 +156,7 @@ async fn finish(
         .take_ceremony(&b.ceremony, Instant::now())
         .ok_or_else(|| ApiError::Unprocessable("that took too long, start again".into()))?;
     if owner.as_deref() != Some(a.user.id.as_str()) || started_origin != origin {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::Unprocessable("start again from this page".into()));
     }
     let decode = |t: &str| wa::b64_decode(t).map_err(ApiError::Unprocessable);
     let reg = wa::verify_registration(
@@ -211,30 +218,13 @@ async fn rename(
     Ok(Json(out))
 }
 
-#[derive(Deserialize)]
-struct Remove {
-    #[serde(default)]
-    password: String,
-}
-
-/// Delete a passkey. Needs the password, and may not leave the user without
-/// a way in or without the second factor an admin requires.
+/// Delete a passkey. It may not leave the user without a way in, or without
+/// the second factor an admin requires.
 async fn remove(
     State(s): State<Shared>,
-    Peer(peer): Peer,
     a: Authed,
     Path(id): Path<String>,
-    Json(b): Json<Remove>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    {
-        let mut st = s.lock().unwrap();
-        throttle(&mut st, peer)?;
-    }
-    if a.user.password_hash.is_some()
-        && !verify_blocking(a.user.password_hash.clone(), b.password).await
-    {
-        return Err(ApiError::Denied("the password is wrong"));
-    }
     let mut st = s.lock().unwrap();
     let u = st.users.get_mut(&a.user.id).ok_or(ApiError::Unauthorized)?;
     let Some(at) = u.passkeys.iter().position(|p| p.id == id) else {
@@ -267,7 +257,7 @@ fn get_options(
     let mut o = serde_json::json!({
         "challenge": challenge,
         "rpId": rp_id,
-        "timeout": 300_000,
+        "timeout": 120_000,
         "userVerification": "required",
     });
     if let Some(a) = allow {
@@ -681,22 +671,12 @@ mod tests {
             .await;
         assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
 
-        // Deleting needs the password.
-        let (st, ..) = u
-            .send(
-                "DELETE",
-                &format!("/ui/api/passkeys/{id}"),
-                Some(&bob),
-                Some(json!({"password": "nope nope nope"})),
-            )
-            .await;
-        assert_eq!(st, StatusCode::FORBIDDEN);
         let (st, v, _) = u
             .send(
                 "DELETE",
                 &format!("/ui/api/passkeys/{id}"),
                 Some(&bob),
-                Some(json!({"password": BOB})),
+                None,
             )
             .await;
         assert_eq!(st, StatusCode::OK);

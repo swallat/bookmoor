@@ -84,9 +84,9 @@ async fn status(State(s): State<Shared>, a: Authed) -> Json<serde_json::Value> {
 }
 
 #[derive(Deserialize)]
-struct Begin {
+pub(super) struct Begin {
     #[serde(default)]
-    password: String,
+    pub(super) password: String,
 }
 
 /// Start setting up an authenticator: a fresh secret to put into the app.

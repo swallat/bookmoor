@@ -223,7 +223,7 @@ pub fn verify_registration(
 }
 
 /// Check a sign-in (`navigator.credentials.get`) against a stored passkey;
-/// returns the new signature counter.
+/// returns the signature counter to keep.
 pub fn verify_assertion(
     client_data_json: &[u8],
     authenticator_data: &[u8],
@@ -242,12 +242,10 @@ pub fn verify_assertion(
     signed.extend_from_slice(&Sha256::digest(client_data_json));
     vk.verify(&signed, &sig)
         .map_err(|_| "the signature is wrong")?;
-    // A counter that does not move forward hints at a cloned authenticator.
-    // Many passkeys always report 0, which is fine.
-    if (a.sign_count != 0 || key.sign_count != 0) && a.sign_count <= key.sign_count {
-        return Err("the passkey looks cloned".into());
-    }
-    Ok(a.sign_count)
+    // The counter is kept (never lowered) but not enforced: synced passkeys
+    // report 0 or unrelated values from different devices, and the
+    // signature, challenge and user verification already protect the login.
+    Ok(a.sign_count.max(key.sign_count))
 }
 
 #[cfg(test)]
@@ -397,17 +395,6 @@ pub mod tests {
         let (cd, att) = a.create("chal", ORIGIN, RP, FLAG_UP);
         assert!(verify_registration(&cd, &att, "chal", ORIGIN, RP).is_err());
         assert!(verify_registration(&cd, b"junk", "chal", ORIGIN, RP).is_err());
-    }
-
-    #[test]
-    fn a_counter_that_stands_still_is_refused() {
-        let mut a = Authenticator::new();
-        let (cd, att) = a.create("c", ORIGIN, RP, OK);
-        let reg = verify_registration(&cd, &att, "c", ORIGIN, RP).unwrap();
-        let mut key = a.passkey(&reg);
-        key.sign_count = 5; // a.get() will report 1
-        let (cd, ad, sig) = a.get("c2", ORIGIN, RP, OK);
-        assert!(verify_assertion(&cd, &ad, &sig, "c2", ORIGIN, &key).is_err());
     }
 
     #[test]

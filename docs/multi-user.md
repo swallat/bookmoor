@@ -152,10 +152,10 @@ and the saved config stays unused.
   identity (PIN, fingerprint, face), so the passwordless login asks for no
   further factor, even when an admin requires two-factor authentication. A
   passkey satisfies that requirement.
-- **Account tab:** add (needs the password, if the user has one), rename,
-  delete (needs the password; the last one cannot go when it is the user's
-  only way in, or when an admin requires a second factor and there is no
-  authenticator app). Up to 10 per user. Admins can **reset** all passkeys of
+- **Account tab:** add (needs the password; users without one, such as
+  single sign-on users, need a session younger than 15 minutes), rename,
+  delete (the last one cannot go when it is the user's only way in, or when
+  an admin requires a second factor and there is no authenticator app). Up to 10 per user. Admins can **reset** all passkeys of
   another user in the Users tab; their sessions end.
 - **No configuration.** The relying party id is the host name of the `Origin`
   header the browser sends, so it works behind any reverse proxy. Passkeys
@@ -165,7 +165,7 @@ and the saved config stays unused.
 - **Verification** is built in (no extra service): ES256 only (what platform
   authenticators and security keys use), attestation `none`, the challenge is
   random, single-use and lives 5 minutes, origin and relying party hash are
-  checked, the signature counter must advance when the authenticator has one.
+  checked. The signature counter is stored but not enforced (synced passkeys report 0).
   The state file keeps the credential id, public key, name and counter; there
   is no secret in it.
 - **API** (all under `/ui/api`): `GET passkeys`, `POST passkeys/begin` and

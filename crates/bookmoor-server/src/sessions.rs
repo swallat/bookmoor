@@ -39,7 +39,7 @@ struct Ceremony {
     expires: Instant,
 }
 
-const MAX_CEREMONIES: usize = 1_000;
+const MAX_CEREMONIES: usize = 10_000;
 
 #[derive(Default)]
 pub struct Sessions {
@@ -99,6 +99,13 @@ impl Sessions {
             },
         );
         token
+    }
+
+    /// How long ago the session was started.
+    pub fn age(&self, token: &str, now: Instant) -> Option<Duration> {
+        self.by_hash
+            .get(&key(token))
+            .map(|s| now.saturating_duration_since(s.expires - SESSION_TTL))
     }
 
     pub fn is_sso(&self, token: &str) -> bool {
@@ -252,6 +259,30 @@ mod tests {
         assert_eq!(s.user_for(&a, t0), None);
         s.end_user("u_1");
         assert_eq!(s.user_for(&b, t0), None);
+    }
+
+    #[test]
+    fn sessions_know_their_age() {
+        let mut s = Sessions::default();
+        let t0 = Instant::now();
+        let a = s.create("u_1", t0);
+        assert_eq!(s.age(&a, t0), Some(Duration::ZERO));
+        let later = t0 + Duration::from_secs(90);
+        assert_eq!(s.age(&a, later), Some(Duration::from_secs(90)));
+        assert_eq!(s.age("nope", t0), None);
+    }
+
+    #[test]
+    fn passkey_ceremonies_work_once() {
+        let mut s = Sessions::default();
+        let t0 = Instant::now();
+        let id = s.start_ceremony(Some("u_1"), "chal", "https://x.example", t0);
+        let got = s.take_ceremony(&id, t0).unwrap();
+        assert_eq!(got.0, "chal");
+        assert_eq!(got.2.as_deref(), Some("u_1"));
+        assert!(s.take_ceremony(&id, t0).is_none());
+        let id = s.start_ceremony(None, "c", "o", t0);
+        assert!(s.take_ceremony(&id, t0 + TICKET_TTL).is_none());
     }
 
     #[test]
