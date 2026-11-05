@@ -51,7 +51,7 @@ async function round(restart?: Restart): Promise<void> {
   const stored = await chrome.storage.local.get(FAILURES);
   const failures = outcome === "retry" ? ((stored[FAILURES] as number | undefined) ?? 0) + 1 : 0;
   await chrome.storage.local.set({ [FAILURES]: failures });
-  await chrome.action.setBadgeText({ text: outcome === "auth" ? "!" : "" });
+  await chrome.action.setBadgeText({ text: outcome === "auth" || outcome === "login" ? "!" : "" });
   if (outcome === "retry") {
     const delay = Math.min(BACKOFF_MAX, BACKOFF_MIN * 2 ** (failures - 1));
     chrome.alarms.create(PUSH, { delayInMinutes: delay });
@@ -98,6 +98,10 @@ void chrome.alarms.get(PULL).then((a) => {
 // onMessageExternal).
 chrome.runtime.onMessage.addListener((msg: unknown, _sender, respond) => {
   const m = msg as { type?: string; mode?: string } | null;
+  if (m?.type === "bookmoor-sign-in") {
+    void signIn().then(() => respond({ ok: true }));
+    return true;
+  }
   if (m?.type === "bookmoor-sync-now") {
     void run().then(() => respond({ ok: true }));
     return true;
@@ -108,6 +112,26 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, respond) => {
     return true;
   }
   return false;
+});
+
+// Behind an SSO proxy the user signs in in a normal tab; the proxy sets its
+// session cookie there and the extension's requests carry it from then on.
+// Closing that tab is the signal to try again. The tab id lives in storage
+// because the service worker may be restarted while the tab is open.
+const LOGIN_TAB = "bookmoor-login-tab";
+
+async function signIn(): Promise<void> {
+  const settings = await loadSettings();
+  if (!settings.serverUrl) return;
+  const tab = await chrome.tabs.create({ url: settings.serverUrl });
+  if (tab.id !== undefined) await chrome.storage.local.set({ [LOGIN_TAB]: tab.id });
+}
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const stored = await chrome.storage.local.get(LOGIN_TAB);
+  if (stored[LOGIN_TAB] !== tabId) return;
+  await chrome.storage.local.remove(LOGIN_TAB);
+  await run();
 });
 chrome.runtime.onStartup.addListener(() => void run());
 chrome.runtime.onInstalled.addListener(() => void run());

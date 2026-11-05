@@ -172,6 +172,22 @@ appears for background requests, select the certificate automatically (Chrome:
 the `AutoSelectCertificateForUrls` policy; Firefox: "Select one automatically"
 under Settings > Privacy & Security > Certificates). Not tested in a real browser.
 
+### Pangolin SSO (browser login)
+
+Instead of a certificate you can keep Pangolin's normal login (Platform SSO or
+your OIDC provider) in front of Bookmoor, without shareable links. In the
+extension settings, turn on "Server is behind a login page". Sign in once to
+the Bookmoor URL in a browser tab; Pangolin sets its resource-session cookie
+(30 days by default), and the extension sends it with every request. The
+Bookmoor token stays required.
+
+When the session ends (expiry, logout, revocation by the identity provider),
+the sync stops with "Sign in again", the toolbar icon shows a `!`, and the
+popup and settings offer a **Sign in** button. It opens the server URL in a new
+tab; closing that tab after the login makes the extension sync again. Changes
+made meanwhile stay queued locally. Not tested in a real browser yet (cookie
+handling for extension requests differs between Chrome and Firefox).
+
 NetBird's reverse proxy has no client-certificate authentication yet; use its
 header authentication (`Authorization: Bearer` with a Bookmoor token) or
 NetBird-Only access.
@@ -237,6 +253,19 @@ Each signing needs a new `version` in `extension/manifest.json`. Without
 signing, only Firefox Developer Edition, Nightly and ESR can install an
 unsigned file (set `xpinstall.signatures.required` to `false`):
 `mise run package:firefox` builds the unsigned `.zip`, rename it to `.xpi`.
+
+### Releases and versions
+
+Server, core and extension share one release number `X.Y.Z`. Its single source
+is `[workspace.package] version` in `Cargo.toml`; `extension/package.json`,
+`package-lock.json` and `manifest.json` are copies that
+`node scripts/sync-version.mjs` writes (CI fails if they drift). To release:
+
+1. `node scripts/sync-version.mjs --set 0.2.0 && cargo update --workspace`, open a PR, merge it.
+2. Publish a GitHub release with the tag `v0.2.0` on that commit. The workflows refuse a tag that differs from `Cargo.toml`.
+3. The release builds the Chrome zip and the signed Firefox `.xpi` with exactly `0.2.0`, submits Chrome to the Web Store and pushes the Docker image as `0.2.0`, `0.2` and `latest`.
+
+Builds from `main` and manual runs are dev builds numbered `X.Y.Z.<run>` (browsers allow at most four parts); they sort after `X.Y.Z`, so they are signed only while the tag `vX.Y.Z` exists. Between a version bump and its release tag they are built but not signed. Only plain `X.Y.Z` tags are supported (no `-rc` suffixes, browsers reject them).
 
 ### Chrome Web Store (unlisted, uploaded by CI)
 

@@ -29,6 +29,17 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * The server sits behind a login page (for example Pangolin SSO) and the
+ * browser has no valid session: the answer was a redirect or an HTML page
+ * instead of the API's JSON. Fixed by signing in in a browser tab.
+ */
+export class LoginRequired extends Error {
+  constructor() {
+    super("login required");
+  }
+}
+
 export interface Transport {
   /** Register this device and return its endpoint id. */
   endpoint(): Promise<string>;
@@ -43,8 +54,8 @@ export interface StateStore {
   save(s: SyncState): Promise<void>;
 }
 
-/** `auth`: stop until the token is fixed; `retry`: try again later. */
-export type Outcome = "ok" | "auth" | "retry";
+/** `auth`: stop until the token is fixed; `login`: stop until the user signs in at the proxy; `retry`: try again later. */
+export type Outcome = "ok" | "auth" | "login" | "retry";
 
 const BATCH = 500;
 
@@ -275,6 +286,7 @@ export async function flush(
     return "ok";
   } catch (e) {
     last.error = e;
+    if (e instanceof LoginRequired) return "login";
     if (e instanceof HttpError && (e.status === 401 || e.status === 403)) return "auth";
     return "retry";
   }

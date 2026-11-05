@@ -74,3 +74,6 @@ button.primary:hover { background: var(--primary-hover); border-color: var(--pri
 .bad { color: var(--bad); font-weight: 600; }
 a { color: var(--primary); }
 @media (prefers-color-scheme: light) { a { color: var(--blue); } }
+
+label.check { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; }
+label.check input { width: auto; margin-top: 3px; }

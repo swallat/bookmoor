@@ -8,6 +8,7 @@ function showSync(status: SyncStatus | undefined): void {
     ? `${status.message} (${new Date(status.at).toLocaleString()})`
     : "No sync has run yet. Open the settings to enter the server and token.";
   el.className = status && status.outcome !== "ok" ? "bad" : "";
+  $("signin").hidden = status?.outcome !== "login";
 }
 
 chrome.storage.onChanged.addListener((changes) => {
@@ -31,4 +32,8 @@ $("syncnow").addEventListener("click", async () => {
 $("settings").addEventListener("click", (e) => {
   e.preventDefault();
   void chrome.runtime.openOptionsPage().then(() => window.close());
+});
+
+$("signin").addEventListener("click", () => {
+  void chrome.runtime.sendMessage({ type: "bookmoor-sign-in" }).then(() => window.close());
 });
