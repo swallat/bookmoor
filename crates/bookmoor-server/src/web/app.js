@@ -233,8 +233,22 @@ async function profilesView() {
     return h("div", { class: "row" },
       h("div", { class: "main" },
         h("div", { class: "name", text: p.name }),
-        h("div", { class: "muted small", text: p.devices + (p.devices === 1 ? " device" : " devices") })),
+        h("div", { class: "muted small", text: p.devices + (p.devices === 1 ? " device" : " devices") + ", " + p.bookmarks + (p.bookmarks === 1 ? " bookmark" : " bookmarks") })),
       h("div", { class: "actions" },
+        p.bookmarks > 0 && h("button", { class: "btn quiet small", type: "button", text: "Tidy up", title: "Merge folders of the same name and drop repeated links", onclick: async () => {
+          try {
+            const r = await api("POST", "profiles/" + p.id + "/dedupe");
+            toast(r.bookmarks_removed + r.folders_merged === 0 ? "Nothing to tidy up in " + p.name
+              : "Removed " + r.bookmarks_removed + " repeated links, merged " + r.folders_merged + " folders");
+            render();
+          } catch (x) { toast(x.message); }
+        } }),
+        p.backup && confirmButton("Restore", "Yes, bring back " + p.backup.bookmarks + " bookmarks from " + p.backup.at.replace("T", " ").replace("Z", " UTC"), async () => {
+          await api("POST", "profiles/" + p.id + "/restore"); toast("Restored " + p.name); render();
+        }, "quiet"),
+        p.bookmarks > 0 && confirmButton("Clear", "Yes, remove all bookmarks", async () => {
+          await api("POST", "profiles/" + p.id + "/clear"); toast("Cleared " + p.name); render();
+        }),
         rename,
         h("button", { class: "btn quiet small", type: "button", text: "Rename", onclick: () => { rename.hidden = !rename.hidden; if (!rename.hidden) input.select(); } }),
         list.length > 1 && confirmButton("Remove", "Yes, delete bookmarks and devices", async () => {
@@ -244,7 +258,7 @@ async function profilesView() {
   return h("div", { class: "stack" },
     h("div", { class: "stack-sm" },
       h("h2", { text: "Add a profile" }),
-      h("p", { class: "muted", text: "A profile is a separate set of bookmarks, for example Private and Work. Profiles share nothing. A device syncs exactly one." }),
+      h("p", { class: "muted", text: "A profile is a separate set of bookmarks, for example Private and Work. Profiles share nothing. A device syncs exactly one. If a browser synced into the wrong profile: give it a token of the right profile first, then clear the wrong one here. Clear and Tidy up keep a copy you can bring back with Restore." }),
       form([
         h("div", { class: "form-row profile" },
           field("profile-name", "Profile name", { type: "text", placeholder: "Work", required: true, maxlength: "48" })),

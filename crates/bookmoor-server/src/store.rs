@@ -2,7 +2,7 @@
 //! replaced atomically (write a temp file, fsync, rename), readable by the
 //! owner only because it holds token hashes.
 
-use crate::api::AppState;
+use crate::api::{AppState, Backup};
 use crate::auth::{Scope, TokenRecord, Tokens};
 use crate::engine::{Engine, Snapshot};
 use crate::profiles::{default_id_for, Profile, Profiles, DEFAULT_NAME};
@@ -20,6 +20,7 @@ struct SaveFile<'a> {
     /// Bookmark tree per profile id.
     engines: BTreeMap<&'a str, Snapshot>,
     tokens: &'a [TokenRecord],
+    backups: &'a BTreeMap<String, Backup>,
 }
 
 #[derive(Deserialize)]
@@ -34,6 +35,8 @@ struct LoadFile {
     /// Single-user state of earlier versions; becomes the user `owner`.
     engine: Option<Snapshot>,
     tokens: Vec<TokenRecord>,
+    #[serde(default)]
+    backups: BTreeMap<String, Backup>,
 }
 
 /// Everything the state file holds.
@@ -43,6 +46,7 @@ pub struct Loaded {
     pub profiles: Profiles,
     pub engines: BTreeMap<String, Engine>,
     pub tokens: Tokens,
+    pub backups: BTreeMap<String, Backup>,
 }
 
 /// An exclusive OS lock on `<state>.lock`, so the server and the token
@@ -175,11 +179,17 @@ impl Store {
                 ));
             }
         }
+        let backups = f
+            .backups
+            .into_iter()
+            .filter(|(p, _)| profiles.get(p).is_some())
+            .collect();
         Ok(Some(Loaded {
             users,
             profiles,
             engines: restored,
             tokens: Tokens::from_records(tokens),
+            backups,
         }))
     }
 
@@ -189,6 +199,7 @@ impl Store {
         profiles: &Profiles,
         engines: &BTreeMap<String, Engine>,
         tokens: &Tokens,
+        backups: &BTreeMap<String, Backup>,
     ) -> io::Result<()> {
         let records = tokens.records();
         let user_records = users.records();
@@ -201,6 +212,7 @@ impl Store {
                 .map(|(k, e)| (k.as_str(), e.snapshot()))
                 .collect(),
             tokens: &records,
+            backups,
         })
         .map_err(io::Error::other)?;
         let tmp = tmp_path(&self.path);
@@ -252,6 +264,7 @@ impl AppState {
             profiles: l.profiles,
             engines: l.engines,
             tokens: l.tokens,
+            backups: l.backups,
             store: Some(store),
             ..AppState::default()
         })
@@ -260,7 +273,13 @@ impl AppState {
     /// Write the current state; a no-op without a store.
     pub fn persist(&self) -> io::Result<()> {
         match &self.store {
-            Some(s) => s.save(&self.users, &self.profiles, &self.engines, &self.tokens),
+            Some(s) => s.save(
+                &self.users,
+                &self.profiles,
+                &self.engines,
+                &self.tokens,
+                &self.backups,
+            ),
             None => Ok(()),
         }
     }
@@ -281,6 +300,7 @@ impl AppState {
                     self.profiles = l.profiles;
                     self.engines = l.engines;
                     self.tokens = l.tokens;
+                    self.backups = l.backups;
                 }
                 _ => {
                     eprintln!("fatal: cannot save or reload state ({err}); exiting");
@@ -611,6 +631,43 @@ mod tests {
     }
 
     #[test]
+    fn a_backup_survives_a_restart_and_goes_with_its_profile() {
+        let path = tmp("backup");
+        let mut st = AppState::default();
+        let uid = st.add_user("alice", false, None).unwrap().id;
+        let work = st.add_profile(&uid, "Work").unwrap().id;
+        st.engines
+            .get_mut(&work)
+            .unwrap()
+            .sync(&SyncRequest {
+                endpoint_id: "e".into(),
+                since_rev: 0,
+                ops: vec![add(1)],
+            })
+            .unwrap();
+        st.engines.get_mut(&work).unwrap().register_endpoint("e");
+        st.engines
+            .get_mut(&work)
+            .unwrap()
+            .sync(&SyncRequest {
+                endpoint_id: "e".into(),
+                since_rev: 0,
+                ops: vec![add(2)],
+            })
+            .unwrap();
+        st.clear_profile(&work).unwrap();
+        assert_eq!(st.engines[&work].tree().nodes.len(), 4);
+        st.store = Some(Store::new(&path));
+        st.persist().unwrap();
+        let mut again = AppState::open(Store::new(&path)).unwrap();
+        assert_eq!(again.backups[&work].bookmarks(), 1);
+        again.restore_profile(&work).unwrap();
+        assert_eq!(again.engines[&work].tree().nodes.len(), 5);
+        again.remove_profile(&uid, &work).unwrap();
+        assert!(again.backups.is_empty());
+    }
+
+    #[test]
     fn tokens_must_point_at_a_profile_of_their_user() {
         let path = tmp("badprofile");
         let mut st = AppState::default();
@@ -621,7 +678,13 @@ mod tests {
         st.tokens
             .create("x", Scope::Read, Some(a.clone()), Some(pb), None);
         Store::new(&path)
-            .save(&st.users, &st.profiles, &st.engines, &st.tokens)
+            .save(
+                &st.users,
+                &st.profiles,
+                &st.engines,
+                &st.tokens,
+                &st.backups,
+            )
             .unwrap();
         let err = Store::new(&path).load().err().unwrap();
         assert!(err.contains("does not match any user and profile"), "{err}");
@@ -631,7 +694,13 @@ mod tests {
         st.tokens
             .create("x", Scope::Read, Some(a), Some("p_gone".into()), None);
         Store::new(&path)
-            .save(&st.users, &st.profiles, &st.engines, &st.tokens)
+            .save(
+                &st.users,
+                &st.profiles,
+                &st.engines,
+                &st.tokens,
+                &st.backups,
+            )
             .unwrap();
         assert!(Store::new(&path).load().is_err());
         let _ = pa;

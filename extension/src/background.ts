@@ -1,4 +1,4 @@
-import { flush, last, type Outcome } from "./flow.ts";
+import { flush, last, startOver, type Outcome, type Restart } from "./flow.ts";
 import { loadSettings, hasHostAccess } from "./settings.ts";
 import { chromeBookmarks, chromeStateStore } from "./storage.ts";
 import { describe, STATUS_KEY, type SyncStatus } from "./status.ts";
@@ -26,7 +26,7 @@ async function setStatus(outcome: SyncStatus["outcome"], message: string): Promi
 // One round at a time; the service worker may be asked twice at once.
 let running: Promise<void> | null = null;
 
-async function round(): Promise<void> {
+async function round(restart?: Restart): Promise<void> {
   const settings = await loadSettings();
   if (!settings.serverUrl || !settings.token) {
     await setStatus("unconfigured", "Enter the server URL and a token in these settings.");
@@ -43,12 +43,10 @@ async function round(): Promise<void> {
     await chrome.action.setBadgeText({ text: "!" });
     return;
   }
-  const outcome: Outcome = await flush(
-    chromeBookmarks,
-    chromeStateStore,
-    httpTransport(settings),
-    `${settings.serverUrl}\n${settings.token}\n${JSON.stringify(settings.query)}`,
-  );
+  const identity = `${settings.serverUrl}\n${settings.token}\n${JSON.stringify(settings.query)}`;
+  const outcome: Outcome = restart
+    ? await startOver(chromeBookmarks, chromeStateStore, httpTransport(settings), identity, restart)
+    : await flush(chromeBookmarks, chromeStateStore, httpTransport(settings), identity);
   await setStatus(outcome, describe(outcome, last.error));
   const stored = await chrome.storage.local.get(FAILURES);
   const failures = outcome === "retry" ? ((stored[FAILURES] as number | undefined) ?? 0) + 1 : 0;
@@ -60,8 +58,8 @@ async function round(): Promise<void> {
   }
 }
 
-function run(): Promise<void> {
-  running ??= round()
+function run(restart?: Restart): Promise<void> {
+  running ??= round(restart)
     .catch((e) => console.warn("bookmoor:", e))
     .finally(() => {
       running = null;
@@ -89,9 +87,18 @@ void chrome.alarms.get(PULL).then((a) => {
 // Only the extension's own pages can send this (onMessage, not
 // onMessageExternal).
 chrome.runtime.onMessage.addListener((msg: unknown, _sender, respond) => {
-  if ((msg as { type?: string } | null)?.type !== "bookmoor-sync-now") return false;
-  void run().then(() => respond({ ok: true }));
-  return true;
+  const m = msg as { type?: string; mode?: string } | null;
+  if (m?.type === "bookmoor-sync-now") {
+    void run().then(() => respond({ ok: true }));
+    return true;
+  }
+  if (m?.type === "bookmoor-start-over" && (m.mode === "adopt" || m.mode === "overwrite")) {
+    // Wait for a round in progress: it must not see the work half done.
+    const mode = m.mode;
+    void (running ?? Promise.resolve()).then(() => run(mode)).then(() => respond({ ok: true }));
+    return true;
+  }
+  return false;
 });
-chrome.runtime.onStartup.addListener(run);
-chrome.runtime.onInstalled.addListener(run);
+chrome.runtime.onStartup.addListener(() => void run());
+chrome.runtime.onInstalled.addListener(() => void run());

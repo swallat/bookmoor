@@ -34,6 +34,8 @@ export interface Transport {
   endpoint(): Promise<string>;
   sync(req: SyncRequest): Promise<SyncResponse>;
   tree(): Promise<TreeResponse>;
+  /** Empty the server's tree of this profile (the web UI can restore it). */
+  reset(): Promise<void>;
 }
 
 export interface StateStore {
@@ -276,4 +278,49 @@ export async function flush(
     if (e instanceof HttpError && (e.status === 401 || e.status === 403)) return "auth";
     return "retry";
   }
+}
+
+/**
+ * `adopt`: make this browser's bookmarks the server's (what the browser has
+ * but the server has not is removed). `overwrite`: make the server's
+ * bookmarks this browser's (what the server has but the browser has not is
+ * dropped, on every device). Anything else is a normal merge, which is what
+ * the first sync does anyway.
+ */
+export type Restart = "adopt" | "overwrite";
+
+export async function startOver(
+  api: BookmarkApi,
+  store: StateStore,
+  transport: Transport,
+  identity: string,
+  mode: Restart,
+): Promise<Outcome> {
+  try {
+    // Until the new state is saved the old one must not be used: it would
+    // read the work below as deletions and send them to the server.
+    await store.save(emptyState("", `\u0000starting over\n${identity}`));
+    if (mode === "overwrite") {
+      await transport.reset();
+    } else {
+      const tree = await api.getTree();
+      const scratch = emptyState("");
+      mapRoots(scratch, tree);
+      const roles = new Set<string>(ROLES);
+      for (const root of tree[0]?.children ?? []) {
+        if (!roles.has(scratch.map[root.id] ?? "")) continue;
+        for (const c of root.children ?? []) {
+          if (!c.unmodifiable) await api.removeTree(c.id);
+        }
+      }
+    }
+    const state = emptyState(await transport.endpoint(), identity);
+    await matchTree(api, state, await transport.tree());
+    await store.save(state);
+  } catch (e) {
+    last.error = e;
+    if (e instanceof HttpError && (e.status === 401 || e.status === 403)) return "auth";
+    return "retry";
+  }
+  return flush(api, store, transport, identity);
 }

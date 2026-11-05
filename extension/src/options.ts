@@ -107,6 +107,25 @@ async function init(): Promise<void> {
   });
 }
 
+/** Ask for confirmation, then let the background script start over. */
+async function startOver(mode: "adopt" | "overwrite"): Promise<void> {
+  const ok = confirm(
+    mode === "adopt"
+      ? "Replace this browser's synced bookmarks with the server's? Links that only exist here are removed from this browser."
+      : "Replace the server's bookmarks with this browser's? Links that only exist on the server are removed from the profile and from its other devices (the server keeps a copy).",
+  );
+  if (!ok) return;
+  $("startover").textContent = "Working\u2026";
+  try {
+    await chrome.runtime.sendMessage({ type: "bookmoor-start-over", mode });
+    $("startover").textContent = "Done. See the sync status above.";
+  } catch (e) {
+    $("startover").textContent = `Could not reach the background script: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 $("syncnow").addEventListener("click", () => void syncNow());
+$("adopt").addEventListener("click", () => void startOver("adopt"));
+$("overwrite").addEventListener("click", () => void startOver("overwrite"));
 
 void init();
