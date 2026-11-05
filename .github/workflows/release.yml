@@ -1,0 +1,61 @@
+name: Release
+
+# Start by hand (Actions > Release > Run workflow) on main. Creates the tag
+# vX.Y.Z from the version in Cargo.toml and a GitHub release, then starts the
+# Extension package and Docker image workflows on that tag. Events made with
+# GITHUB_TOKEN do not start other workflows, but dispatching them explicitly is
+# allowed, so that is how they run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark the GitHub release as a pre-release (beta)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag, release, build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read and check the version
+        id: v
+        run: |
+          node scripts/sync-version.mjs --check
+          VERSION=$(node scripts/sync-version.mjs --print)
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists. Raise the version first: node scripts/sync-version.mjs --set X.Y.Z"
+            exit 1
+          fi
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+      - name: CI must be green on this commit
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --paginate \
+            --jq '.check_runs[] | select(.name | test("^(Rust|Extension|E2E)")) | .conclusion' | sort | uniq -c
+          BAD=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --paginate \
+            --jq '[.check_runs[] | select(.name | test("^(Rust|Extension|E2E)")) | select(.conclusion != "success")] | length')
+          [ "$BAD" = "0" ] || { echo "::error::CI is not green on $GITHUB_SHA"; exit 1; }
+      - name: Create the tag and the release
+        run: |
+          FLAGS=""
+          [ "${{ inputs.prerelease }}" = "true" ] && FLAGS="--prerelease"
+          gh release create "${{ steps.v.outputs.tag }}" --target "$GITHUB_SHA" --generate-notes \
+            --title "bookmoor ${{ steps.v.outputs.tag }}" $FLAGS
+      - name: Build, sign and publish from the tag
+        run: |
+          gh workflow run extension-package.yml --ref "${{ steps.v.outputs.tag }}" -f release=true
+          gh workflow run docker.yml --ref "${{ steps.v.outputs.tag }}"

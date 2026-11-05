@@ -20,6 +20,10 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      release:
+        description: "Release build from a vX.Y.Z tag (set by the Release workflow): exact version, store upload"
+        type: boolean
+        default: false
       chrome_store:
         description: "Also upload the Chrome build to the Web Store and submit it for review"
         type: boolean
@@ -71,15 +75,15 @@ jobs:
         working-directory: .
         run: |
           BASE=$(node scripts/sync-version.mjs --print)
-          if [ "${{ github.event_name }}" = "release" ]; then
-            node scripts/sync-version.mjs --tag "${{ github.event.release.tag_name }}"
+          if [ "${{ github.event_name }}" = "release" ] || [ "${{ inputs.release }}" = "true" ]; then
+            node scripts/sync-version.mjs --tag "${{ github.event.release.tag_name || github.ref_name }}"
             VERSION="$BASE"
           else
             VERSION="$BASE.${{ github.run_number }}"
           fi
           node scripts/sync-version.mjs --check
           SIGN=true
-          if [ "${{ github.event_name }}" != "release" ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$BASE" >/dev/null; then
+          if [ "${{ github.event_name }}" != "release" ] && [ "${{ inputs.release }}" != "true" ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$BASE" >/dev/null; then
             SIGN=false
             echo "::notice::v$BASE is not released yet, so this dev build is not signed or uploaded (it would outrank the release)."
           fi
@@ -109,7 +113,7 @@ jobs:
         if: steps.version.outputs.sign == 'true' && (env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == '')
         run: echo "::notice::No Firefox .xpi was signed because the secrets WEB_EXT_API_KEY and WEB_EXT_API_SECRET are not set."
       - name: Upload to the Chrome Web Store
-        if: steps.version.outputs.sign == 'true' && (github.event_name == 'release' || inputs.chrome_store) && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
+        if: steps.version.outputs.sign == 'true' && (github.event_name == 'release' || inputs.release || inputs.chrome_store) && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
         run: |
           set -euo pipefail
           ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip"
@@ -127,7 +131,7 @@ jobs:
           echo "$PUB" | jq -e '.status | index("OK") or index("ITEM_PENDING_REVIEW")' >/dev/null \
             || { echo "::error::Chrome Web Store did not accept the submission"; exit 1; }
       - name: Say why nothing went to the Chrome Web Store
-        if: (github.event_name == 'release' || inputs.chrome_store) && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
+        if: (github.event_name == 'release' || inputs.release || inputs.chrome_store) && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
         run: echo "::notice::Nothing was uploaded to the Chrome Web Store because one of CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN is not set."
       - uses: actions/upload-artifact@v4
         with:

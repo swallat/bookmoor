@@ -343,8 +343,8 @@ is `[workspace.package] version` in `Cargo.toml`; `extension/package.json`,
 `node scripts/sync-version.mjs` writes (CI fails if they drift). To release:
 
 1. `node scripts/sync-version.mjs --set 0.11.0 && cargo update --workspace`, open a PR, merge it.
-2. Publish a GitHub release with the tag `v0.11.0` on that commit. The workflows refuse a tag that differs from `Cargo.toml`.
-3. The release builds the Chrome zip and the signed Firefox `.xpi` with exactly `0.11.0`, submits Chrome to the Web Store and pushes the Docker image as `0.11.0`, `0.11` and `latest`.
+2. Actions > **Release** > Run workflow on `main` (tick *pre-release* for a beta). It checks that CI is green and the tag is new, creates the tag `v0.11.0` and the GitHub release, and starts the Extension package and Docker workflows on that tag. Publishing a release by hand in the GitHub UI works as well; the workflows refuse a tag that differs from `Cargo.toml`.
+3. The release builds the Chrome zip and the signed Firefox `.xpi` with exactly `0.11.0`, submits Chrome to the Web Store (if the secrets are set) and pushes the Docker image as `0.11.0`, `0.11` and `latest`.
 
 The script refuses any version not above `0.9.1`, the highest number CI signed before releases were coordinated (Mozilla and the stores never accept a lower one). The first release is therefore `0.10.0` (already set in `Cargo.toml`).
 
