@@ -121,6 +121,14 @@ jobs:
       - name: Say why there is no signed file
         if: steps.version.outputs.sign == 'true' && (env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == '')
         run: echo "::notice::No Firefox .xpi was signed because the secrets WEB_EXT_API_KEY and WEB_EXT_API_SECRET are not set."
+      # Keep the files before the store upload, so a store problem never loses a
+      # signed build (a version can be signed only once at Mozilla).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bookmoor-extension-${{ steps.version.outputs.version }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 90
       - name: Upload to the Chrome Web Store
         if: steps.version.outputs.sign == 'true' && (steps.version.outputs.release == 'true' || inputs.chrome_store) && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
         run: |
@@ -133,7 +141,15 @@ jobs:
           UP=$(curl -fsS -X PUT -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" \
             -T "$ZIP" "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CWS_EXTENSION_ID")
           echo "$UP" | jq -c '{uploadState, itemError}'
-          [ "$(echo "$UP" | jq -r .uploadState)" = "SUCCESS" ] || { echo "::error::Chrome Web Store upload failed"; exit 1; }
+          if [ "$(echo "$UP" | jq -r .uploadState)" != "SUCCESS" ]; then
+            if echo "$UP" | jq -e '.itemError[]? | select(.error_code == "ITEM_NOT_UPDATABLE")' >/dev/null; then
+              # The item is still in review (or ready to publish): the store takes
+              # no new upload until that is done. Not a build failure.
+              echo "::warning::The Chrome Web Store item cannot be updated now (pending review or ready to publish). Upload bookmoor-chrome-${{ steps.version.outputs.version }}.zip from this run's artifacts once the review is finished."
+              exit 0
+            fi
+            echo "::error::Chrome Web Store upload failed"; exit 1
+          fi
           PUB=$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" -H "Content-Length: 0" \
             "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish")
           echo "$PUB" | jq -c '{status, statusDetail}'
@@ -142,9 +158,3 @@ jobs:
       - name: Say why nothing went to the Chrome Web Store
         if: (steps.version.outputs.release == 'true' || inputs.chrome_store) && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
         run: echo "::notice::Nothing was uploaded to the Chrome Web Store because one of CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN is not set."
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bookmoor-extension-${{ steps.version.outputs.version }}
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 90
