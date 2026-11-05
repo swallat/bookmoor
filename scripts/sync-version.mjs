@@ -18,9 +18,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cargoPath = join(root, "Cargo.toml");
 const SEMVER = /^\d+\.\d+\.\d+$/;
 // Before releases were coordinated, CI signed Firefox builds as 0.<run>.<attempt>
-// (highest: 0.9.1, run 9). Versions only ever go up for stores and Mozilla, so
-// every release must be higher than this.
-const FLOOR = [0, 9, 1];
+// (highest 0.9.1), and the dev build 0.10.0.13 (X.Y.Z.<run>) reached the Chrome
+// Web Store. Versions are compared numerically and only ever go up, so 0.10.0
+// itself would be rejected there. Every release must be higher than this floor;
+// raise it whenever a dev build X.Y.Z.<run> of an unreleased version is uploaded.
+const FLOOR = [0, 10, 0];
 const cmp = (a, b) => a.reduce((d, x, i) => d || x - b[i], 0);
 
 // [workspace.package] up to the next table header (a line starting with "["),
