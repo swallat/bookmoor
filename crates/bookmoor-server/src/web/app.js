@@ -174,7 +174,7 @@ function setupView() {
 
 function shell(content) {
   const tabs = me.mfa_setup_needed ? [["account", "Account"]]
-    : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"]] : []), ["account", "Account"]];
+    : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"], ["dynacat", "Dynacat"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -611,6 +611,60 @@ async function mfaSection() {
         m.required && h("p", { class: "muted small", text: "An admin requires it, so it cannot be turned off here." }))));
 }
 
+async function dynacatView() {
+  const info = await api("GET", "dynacat");
+  const rows = info.outputs.map((o) => h("div", { class: "row" },
+    h("div", { class: "main" },
+      h("div", { class: "name mono", text: o.file }),
+      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") }),
+      o.error && h("div", { class: "error small", role: "alert", text: o.error })),
+    h("div", { class: "actions" },
+      o.id
+        ? confirmButton("Remove", "Yes, remove", async () => {
+            await api("DELETE", "dynacat/" + encodeURIComponent(o.id));
+            toast("Removed " + o.file + ". The file itself stays on disk.");
+            render();
+          })
+        : h("span", { class: "tag", text: "Command line" }))));
+
+  let create = h("p", { class: "muted", text: "Start the server with --dynacat-dir DIRECTORY (the directory Dynacat reads) to create outputs here." });
+  if (info.dir) {
+    const folder = h("select", { id: "dyn-folder", name: "folder" }, h("option", { value: "", text: "Whole tree" }));
+    const profile = h("select", { id: "dyn-profile", name: "profile" },
+      info.profiles.map((p) => h("option", { value: p.id, text: p.label })));
+    const load = async () => {
+      folder.replaceChildren(h("option", { value: "", text: "Whole tree" }));
+      try {
+        const paths = await api("GET", "dynacat/folders?profile=" + encodeURIComponent(profile.value));
+        for (const p of paths) folder.append(h("option", { value: p, text: p }));
+      } catch (e) { toast(e.message); }
+    };
+    profile.addEventListener("change", load);
+    load();
+    create = form([
+      h("div", { class: "form-row three" },
+        field("dyn-file", "File name", { type: "text", placeholder: "dev.yml", required: true, maxlength: "64", autocapitalize: "off" }),
+        h("div", { class: "field" }, h("label", { for: "dyn-profile", text: "Profile" }), profile),
+        h("div", { class: "field" }, h("label", { for: "dyn-folder", text: "Folder" }), folder)),
+    ], "Add output", async (fd, f) => {
+      await api("POST", "dynacat", { file: fd.get("dyn-file"), profile: profile.value, folder: folder.value });
+      toast("Added " + fd.get("dyn-file"));
+      f.reset();
+      render();
+    });
+  }
+  return h("div", { class: "stack" },
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Dynacat outputs" }),
+      h("p", { class: "muted", text: "Each output is a file with a Dynacat bookmarks widget, kept up to date after every sync. Include it in a Dynacat page with $include. Choose a profile and, if you like, one folder of it." }),
+      info.dir && h("p", { class: "hint", text: "Written to " + info.dir }),
+      create),
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Outputs" }),
+      h("div", { class: "list" }, rows.length ? rows : [h("p", { class: "empty", text: "No outputs yet." })])));
+}
+
+
 async function accountView() {
   const mfaPart = await mfaSection();
   if (me.mfa_setup_needed) return h("div", { class: "stack" }, mfaPart);
@@ -632,10 +686,10 @@ async function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, sso: ssoAdminView, account: accountView };
-  if ((tab === "users" || tab === "sso") && !me.admin) tab = "devices";
+  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, sso: ssoAdminView, dynacat: dynacatView, account: accountView };
+  if ((tab === "users" || tab === "sso" || tab === "dynacat") && !me.admin) tab = "devices";
   if (me.mfa_setup_needed) tab = "account"; // nothing else works until it is set up
-  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", sso: "Single sign-on", account: "Account" }[tab] + " · bookmoor";
+  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", sso: "Single sign-on", dynacat: "Dynacat", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }

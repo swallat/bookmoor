@@ -1,6 +1,6 @@
 //! bookmoor server entry point.
 //!
-//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]...`
+//! Usage: `bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]... [--dynacat-dir DIR]`
 //! and `bookmoor-server token create ...` (see `--help` of that command).
 //! With `--state` (or `BOOKMOOR_STATE`) everything survives restarts.
 //! The first admin token is read from `BOOKMOOR_ADMIN_TOKEN`
@@ -154,6 +154,9 @@ async fn main() {
     let mut state_path = std::env::var_os("BOOKMOOR_STATE").map(std::path::PathBuf::from);
     let mut dynacat_user = std::env::var("BOOKMOOR_DYNACAT_USER").ok();
     let mut dynacat_profile = std::env::var("BOOKMOOR_DYNACAT_PROFILE").ok();
+    let mut dynacat_dir = std::env::var_os("BOOKMOOR_DYNACAT_DIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from);
     let mut client_cert = std::env::var("BOOKMOOR_CLIENT_CERT_HEADER")
         .ok()
         .filter(|v| !v.trim().is_empty());
@@ -245,6 +248,13 @@ async fn main() {
                 dynacat_user = Some(
                     args.next()
                         .unwrap_or_else(|| fail("--dynacat-user needs a user name")),
+                );
+            }
+            "--dynacat-dir" => {
+                dynacat_dir = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--dynacat-dir needs a directory"))
+                        .into(),
                 );
             }
             "--dynacat-file" => {
@@ -359,11 +369,33 @@ async fn main() {
             );
         }
     }
+    if let Some(dir) = &dynacat_dir {
+        if !dir.is_dir() {
+            fail(&format!(
+                "--dynacat-dir {} is not a directory",
+                dir.display()
+            ));
+        }
+    }
+    state.dynacat_dir = dynacat_dir;
     state.dynacat_outputs = dynacat_outputs;
     state.dynacat_user = dynacat_user;
     state.dynacat_profile = dynacat_profile;
     if let Err(e) = state.publish_dynacat(None) {
-        fail(&format!("cannot write the Dynacat file: {e}"));
+        // Outputs made in the web UI can break later (a renamed folder); that
+        // must not keep the whole server from starting.
+        let cli_broken = state.dynacat_outputs.iter().any(|o| {
+            state
+                .dynacat_errors
+                .contains_key(&o.file.display().to_string())
+        });
+        if cli_broken || state.dynacat_ui.is_empty() {
+            fail(&format!("cannot write the Dynacat file: {e}"));
+        }
+        eprintln!("warning: cannot write the Dynacat file: {e}");
+    }
+    if state.dynacat_dir.is_none() && !state.dynacat_ui.is_empty() {
+        eprintln!("warning: the state holds Dynacat outputs made in the web UI, but --dynacat-dir is not set: they are not written");
     }
 
     let app = router(Arc::new(Mutex::new(state)));
