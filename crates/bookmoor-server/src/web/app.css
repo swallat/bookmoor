@@ -54,6 +54,7 @@ p { margin: 0; }
 :focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; border-radius: 4px; }
 
 .shell { max-width: 46rem; margin: 0 auto; padding: 0 16px 64px; }
+.shell.wide { max-width: 90rem; }
 .bar {
   display: flex; align-items: center; gap: 12px;
   padding: 16px 0;
