@@ -238,6 +238,19 @@ signing, only Firefox Developer Edition, Nightly and ESR can install an
 unsigned file (set `xpinstall.signatures.required` to `false`):
 `mise run package:firefox` builds the unsigned `.zip`, rename it to `.xpi`.
 
+### Releases and versions
+
+Server, core and extension share one release number `X.Y.Z`. Its single source
+is `[workspace.package] version` in `Cargo.toml`; `extension/package.json`,
+`package-lock.json` and `manifest.json` are copies that
+`node scripts/sync-version.mjs` writes (CI fails if they drift). To release:
+
+1. `node scripts/sync-version.mjs --set 0.2.0 && cargo update --workspace`, open a PR, merge it.
+2. Publish a GitHub release with the tag `v0.2.0` on that commit. The workflows refuse a tag that differs from `Cargo.toml`.
+3. The release builds the Chrome zip and the signed Firefox `.xpi` with exactly `0.2.0`, submits Chrome to the Web Store and pushes the Docker image as `0.2.0`, `0.2` and `latest`.
+
+Builds from `main` and manual runs are dev builds numbered `X.Y.Z.<run>.<attempt>`; they sort after the last release, so `Cargo.toml` keeps the version of the last release until the next one is cut.
+
 ### Chrome Web Store (unlisted, uploaded by CI)
 
 Chrome only installs extensions from the Web Store (or by policy), so the Chrome equivalent of a signed `.xpi` is an **unlisted** store item: nobody finds it by search, you install it with its link and it updates itself. The `Extension package` workflow uploads every build and submits it for review once these four repository secrets are set (Settings > Secrets and variables > Actions):
