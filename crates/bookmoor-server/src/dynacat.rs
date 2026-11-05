@@ -1,7 +1,7 @@
 //! Publishes the canonical tree as a Dynacat widget file (push only).
 //! See `docs/adapters/dynacat.md`.
 
-use bookmoor_core::dynacat::{render_folder, HEADER};
+use bookmoor_core::dynacat::{render_styled, GroupNames, Style, HEADER};
 use bookmoor_core::wire::TreeResponse;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -16,10 +16,12 @@ pub struct Output {
     pub profile: Option<String>,
     /// Folder titles from the root (empty = the whole tree).
     pub folder: Vec<String>,
+    pub style: Style,
 }
 
 impl Output {
-    /// `file=PATH[;profile=NAME][;folder=A/B/C]`; a bare `PATH` also works.
+    /// `file=PATH[;profile=NAME][;folder=A/B/C][;title=T][;names=path|name][;depth=N]
+    /// [;max-title=N][;icons=yes][;hide-arrow=yes][;same-tab=yes]`; a bare `PATH` also works.
     pub fn parse(spec: &str) -> Result<Output, String> {
         let bad = |part: &str| format!("cannot read \"{part}\" in Dynacat output \"{spec}\"");
         let mut out = Output::default();
@@ -47,13 +49,32 @@ impl Output {
                         .map(String::from)
                         .collect()
                 }
+                ("title", v) if !v.is_empty() => out.style.title = Some(v.into()),
+                ("names", "path") => out.style.names = GroupNames::Path,
+                ("names", "name") => out.style.names = GroupNames::Name,
+                ("depth", v) => out.style.depth = Some(v.parse().map_err(|_| bad(part))?),
+                ("max-title", v) => out.style.max_title = Some(v.parse().map_err(|_| bad(part))?),
+                ("icons", v) => out.style.icons = flag(v).ok_or_else(|| bad(part))?,
+                ("hide-arrow", v) => out.style.hide_arrow = flag(v).ok_or_else(|| bad(part))?,
+                ("same-tab", v) => out.style.same_tab = flag(v).ok_or_else(|| bad(part))?,
                 _ => return Err(bad(part)),
             }
         }
+        out.style
+            .check()
+            .map_err(|e| format!("Dynacat output \"{spec}\": {e}"))?;
         if out.file.as_os_str().is_empty() {
             return Err(format!("Dynacat output \"{spec}\" needs a file"));
         }
         Ok(out)
+    }
+}
+
+fn flag(v: &str) -> Option<bool> {
+    match v.to_ascii_lowercase().as_str() {
+        "yes" | "true" | "on" | "1" => Some(true),
+        "no" | "false" | "off" | "0" => Some(false),
+        _ => None,
     }
 }
 
@@ -66,6 +87,8 @@ pub struct UiOutput {
     pub file: String,
     pub profile_id: String,
     pub folder: Vec<String>,
+    #[serde(default)]
+    pub style: Style,
 }
 
 /// Most outputs the web UI may create.
@@ -88,9 +111,14 @@ pub fn check_file_name(name: &str) -> Result<(), String> {
 /// the file atomically. Returns `false` without touching the file when it is
 /// already up to date, so Dynacat's reload does not fire for nothing. A
 /// missing folder is an error and leaves the old file in place.
-pub fn publish(path: &Path, tree: &TreeResponse, folder: &[String]) -> io::Result<bool> {
+pub fn publish(
+    path: &Path,
+    tree: &TreeResponse,
+    folder: &[String],
+    style: &Style,
+) -> io::Result<bool> {
     let names: Vec<&str> = folder.iter().map(String::as_str).collect();
-    let yaml = render_folder(&tree.nodes, &names).ok_or_else(|| {
+    let yaml = render_styled(&tree.nodes, &names, style).ok_or_else(|| {
         io::Error::other(format!("folder \"{}\" does not exist", folder.join("/")))
     })?;
     match fs::read_to_string(path) {
@@ -132,13 +160,13 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let file = dir.join("bookmoor.yml");
         let tree = Engine::new().tree();
-        assert!(publish(&file, &tree, &[]).unwrap());
+        assert!(publish(&file, &tree, &[], &Style::default()).unwrap());
         assert!(fs::read_to_string(&file)
             .unwrap()
             .contains("type: bookmarks"));
-        assert!(!publish(&file, &tree, &[]).unwrap());
+        assert!(!publish(&file, &tree, &[], &Style::default()).unwrap());
         assert!(!dir.join("bookmoor.yml.tmp").exists());
-        let err = publish(&file, &tree, &["nope".to_string()]).unwrap_err();
+        let err = publish(&file, &tree, &["nope".to_string()], &Style::default()).unwrap_err();
         assert!(err.to_string().contains("nope"));
         assert!(file.exists(), "old file stays");
         fs::remove_dir_all(&dir).unwrap();
@@ -150,7 +178,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let file = dir.join("glance.yml");
         fs::write(&file, "pages: []\n").unwrap();
-        let err = publish(&file, &Engine::new().tree(), &[]).unwrap_err();
+        let err = publish(&file, &Engine::new().tree(), &[], &Style::default()).unwrap_err();
         assert!(err.to_string().contains("not overwriting"));
         assert_eq!(fs::read_to_string(&file).unwrap(), "pages: []\n");
         fs::remove_dir_all(&dir).unwrap();
@@ -162,7 +190,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let file = dir.join("new.yml");
         fs::write(&file, "\n").unwrap();
-        assert!(publish(&file, &Engine::new().tree(), &[]).unwrap());
+        assert!(publish(&file, &Engine::new().tree(), &[], &Style::default()).unwrap());
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -181,6 +209,21 @@ mod tests {
         ] {
             assert!(check_file_name(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn style_options_parse() {
+        let o = Output::parse(
+            "file=a.yml;title=Work;names=name;depth=1;max-title=30;icons=yes;hide-arrow=on;same-tab=no",
+        )
+        .unwrap();
+        assert_eq!(o.style.title.as_deref(), Some("Work"));
+        assert_eq!(o.style.names, GroupNames::Name);
+        assert_eq!((o.style.depth, o.style.max_title), (Some(1), Some(30)));
+        assert!(o.style.icons && o.style.hide_arrow && !o.style.same_tab);
+        assert!(Output::parse("file=a.yml;depth=x").is_err());
+        assert!(Output::parse("file=a.yml;max-title=2").is_err());
+        assert!(Output::parse("file=a.yml;icons=maybe").is_err());
     }
 
     #[test]

@@ -35,10 +35,28 @@ a write problem shows on the row. The outputs are kept in the state file.
 - Outputs from `--dynacat-output` show up in the tab as read-only.
 - The top-level folders of a profile are called `toolbar`, `other` and `mobile`.
 
+## Making the output readable
+
+Every output (web UI or `--dynacat-output`) takes these options; all default to
+the plain output.
+
+| Web UI | Spec key | Effect |
+|---|---|---|
+| Widget title | `title=Work` | `title:` of the widget, tells pages/profiles apart |
+| Group titles | `names=path\|name` | `toolbar / Dev` or just `Dev` |
+| Group depth | `depth=N` | folders deeper than N below the chosen folder join their ancestor's group (fewer, longer groups) |
+| Shorten titles | `max-title=N` | link titles cut to N characters with `…` |
+| Site icons | `icons=yes` | `icon: https://HOST/favicon.ico` per link; the viewer's browser contacts each site |
+| Hide the arrow / same tab | `hide-arrow=yes`, `same-tab=yes` | per-link flags |
+
+On the command line the title cannot contain `;`. Several pages for one profile are several
+outputs of that profile, each with its own folder (and title).
+
 ## One file per Dynacat page (command line)
 
 `--dynacat-output SPEC` can be given several times (or one spec per line in
-`BOOKMOOR_DYNACAT_OUTPUTS`). A spec is `file=PATH[;profile=NAME][;folder=A/B/C]`
+`BOOKMOOR_DYNACAT_OUTPUTS`). A spec is `file=PATH[;profile=NAME][;folder=A/B/C]` plus the optional
+keys `title`, `names`, `depth`, `max-title`, `icons`, `hide-arrow`, `same-tab` (see above)
 (a bare `PATH` works too). `--dynacat-file PATH` and `BOOKMOOR_DYNACAT_FILE` take a plain path
 without any options. Two outputs must not write the same file.
 
