@@ -568,11 +568,16 @@ struct OidcStart {
 
 async fn oidc_start(
     State(s): State<Shared>,
+    Peer(peer): Peer,
     headers: HeaderMap,
     axum::extract::Query(q): axum::extract::Query<OidcStart>,
 ) -> Response {
     let (oidc, link_user, secure) = {
-        let st = s.lock().unwrap();
+        let mut st = s.lock().unwrap();
+        // Each start costs memory and a request to the provider, so it costs a token too.
+        if throttle(&mut st, peer).is_err() {
+            return back_to("", Some("rate"));
+        }
         let link_user = if q.link.is_some() {
             let uid = cookie_value(&headers)
                 .and_then(|c| st.sessions.user_for(&c, Instant::now()).map(String::from));
