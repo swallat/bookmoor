@@ -707,8 +707,8 @@ async function dynacatView() {
   const info = await api("GET", "dynacat");
   const rows = info.outputs.map((o) => h("div", { class: "row" },
     h("div", { class: "main" },
-      h("div", { class: "name mono", text: o.file }),
-      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") + dynStyleText(o.style) }),
+      h("div", { class: "name mono", text: o.path || o.file }),
+      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") + dynStyleText(o.style) + (o.written ? " · file last changed " + new Date(o.written * 1000).toLocaleString() : o.error ? "" : " · not written yet") }),
       o.error && h("div", { class: "error small", role: "alert", text: o.error })),
     h("div", { class: "actions" },
       o.id
@@ -801,7 +801,7 @@ async function dynacatView() {
     h("div", { class: "stack-sm" },
       h("h2", { text: "Dynacat outputs" }),
       h("p", { class: "muted", text: "Each output is a file with a Dynacat bookmarks widget, kept up to date after every sync. Include it in a Dynacat page with $include. Choose a profile and, if you like, one folder of it. Several outputs of the same profile (each with its own folder) make several pages; give each a widget title." }),
-      info.dir && h("p", { class: "hint", text: "Written to " + info.dir }),
+      info.dir && h("p", { class: "hint", text: "Each output is written into " + info.dir + " when you add it and checked after every sync of its profile; it is only rewritten when its content changes." }),
       create),
     h("div", { class: "stack-sm" },
       h("h2", { text: "Outputs" }),
