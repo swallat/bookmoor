@@ -1,8 +1,9 @@
 //! Publishes the canonical tree as a Dynacat widget file (push only).
 //! See `docs/adapters/dynacat.md`.
 
-use bookmoor_core::dynacat::render_folder;
+use bookmoor_core::dynacat::{render_folder, HEADER};
 use bookmoor_core::wire::TreeResponse;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -56,6 +57,33 @@ impl Output {
     }
 }
 
+/// An output set up in the web UI: stored in the state file, written into the
+/// directory given with `--dynacat-dir`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiOutput {
+    pub id: String,
+    /// File name inside the directory, e.g. `dev.yml`.
+    pub file: String,
+    pub profile_id: String,
+    pub folder: Vec<String>,
+}
+
+/// Most outputs the web UI may create.
+pub const MAX_UI_OUTPUTS: usize = 50;
+
+/// A plain `.yml` / `.yaml` file name: no path, no hidden or odd names, so
+/// the UI can never reach outside the directory.
+pub fn check_file_name(name: &str) -> Result<(), String> {
+    let ext_ok = name.ends_with(".yml") || name.ends_with(".yaml");
+    let chars_ok = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if !ext_ok || !chars_ok || name.starts_with('.') || name.len() > 64 {
+        return Err("file name: letters, digits, dot, dash and underscore, ending in .yml or .yaml (at most 64 characters)".into());
+    }
+    Ok(())
+}
+
 /// Write the widget for `tree` (restricted to `folder`) to `path`, replacing
 /// the file atomically. Returns `false` without touching the file when it is
 /// already up to date, so Dynacat's reload does not fire for nothing. A
@@ -65,8 +93,15 @@ pub fn publish(path: &Path, tree: &TreeResponse, folder: &[String]) -> io::Resul
     let yaml = render_folder(&tree.nodes, &names).ok_or_else(|| {
         io::Error::other(format!("folder \"{}\" does not exist", folder.join("/")))
     })?;
-    if fs::read_to_string(path).is_ok_and(|old| old == yaml) {
-        return Ok(false);
+    match fs::read_to_string(path) {
+        Ok(old) if old == yaml => return Ok(false),
+        // Never overwrite a file bookmoor did not write (a Dynacat config).
+        Ok(old) if !old.starts_with(HEADER) => {
+            return Err(io::Error::other(
+                "the file exists and was not written by bookmoor; not overwriting it",
+            ))
+        }
+        _ => {}
     }
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".tmp");
@@ -107,6 +142,35 @@ mod tests {
         assert!(err.to_string().contains("nope"));
         assert!(file.exists(), "old file stays");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn foreign_files_are_never_overwritten() {
+        let dir = std::env::temp_dir().join(format!("bookmoor-dynacat-f-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("glance.yml");
+        fs::write(&file, "pages: []\n").unwrap();
+        let err = publish(&file, &Engine::new().tree(), &[]).unwrap_err();
+        assert!(err.to_string().contains("not overwriting"));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "pages: []\n");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn file_names_are_plain() {
+        assert!(check_file_name("dev.yml").is_ok());
+        assert!(check_file_name("My-Work_1.yaml").is_ok());
+        for bad in [
+            "",
+            "dev",
+            "../x.yml",
+            "a/b.yml",
+            ".hidden.yml",
+            "a b.yml",
+            "x.txt",
+        ] {
+            assert!(check_file_name(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

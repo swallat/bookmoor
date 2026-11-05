@@ -153,7 +153,7 @@ function setupView() {
 // ---- signed in ------------------------------------------------------------
 
 function shell(content) {
-  const tabs = [["devices", "Devices"], ["profiles", "Profiles"], ...(me.admin ? [["users", "Users"]] : []), ["account", "Account"]];
+  const tabs = [["devices", "Devices"], ["profiles", "Profiles"], ...(me.admin ? [["users", "Users"], ["dynacat", "Dynacat"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -406,6 +406,59 @@ function ssoSection() {
          h("a", { class: "btn", href: ssoHref(true), text: "Link " + sso.label })]);
 }
 
+async function dynacatView() {
+  const info = await api("GET", "dynacat");
+  const rows = info.outputs.map((o) => h("div", { class: "row" },
+    h("div", { class: "main" },
+      h("div", { class: "name mono", text: o.file }),
+      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") }),
+      o.error && h("div", { class: "error small", role: "alert", text: o.error })),
+    h("div", { class: "actions" },
+      o.id
+        ? confirmButton("Remove", "Yes, remove", async () => {
+            await api("DELETE", "dynacat/" + encodeURIComponent(o.id));
+            toast("Removed " + o.file + ". The file itself stays on disk.");
+            render();
+          })
+        : h("span", { class: "tag", text: "Command line" }))));
+
+  let create = h("p", { class: "muted", text: "Start the server with --dynacat-dir DIRECTORY (the directory Dynacat reads) to create outputs here." });
+  if (info.dir) {
+    const folder = h("select", { id: "dyn-folder", name: "folder" }, h("option", { value: "", text: "Whole tree" }));
+    const profile = h("select", { id: "dyn-profile", name: "profile" },
+      info.profiles.map((p) => h("option", { value: p.id, text: p.label })));
+    const load = async () => {
+      folder.replaceChildren(h("option", { value: "", text: "Whole tree" }));
+      try {
+        const paths = await api("GET", "dynacat/folders?profile=" + encodeURIComponent(profile.value));
+        for (const p of paths) folder.append(h("option", { value: p, text: p }));
+      } catch (e) { toast(e.message); }
+    };
+    profile.addEventListener("change", load);
+    load();
+    create = form([
+      h("div", { class: "form-row three" },
+        field("dyn-file", "File name", { type: "text", placeholder: "dev.yml", required: true, maxlength: "64", autocapitalize: "off" }),
+        h("div", { class: "field" }, h("label", { for: "dyn-profile", text: "Profile" }), profile),
+        h("div", { class: "field" }, h("label", { for: "dyn-folder", text: "Folder" }), folder)),
+    ], "Add output", async (fd, f) => {
+      await api("POST", "dynacat", { file: fd.get("dyn-file"), profile: profile.value, folder: folder.value });
+      toast("Added " + fd.get("dyn-file"));
+      f.reset();
+      render();
+    });
+  }
+  return h("div", { class: "stack" },
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Dynacat outputs" }),
+      h("p", { class: "muted", text: "Each output is a file with a Dynacat bookmarks widget, kept up to date after every sync. Include it in a Dynacat page with $include. Choose a profile and, if you like, one folder of it." }),
+      info.dir && h("p", { class: "hint", text: "Written to " + info.dir }),
+      create),
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Outputs" }),
+      h("div", { class: "list" }, rows.length ? rows : [h("p", { class: "empty", text: "No outputs yet." })])));
+}
+
 function accountView() {
   return h("div", { class: "stack" },
     ssoSection(),
@@ -424,9 +477,9 @@ function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, profiles: profilesView, users: usersView, account: async () => accountView() };
-  if (tab === "users" && !me.admin) tab = "devices";
-  document.title = { devices: "Devices", profiles: "Profiles", users: "Users", account: "Account" }[tab] + " · bookmoor";
+  const views = { devices: devicesView, profiles: profilesView, users: usersView, dynacat: dynacatView, account: async () => accountView() };
+  if ((tab === "users" || tab === "dynacat") && !me.admin) tab = "devices";
+  document.title = { devices: "Devices", profiles: "Profiles", users: "Users", dynacat: "Dynacat", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }

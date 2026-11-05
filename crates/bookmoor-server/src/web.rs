@@ -67,6 +67,9 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/profiles/{id}/restore", post(restore_profile))
         .route("/ui/api/profiles/{id}/export", get(export_profile))
         .route("/ui/api/profiles/{id}/import", post(import_profile))
+        .route("/ui/api/dynacat", get(dynacat).post(add_dynacat))
+        .route("/ui/api/dynacat/folders", get(dynacat_folders))
+        .route("/ui/api/dynacat/{id}", delete(remove_dynacat))
         .route("/ui/api/password", post(change_password))
         .route("/ui/api/users", get(users).post(add_user))
         .route("/ui/api/users/{id}", delete(remove_user))
@@ -722,6 +725,156 @@ async fn oidc_unlink(State(s): State<Shared>, a: Authed) -> Result<StatusCode, A
     st.users
         .set_oidc(&a.user.id, None)
         .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct DynacatRow {
+    /// `None` for outputs from the command line (read only here).
+    id: Option<String>,
+    file: String,
+    profile: String,
+    folder: String,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DynacatProfile {
+    id: String,
+    label: String,
+}
+
+#[derive(Serialize)]
+struct DynacatInfo {
+    /// The directory web-UI outputs are written to; `None` = not enabled.
+    dir: Option<String>,
+    outputs: Vec<DynacatRow>,
+    profiles: Vec<DynacatProfile>,
+}
+
+fn profile_label(st: &AppState, id: &str) -> String {
+    match st.profiles.get(id) {
+        Some(p) => match st.users.get(&p.user_id) {
+            Some(u) => format!("{} / {}", u.name, p.name),
+            None => p.name.clone(),
+        },
+        None => "(removed)".into(),
+    }
+}
+
+/// Dynacat output settings; admins only, because the files are written by
+/// the server process.
+async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
+    let st = s.lock().unwrap();
+    let mut outputs = Vec::new();
+    for o in &st.dynacat_outputs {
+        let file = o.file.display().to_string();
+        let key = o
+            .file
+            .file_name()
+            .map_or(file.clone(), |n| n.to_string_lossy().into_owned());
+        let profile = match st.dynacat_target(o.profile.as_deref()) {
+            Ok(id) => profile_label(&st, &id),
+            Err(e) => e,
+        };
+        outputs.push(DynacatRow {
+            id: None,
+            error: st.dynacat_errors.get(&key).cloned(),
+            file,
+            profile,
+            folder: o.folder.join("/"),
+        });
+    }
+    for o in &st.dynacat_ui {
+        outputs.push(DynacatRow {
+            id: Some(o.id.clone()),
+            file: o.file.clone(),
+            profile: profile_label(&st, &o.profile_id),
+            folder: o.folder.join("/"),
+            error: st.dynacat_errors.get(&o.file).cloned(),
+        });
+    }
+    let profiles = st
+        .profiles
+        .list()
+        .map(|p| DynacatProfile {
+            id: p.id.clone(),
+            label: profile_label(&st, &p.id),
+        })
+        .collect();
+    Json(DynacatInfo {
+        dir: st.dynacat_dir.as_ref().map(|d| d.display().to_string()),
+        outputs,
+        profiles,
+    })
+}
+
+#[derive(Deserialize)]
+struct FolderQuery {
+    profile: String,
+}
+
+/// The folders of a profile that an output can be limited to.
+async fn dynacat_folders(
+    State(s): State<Shared>,
+    _: Admin,
+    axum::extract::Query(q): axum::extract::Query<FolderQuery>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let st = s.lock().unwrap();
+    let engine = st.engines.get(&q.profile).ok_or(ApiError::Forbidden)?;
+    Ok(Json(
+        bookmoor_core::dynacat::folder_paths(&engine.tree().nodes)
+            .into_iter()
+            .map(|p| p.join("/"))
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize)]
+struct NewDynacat {
+    file: String,
+    profile: String,
+    /// `A/B/C`, empty for the whole tree.
+    #[serde(default)]
+    folder: String,
+}
+
+async fn add_dynacat(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Json(b): Json<NewDynacat>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    let folder = b
+        .folder
+        .split('/')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect();
+    st.add_dynacat_output(&b.file, &b.profile, folder)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    // The file appears at once; a failure shows as the row's error.
+    let _ = st.publish_dynacat(None);
+    Ok(StatusCode::CREATED)
+}
+
+async fn remove_dynacat(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    let Some(i) = st.dynacat_ui.iter().position(|o| o.id == id) else {
+        return Err(ApiError::Forbidden);
+    };
+    let gone = st.dynacat_ui.remove(i);
+    st.dynacat_errors.remove(&gone.file);
+    // The file stays: Dynacat may still include it.
     save(&mut st)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1493,6 +1646,128 @@ mod tests {
             );
             assert_eq!(r.headers()["x-frame-options"], "DENY");
         }
+    }
+
+    #[tokio::test]
+    async fn admins_manage_dynacat_outputs_inside_the_directory() {
+        let dir = std::env::temp_dir().join(format!("bookmoor-ui-dynacat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("glance.yml"), "pages: []\n").unwrap();
+        let u = ui();
+        let anna = u.setup("anna").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let profile = v[0]["id"].as_str().unwrap().to_string();
+
+        // Off until the server has a directory.
+        let new = |file: &str, folder: &str| serde_json::json!({"file": file, "profile": profile, "folder": folder});
+        let (st, v, _) = u
+            .call("GET", "/ui/api/dynacat", Some(&anna), None, false)
+            .await;
+        assert_eq!((st, v["dir"].is_null()), (StatusCode::OK, true));
+        assert_eq!(
+            u.post("/ui/api/dynacat", Some(&anna), new("a.yml", ""))
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        u.state.lock().unwrap().dynacat_dir = Some(dir.clone());
+        let (st, _, _) = u
+            .post("/ui/api/dynacat", Some(&anna), new("a.yml", ""))
+            .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let text = std::fs::read_to_string(dir.join("a.yml")).unwrap();
+        assert!(text.starts_with("# Generated by bookmoor"), "{text}");
+
+        // Bad names, a missing folder, a repeated name and a foreign file.
+        for bad in ["../x.yml", "x.txt", "sub/x.yml", ".h.yml"] {
+            assert_eq!(
+                u.post("/ui/api/dynacat", Some(&anna), new(bad, "")).await.0,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{bad}"
+            );
+        }
+        let missing = new("b.yml", "Nope");
+        assert_eq!(
+            u.post("/ui/api/dynacat", Some(&anna), missing).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            u.post("/ui/api/dynacat", Some(&anna), new("a.yml", ""))
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let (st, _, _) = u
+            .post("/ui/api/dynacat", Some(&anna), new("glance.yml", ""))
+            .await;
+        assert_eq!(st, StatusCode::CREATED);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("glance.yml")).unwrap(),
+            "pages: []\n"
+        );
+
+        let (_, v, _) = u
+            .call("GET", "/ui/api/dynacat", Some(&anna), None, false)
+            .await;
+        let rows = v["outputs"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0]["error"].is_null());
+        assert!(rows[1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("not overwriting"));
+        assert_eq!(v["profiles"][0]["label"], "anna / Default");
+        let id = rows[0]["id"].as_str().unwrap().to_string();
+        let (_, f, _) = u
+            .call(
+                "GET",
+                &format!("/ui/api/dynacat/folders?profile={profile}"),
+                Some(&anna),
+                None,
+                false,
+            )
+            .await;
+        assert!(f.as_array().unwrap().iter().any(|p| p == "toolbar"));
+
+        // Other users cannot see or change any of it.
+        let bob_pw = serde_json::json!({"name":"bob","password":"another good password"});
+        u.post("/ui/api/users", Some(&anna), bob_pw.clone()).await;
+        let bob = cookie_of(&u.post("/ui/api/login", None, bob_pw).await.2.unwrap());
+        assert_eq!(
+            u.call("GET", "/ui/api/dynacat", Some(&bob), None, false)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            u.call(
+                "DELETE",
+                &format!("/ui/api/dynacat/{id}"),
+                Some(&bob),
+                None,
+                true
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+
+        let del = u
+            .call(
+                "DELETE",
+                &format!("/ui/api/dynacat/{id}"),
+                Some(&anna),
+                None,
+                true,
+            )
+            .await;
+        assert_eq!(del.0, StatusCode::NO_CONTENT);
+        assert!(dir.join("a.yml").exists(), "the file stays");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

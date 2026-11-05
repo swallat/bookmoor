@@ -59,6 +59,13 @@ pub struct AppState {
     pub secure_cookies: bool,
     /// The Dynacat widget files kept up to date (none = off).
     pub dynacat_outputs: Vec<crate::dynacat::Output>,
+    /// Directory for outputs made in the web UI (`--dynacat-dir`); none = the
+    /// web UI cannot create outputs.
+    pub dynacat_dir: Option<std::path::PathBuf>,
+    /// Outputs made in the web UI, persisted in the state file.
+    pub dynacat_ui: Vec<crate::dynacat::UiOutput>,
+    /// Last write problem per output file name (absent = fine).
+    pub dynacat_errors: BTreeMap<String, String>,
     /// Whose tree the Dynacat file shows (id or name); the only user if unset.
     pub dynacat_user: Option<String>,
     /// Default profile of an output that names none; the only one if unset.
@@ -73,7 +80,7 @@ pub struct AppState {
 impl AppState {
     /// The profile whose tree the Dynacat file shows: `dynacat_profile`, else
     /// the user's only profile, else (several) their `Default` one.
-    fn dynacat_target(&self, profile: Option<&str>) -> Result<String, String> {
+    pub(crate) fn dynacat_target(&self, profile: Option<&str>) -> Result<String, String> {
         let profile = profile.or(self.dynacat_profile.as_deref());
         let uid = self.resolve_user(self.dynacat_user.as_deref())?;
         match self.resolve_profile(&uid, profile) {
@@ -93,24 +100,53 @@ impl AppState {
     /// profile. `changed` is the profile a sync just changed: other profiles
     /// leave the file alone. A failure is logged and never fails the sync:
     /// the dashboard is a view, the canonical tree is saved.
-    pub fn publish_dynacat(&self, changed: Option<&str>) -> std::io::Result<()> {
-        if self.dynacat_outputs.is_empty() || self.users.is_empty() {
+    pub fn publish_dynacat(&mut self, changed: Option<&str>) -> std::io::Result<()> {
+        if self.users.is_empty() {
             return Ok(());
+        }
+        // (file, profile id, folder) of every output, command line first.
+        let mut jobs: Vec<(std::path::PathBuf, Result<String, String>, Vec<String>)> = Vec::new();
+        for out in &self.dynacat_outputs {
+            jobs.push((
+                out.file.clone(),
+                self.dynacat_target(out.profile.as_deref()),
+                out.folder.clone(),
+            ));
+        }
+        if let Some(dir) = &self.dynacat_dir {
+            for o in &self.dynacat_ui {
+                jobs.push((
+                    dir.join(&o.file),
+                    Ok(o.profile_id.clone()),
+                    o.folder.clone(),
+                ));
+            }
         }
         // Every output gets its turn; all failures are reported.
         let mut errors = Vec::new();
-        for out in &self.dynacat_outputs {
-            let res = self
-                .dynacat_target(out.profile.as_deref())
-                .map_err(std::io::Error::other)
-                .and_then(|pid| {
-                    if changed.is_some_and(|c| c != pid) {
-                        return Ok(false);
-                    }
-                    crate::dynacat::publish(&out.file, &self.engines[&pid].tree(), &out.folder)
-                });
-            if let Err(e) = res {
-                errors.push(format!("{}: {e}", out.file.display()));
+        for (file, target, folder) in jobs {
+            let key = file.file_name().map_or_else(
+                || file.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            let res = target.map_err(std::io::Error::other).and_then(|pid| {
+                if changed.is_some_and(|c| c != pid) {
+                    return Ok(None);
+                }
+                match self.engines.get(&pid) {
+                    Some(e) => crate::dynacat::publish(&file, &e.tree(), &folder).map(Some),
+                    None => Err(std::io::Error::other("the profile no longer exists")),
+                }
+            });
+            match res {
+                Ok(Some(_)) => {
+                    self.dynacat_errors.remove(&key);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    self.dynacat_errors.insert(key, e.to_string());
+                    errors.push(format!("{}: {e}", file.display()));
+                }
             }
         }
         if errors.is_empty() {
@@ -118,6 +154,53 @@ impl AppState {
         } else {
             Err(std::io::Error::other(errors.join("; ")))
         }
+    }
+
+    /// Drop web-UI outputs whose profile is gone.
+    fn prune_dynacat(&mut self) {
+        let profiles = &self.profiles;
+        self.dynacat_ui
+            .retain(|o| profiles.get(&o.profile_id).is_some());
+    }
+
+    /// Add an output made in the web UI. Needs `--dynacat-dir`; checks the
+    /// name, the profile and that the folder exists; does not save.
+    pub fn add_dynacat_output(
+        &mut self,
+        file: &str,
+        profile_id: &str,
+        folder: Vec<String>,
+    ) -> Result<(), String> {
+        let dir = self
+            .dynacat_dir
+            .clone()
+            .ok_or("start the server with --dynacat-dir to create outputs here")?;
+        let file = file.trim();
+        crate::dynacat::check_file_name(file)?;
+        if self.dynacat_ui.len() >= crate::dynacat::MAX_UI_OUTPUTS {
+            return Err(format!(
+                "at most {} outputs",
+                crate::dynacat::MAX_UI_OUTPUTS
+            ));
+        }
+        let path = dir.join(file);
+        if self.dynacat_ui.iter().any(|o| o.file == file)
+            || self.dynacat_outputs.iter().any(|o| o.file == path)
+        {
+            return Err(format!("{file} is already used by another output"));
+        }
+        let engine = self.engines.get(profile_id).ok_or("no such profile")?;
+        let names: Vec<&str> = folder.iter().map(String::as_str).collect();
+        if bookmoor_core::dynacat::render_folder(&engine.tree().nodes, &names).is_none() {
+            return Err("that folder does not exist in the profile".into());
+        }
+        self.dynacat_ui.push(crate::dynacat::UiOutput {
+            id: random_id("do_"),
+            file: file.to_string(),
+            profile_id: profile_id.to_string(),
+            folder,
+        });
+        Ok(())
     }
 
     /// The user a request names by id or name; with no name, the only user.
@@ -248,7 +331,9 @@ impl AppState {
         self.tokens.revoke_profile(id);
         self.engines.remove(id);
         self.backups.remove(id);
-        Ok(self.profiles.remove(id))
+        let removed = self.profiles.remove(id);
+        self.prune_dynacat();
+        Ok(removed)
     }
 
     /// A new user together with a profile and an empty bookmark tree.
@@ -295,7 +380,9 @@ impl AppState {
             self.engines.remove(&p);
         }
         self.tokens.revoke_user(id);
-        self.users.remove(id)
+        let removed = self.users.remove(id);
+        self.prune_dynacat();
+        removed
     }
 
     /// A new token for `user_id`; a sync token comes with its own endpoint.

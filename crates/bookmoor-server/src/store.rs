@@ -4,6 +4,7 @@
 
 use crate::api::{AppState, Backup};
 use crate::auth::{Scope, TokenRecord, Tokens};
+use crate::dynacat::UiOutput;
 use crate::engine::{Engine, Snapshot};
 use crate::profiles::{default_id_for, Profile, Profiles, DEFAULT_NAME};
 use crate::users::{User, Users};
@@ -21,6 +22,7 @@ struct SaveFile<'a> {
     engines: BTreeMap<&'a str, Snapshot>,
     tokens: &'a [TokenRecord],
     backups: &'a BTreeMap<String, Backup>,
+    dynacat: &'a [UiOutput],
 }
 
 #[derive(Deserialize)]
@@ -37,6 +39,8 @@ struct LoadFile {
     tokens: Vec<TokenRecord>,
     #[serde(default)]
     backups: BTreeMap<String, Backup>,
+    #[serde(default)]
+    dynacat: Vec<UiOutput>,
 }
 
 /// Everything the state file holds.
@@ -47,6 +51,7 @@ pub struct Loaded {
     pub engines: BTreeMap<String, Engine>,
     pub tokens: Tokens,
     pub backups: BTreeMap<String, Backup>,
+    pub dynacat: Vec<UiOutput>,
 }
 
 /// An exclusive OS lock on `<state>.lock`, so the server and the token
@@ -185,12 +190,18 @@ impl Store {
             .into_iter()
             .filter(|(p, _)| profiles.get(p).is_some())
             .collect();
+        let dynacat: Vec<UiOutput> = f
+            .dynacat
+            .into_iter()
+            .filter(|o| profiles.get(&o.profile_id).is_some())
+            .collect();
         Ok(Some(Loaded {
             users,
             profiles,
             engines: restored,
             tokens: Tokens::from_records(tokens),
             backups,
+            dynacat,
         }))
     }
 
@@ -201,6 +212,7 @@ impl Store {
         engines: &BTreeMap<String, Engine>,
         tokens: &Tokens,
         backups: &BTreeMap<String, Backup>,
+        dynacat: &[UiOutput],
     ) -> io::Result<()> {
         let records = tokens.records();
         let user_records = users.records();
@@ -214,6 +226,7 @@ impl Store {
                 .collect(),
             tokens: &records,
             backups,
+            dynacat,
         })
         .map_err(io::Error::other)?;
         let tmp = tmp_path(&self.path);
@@ -266,6 +279,7 @@ impl AppState {
             engines: l.engines,
             tokens: l.tokens,
             backups: l.backups,
+            dynacat_ui: l.dynacat,
             store: Some(store),
             ..AppState::default()
         })
@@ -280,6 +294,7 @@ impl AppState {
                 &self.engines,
                 &self.tokens,
                 &self.backups,
+                &self.dynacat_ui,
             ),
             None => Ok(()),
         }
@@ -302,6 +317,7 @@ impl AppState {
                     self.engines = l.engines;
                     self.tokens = l.tokens;
                     self.backups = l.backups;
+                    self.dynacat_ui = l.dynacat;
                 }
                 _ => {
                     eprintln!("fatal: cannot save or reload state ({err}); exiting");
@@ -687,6 +703,7 @@ mod tests {
                 &st.engines,
                 &st.tokens,
                 &st.backups,
+                &st.dynacat_ui,
             )
             .unwrap();
         let err = Store::new(&path).load().err().unwrap();
@@ -703,6 +720,7 @@ mod tests {
                 &st.engines,
                 &st.tokens,
                 &st.backups,
+                &st.dynacat_ui,
             )
             .unwrap();
         assert!(Store::new(&path).load().is_err());
