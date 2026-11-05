@@ -397,6 +397,13 @@ async fn require_auth(
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .and_then(|text| st.tokens.authenticate(text))
+            // A disabled user's devices stop syncing; the tokens stay.
+            .filter(|r| {
+                !r.user_id
+                    .as_deref()
+                    .and_then(|id| st.users.get(id))
+                    .is_some_and(|u| u.disabled)
+            })
             .cloned();
         match found {
             Some(rec) => {

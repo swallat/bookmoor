@@ -109,3 +109,27 @@ requires a session and attaches the identity to that user. Errors come back as
 extension's `/?connect=...` request across the round trip. `POST
 /ui/api/oidc/unlink` needs a password on the account. Unknown identities are
 refused unless `--oidc-create-users` is set.
+
+## Editing users and two-factor authentication
+
+- **Admins edit users** in the Users tab: rename, set a password, make admin,
+  disable or enable (`POST /ui/api/users/{id}/edit`), remove. A disabled user
+  cannot sign in, their web sessions end and their device tokens answer 401;
+  nothing is deleted, so enabling brings everything back. Admins cannot
+  disable themselves.
+- **TOTP for the password login** (RFC 6238: SHA-1, 6 digits, 30 s, one step
+  of clock drift). Users set it up in the Account tab (secret to type in or an
+  `otpauth://` link; no QR code, because the strict CSP allows no library) and
+  confirm with a code. They get 10 single-use recovery codes, shown once and
+  stored as SHA-256 hashes. A code works once (replay guard). The secret is
+  kept in the state file in clear, because it must be readable to verify a
+  code: protect the file like the tokens.
+- **Login:** a correct password with an authenticator on answers
+  `{"state":"mfa","ticket":...}` and no cookie; `POST /ui/api/login/mfa` with
+  ticket and code finishes it. A ticket lives 5 minutes and takes 5 tries.
+- **Admins can require it** per user. Until the user has set it up, their
+  session may only call `/ui/api/mfa/*` and log out, and they cannot turn it
+  off again. An admin can **reset** it for another user (lost phone): the
+  authenticator and recovery codes go and their sessions end.
+- **Single sign-on** logins skip all this; the identity provider is the second
+  factor. Device tokens are unaffected (they are long random secrets).

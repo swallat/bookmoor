@@ -116,6 +116,7 @@ impl Store {
                 admin: true,
                 password_hash: None,
                 oidc: None,
+                ..User::blank()
             };
             engines.insert(owner.id.clone(), legacy);
             for t in tokens.iter_mut().filter(|t| t.scope != Scope::Admin) {
