@@ -137,12 +137,19 @@ impl AppState {
             return Ok(());
         }
         // (file, profile id, folder) of every output, command line first.
-        let mut jobs: Vec<(std::path::PathBuf, Result<String, String>, Vec<String>)> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut jobs: Vec<(
+            std::path::PathBuf,
+            Result<String, String>,
+            Vec<String>,
+            bookmoor_core::dynacat::Style,
+        )> = Vec::new();
         for out in &self.dynacat_outputs {
             jobs.push((
                 out.file.clone(),
                 self.dynacat_target(out.profile.as_deref()),
                 out.folder.clone(),
+                out.style.clone(),
             ));
         }
         if let Some(dir) = &self.dynacat_dir {
@@ -151,19 +158,20 @@ impl AppState {
                     dir.join(&o.file),
                     Ok(o.profile_id.clone()),
                     o.folder.clone(),
+                    o.style.clone(),
                 ));
             }
         }
         // Every output gets its turn; all failures are reported.
         let mut errors = Vec::new();
-        for (file, target, folder) in jobs {
+        for (file, target, folder, style) in jobs {
             let key = file.display().to_string();
             let res = target.map_err(std::io::Error::other).and_then(|pid| {
                 if changed.is_some_and(|c| c != pid) {
                     return Ok(None);
                 }
                 match self.engines.get(&pid) {
-                    Some(e) => crate::dynacat::publish(&file, &e.tree(), &folder).map(Some),
+                    Some(e) => crate::dynacat::publish(&file, &e.tree(), &folder, &style).map(Some),
                     None => Err(std::io::Error::other("the profile no longer exists")),
                 }
             });
@@ -212,7 +220,9 @@ impl AppState {
         file: &str,
         profile_id: &str,
         folder: Vec<String>,
+        style: bookmoor_core::dynacat::Style,
     ) -> Result<(), String> {
+        style.check()?;
         let dir = self
             .dynacat_dir
             .clone()
@@ -239,18 +249,19 @@ impl AppState {
         }
         let engine = self.engines.get(profile_id).ok_or("no such profile")?;
         let names: Vec<&str> = folder.iter().map(String::as_str).collect();
-        if bookmoor_core::dynacat::render_folder(&engine.tree().nodes, &names).is_none() {
+        if bookmoor_core::dynacat::render_styled(&engine.tree().nodes, &names, &style).is_none() {
             return Err("that folder does not exist in the profile".into());
         }
         // The first write has to work (a foreign file, a read-only directory),
         // so a mistake is refused here instead of stored.
-        crate::dynacat::publish(&path, &engine.tree(), &folder)
+        crate::dynacat::publish(&path, &engine.tree(), &folder, &style)
             .map_err(|e| format!("{file}: {e}"))?;
         self.dynacat_ui.push(crate::dynacat::UiOutput {
             id: random_id("do_"),
             file: file.to_string(),
             profile_id: profile_id.to_string(),
             folder,
+            style,
         });
         Ok(())
     }
