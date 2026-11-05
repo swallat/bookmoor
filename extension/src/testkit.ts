@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { flush, startOver, type Outcome, type Restart, type StateStore, type Transport } from "./flow.ts";
+import { withMenu } from "./menu.ts";
 import type { BookmarkApi, LocalNode, SyncState } from "./local.ts";
 import type { Settings } from "./settings.ts";
 import { httpTransport } from "./transport.ts";
@@ -33,8 +34,6 @@ export class FakeBookmarks implements BookmarkApi {
   bar: string;
   other: string;
   mobile: string;
-  /** Roots that are never synced. */
-  local = new Set<string>();
 
   constructor(kind: Kind = "chrome") {
     this.kind = kind;
@@ -46,7 +45,6 @@ export class FakeBookmarks implements BookmarkApi {
     const kids = [this.bar, this.other, this.mobile];
     if (kind === "firefox") {
       kids.unshift("menu________");
-      this.local.add("menu________");
     }
     this.nodes.set(this.root, { id: this.root, title: "", kids });
     for (const k of kids) this.nodes.set(k, { id: k, parentId: this.root, title: k, kids: [] });
@@ -54,14 +52,6 @@ export class FakeBookmarks implements BookmarkApi {
 
   isRoot(id: string): boolean {
     return id === this.root || this.nodes.get(id)?.parentId === this.root;
-  }
-
-  /** Whether `id` sits in a folder that is not synced. */
-  isLocal(id: string): boolean {
-    for (let n = this.nodes.get(id); n; n = n.parentId ? this.nodes.get(n.parentId) : undefined) {
-      if (this.local.has(n.id)) return true;
-    }
-    return false;
   }
 
   private view(id: string): LocalNode {
@@ -137,7 +127,7 @@ export class FakeBookmarks implements BookmarkApi {
   shape(id = this.root): unknown {
     const f = this.nodes.get(id)!;
     if (f.kids === undefined) return [f.title, f.url];
-    return f.kids.filter((k) => !this.local.has(k)).map((k) => this.shape(k));
+    return f.kids.map((k) => this.shape(k));
   }
 }
 
@@ -161,10 +151,10 @@ export class Browser {
   }
   identity = "";
   flush(): Promise<Outcome> {
-    return flush(this.api, this.store, this.transport, this.identity);
+    return flush(withMenu(this.api), this.store, this.transport, this.identity);
   }
   startOver(mode: Restart): Promise<Outcome> {
-    return startOver(this.api, this.store, this.transport, this.identity, mode);
+    return startOver(withMenu(this.api), this.store, this.transport, this.identity, mode);
   }
 }
 

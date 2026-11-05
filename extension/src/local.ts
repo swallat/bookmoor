@@ -15,6 +15,8 @@ export interface LocalNode {
   unmodifiable?: string;
   /** Set by Firefox; separators have no counterpart on the server. */
   type?: string;
+  /** A folder that only exists in the sync view (menu.ts): its place among siblings is not synced. */
+  virtual?: boolean;
 }
 
 export interface BookmarkApi {
@@ -70,7 +72,7 @@ export function kindOf(n: LocalNode): Kind {
 
 const CHROME_ROLES: Record<string, string> = { "1": "toolbar", "2": "other", "3": "mobile" };
 // Firefox has a fourth folder, the bookmarks menu, which the server's fixed
-// set of roles has no place for; it stays local and is not synced.
+// set of roles has no place for; menu.ts presents it as a folder in "other".
 const FIREFOX_ROLES: Record<string, string> = {
   toolbar_____: "toolbar",
   unfiled_____: "other",
