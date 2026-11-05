@@ -770,17 +770,13 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
     let mut outputs = Vec::new();
     for o in &st.dynacat_outputs {
         let file = o.file.display().to_string();
-        let key = o
-            .file
-            .file_name()
-            .map_or(file.clone(), |n| n.to_string_lossy().into_owned());
         let profile = match st.dynacat_target(o.profile.as_deref()) {
             Ok(id) => profile_label(&st, &id),
             Err(e) => e,
         };
         outputs.push(DynacatRow {
             id: None,
-            error: st.dynacat_errors.get(&key).cloned(),
+            error: st.dynacat_errors.get(&file).cloned(),
             file,
             profile,
             folder: o.folder.join("/"),
@@ -792,7 +788,11 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
             file: o.file.clone(),
             profile: profile_label(&st, &o.profile_id),
             folder: o.folder.join("/"),
-            error: st.dynacat_errors.get(&o.file).cloned(),
+            error: if st.dynacat_dir.is_none() {
+                Some("not written: the server runs without --dynacat-dir".into())
+            } else {
+                st.dynacat_errors.get(&st.dynacat_key(&o.file)).cloned()
+            },
         });
     }
     let profiles = st
@@ -822,7 +822,10 @@ async fn dynacat_folders(
     axum::extract::Query(q): axum::extract::Query<FolderQuery>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     let st = s.lock().unwrap();
-    let engine = st.engines.get(&q.profile).ok_or(ApiError::Forbidden)?;
+    let engine = st
+        .engines
+        .get(&q.profile)
+        .ok_or_else(|| ApiError::Unprocessable("no such profile".into()))?;
     Ok(Json(
         bookmoor_core::dynacat::folder_paths(&engine.tree().nodes)
             .into_iter()
@@ -857,8 +860,6 @@ async fn add_dynacat(
     st.add_dynacat_output(&b.file, &b.profile, folder)
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
-    // The file appears at once; a failure shows as the row's error.
-    let _ = st.publish_dynacat(None);
     Ok(StatusCode::CREATED)
 }
 
@@ -870,10 +871,11 @@ async fn remove_dynacat(
     let mut st = s.lock().unwrap();
     still_admin(&st, &a)?;
     let Some(i) = st.dynacat_ui.iter().position(|o| o.id == id) else {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Unprocessable("no such output".into()));
     };
     let gone = st.dynacat_ui.remove(i);
-    st.dynacat_errors.remove(&gone.file);
+    let key = st.dynacat_key(&gone.file);
+    st.dynacat_errors.remove(&key);
     // The file stays: Dynacat may still include it.
     save(&mut st)?;
     Ok(StatusCode::NO_CONTENT)
@@ -1701,10 +1703,18 @@ mod tests {
                 .0,
             StatusCode::UNPROCESSABLE_ENTITY
         );
+        // A foreign file is refused up front and nothing is stored.
         let (st, _, _) = u
             .post("/ui/api/dynacat", Some(&anna), new("glance.yml", ""))
             .await;
-        assert_eq!(st, StatusCode::CREATED);
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        // Names differing only in case are the same file.
+        assert_eq!(
+            u.post("/ui/api/dynacat", Some(&anna), new("A.yml", ""))
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join("glance.yml")).unwrap(),
             "pages: []\n"

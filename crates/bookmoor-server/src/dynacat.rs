@@ -96,7 +96,7 @@ pub fn publish(path: &Path, tree: &TreeResponse, folder: &[String]) -> io::Resul
     match fs::read_to_string(path) {
         Ok(old) if old == yaml => return Ok(false),
         // Never overwrite a file bookmoor did not write (a Dynacat config).
-        Ok(old) if !old.starts_with(HEADER) => {
+        Ok(old) if !old.trim().is_empty() && !old.starts_with(HEADER) => {
             return Err(io::Error::other(
                 "the file exists and was not written by bookmoor; not overwriting it",
             ))
@@ -153,6 +153,16 @@ mod tests {
         let err = publish(&file, &Engine::new().tree(), &[]).unwrap_err();
         assert!(err.to_string().contains("not overwriting"));
         assert_eq!(fs::read_to_string(&file).unwrap(), "pages: []\n");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn empty_files_may_be_taken_over() {
+        let dir = std::env::temp_dir().join(format!("bookmoor-dynacat-e-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("new.yml");
+        fs::write(&file, "\n").unwrap();
+        assert!(publish(&file, &Engine::new().tree(), &[]).unwrap());
         fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -373,10 +373,18 @@ async fn main() {
     if let Err(e) = state.publish_dynacat(None) {
         // Outputs made in the web UI can break later (a renamed folder); that
         // must not keep the whole server from starting.
-        if state.dynacat_ui.is_empty() {
+        let cli_broken = state.dynacat_outputs.iter().any(|o| {
+            state
+                .dynacat_errors
+                .contains_key(&o.file.display().to_string())
+        });
+        if cli_broken || state.dynacat_ui.is_empty() {
             fail(&format!("cannot write the Dynacat file: {e}"));
         }
         eprintln!("warning: cannot write the Dynacat file: {e}");
+    }
+    if state.dynacat_dir.is_none() && !state.dynacat_ui.is_empty() {
+        eprintln!("warning: the state holds Dynacat outputs made in the web UI, but --dynacat-dir is not set: they are not written");
     }
 
     let app = router(Arc::new(Mutex::new(state)));

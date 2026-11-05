@@ -125,10 +125,7 @@ impl AppState {
         // Every output gets its turn; all failures are reported.
         let mut errors = Vec::new();
         for (file, target, folder) in jobs {
-            let key = file.file_name().map_or_else(
-                || file.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
+            let key = file.display().to_string();
             let res = target.map_err(std::io::Error::other).and_then(|pid| {
                 if changed.is_some_and(|c| c != pid) {
                     return Ok(None);
@@ -156,11 +153,24 @@ impl AppState {
         }
     }
 
+    /// The key of an output file in `dynacat_errors`: its full path.
+    pub(crate) fn dynacat_key(&self, ui_file: &str) -> String {
+        match &self.dynacat_dir {
+            Some(d) => d.join(ui_file).display().to_string(),
+            None => ui_file.to_string(),
+        }
+    }
+
     /// Drop web-UI outputs whose profile is gone.
     fn prune_dynacat(&mut self) {
         let profiles = &self.profiles;
-        self.dynacat_ui
-            .retain(|o| profiles.get(&o.profile_id).is_some());
+        let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.dynacat_ui)
+            .into_iter()
+            .partition(|o| profiles.get(&o.profile_id).is_some());
+        self.dynacat_ui = keep;
+        for o in gone {
+            self.dynacat_errors.remove(&self.dynacat_key(&o.file));
+        }
     }
 
     /// Add an output made in the web UI. Needs `--dynacat-dir`; checks the
@@ -184,8 +194,14 @@ impl AppState {
             ));
         }
         let path = dir.join(file);
-        if self.dynacat_ui.iter().any(|o| o.file == file)
-            || self.dynacat_outputs.iter().any(|o| o.file == path)
+        let same = |p: &std::path::Path| {
+            p.display().to_string().to_lowercase() == path.display().to_string().to_lowercase()
+        };
+        if self
+            .dynacat_ui
+            .iter()
+            .any(|o| o.file.to_lowercase() == file.to_lowercase())
+            || self.dynacat_outputs.iter().any(|o| same(&o.file))
         {
             return Err(format!("{file} is already used by another output"));
         }
@@ -194,6 +210,10 @@ impl AppState {
         if bookmoor_core::dynacat::render_folder(&engine.tree().nodes, &names).is_none() {
             return Err("that folder does not exist in the profile".into());
         }
+        // The first write has to work (a foreign file, a read-only directory),
+        // so a mistake is refused here instead of stored.
+        crate::dynacat::publish(&path, &engine.tree(), &folder)
+            .map_err(|e| format!("{file}: {e}"))?;
         self.dynacat_ui.push(crate::dynacat::UiOutput {
             id: random_id("do_"),
             file: file.to_string(),
