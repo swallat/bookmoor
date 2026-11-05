@@ -16,6 +16,9 @@ This policy covers the bookmoor browser extension (Chrome and Firefox) and the b
 For this software and this policy:
 
 Sebastian Wallat - voidyapp.ing
+c/o Autorenglück #23597
+Albert-Einstein-Str. 47
+02977 Hoyerswerda, Germany
 E-mail: hello@voidyapp.ing
 
 The **controller of the data on your bookmoor server is the operator of that server**. If you run it yourself, that is you. If someone else runs it for you, ask them about their data handling.
