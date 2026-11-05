@@ -254,7 +254,11 @@ Browsers disagree on what `index` means when `move` puts a node further down
 its own folder: Chrome counts the node itself, Firefox does not. The applier
 checks the first such move and remembers the answer. Firefox's root folders
 are `toolbar_____`, `unfiled_____` and `mobile______`; its bookmarks menu has
-no counterpart among the server's roles and is not synced.
+no counterpart among the server's roles. `extension/src/menu.ts` shows it to the
+sync code as a folder "Bookmarks Menu" inside `unfiled_____` (role `other`), so
+it syncs like any folder and Chrome sees that folder in "Other bookmarks".
+Rename, move and delete of that folder are ignored in Firefox (a delete empties
+it).
 
 ### 5.3 Event handling in an MV3 service worker
 

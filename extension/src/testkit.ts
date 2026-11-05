@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { flush, startOver, type Outcome, type Restart, type StateStore, type Transport } from "./flow.ts";
+import { withMenu } from "./menu.ts";
 import type { BookmarkApi, LocalNode, SyncState } from "./local.ts";
 import type { Settings } from "./settings.ts";
 import { httpTransport } from "./transport.ts";
@@ -46,7 +47,6 @@ export class FakeBookmarks implements BookmarkApi {
     const kids = [this.bar, this.other, this.mobile];
     if (kind === "firefox") {
       kids.unshift("menu________");
-      this.local.add("menu________");
     }
     this.nodes.set(this.root, { id: this.root, title: "", kids });
     for (const k of kids) this.nodes.set(k, { id: k, parentId: this.root, title: k, kids: [] });
@@ -161,10 +161,10 @@ export class Browser {
   }
   identity = "";
   flush(): Promise<Outcome> {
-    return flush(this.api, this.store, this.transport, this.identity);
+    return flush(withMenu(this.api), this.store, this.transport, this.identity);
   }
   startOver(mode: Restart): Promise<Outcome> {
-    return startOver(this.api, this.store, this.transport, this.identity, mode);
+    return startOver(withMenu(this.api), this.store, this.transport, this.identity, mode);
   }
 }
 

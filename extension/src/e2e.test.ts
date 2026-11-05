@@ -324,16 +324,38 @@ describe("end to end (chrome and firefox together)", { skip: bin ? false : "book
     const ch = await server.browser("chrome");
     await ff.api.create({ parentId: ff.api.bar, title: "From Firefox", url: "https://ff.example/" });
     await ff.api.create({ parentId: ff.api.other, title: "FF other", url: "https://ffo.example/" });
-    await ff.api.create({ parentId: "menu________", title: "FF menu", url: "https://ffm.example/" });
     await ch.api.create({ parentId: ch.api.bar, title: "From Chrome", url: "https://ch.example/" });
     await ch.api.create({ parentId: ch.api.other, title: "CH other", url: "https://cho.example/" });
     await sync(ff, ch);
     assert.deepEqual(titles(ch, ch.api.bar).sort(), ["From Chrome", "From Firefox"]);
     assert.deepEqual(titles(ff, ff.api.bar).sort(), ["From Chrome", "From Firefox"]);
-    assert.deepEqual(titles(ch, ch.api.other).sort(), ["CH other", "FF other"]);
+    // Firefox's menu travels as a folder in Other, even when it is empty.
+    assert.deepEqual(titles(ch, ch.api.other).sort(), ["Bookmarks Menu", "CH other", "FF other"]);
     assert.deepEqual(titles(ff, ff.api.other).sort(), ["CH other", "FF other"]);
-    // The Firefox menu has no counterpart: it stays out of Chrome entirely.
-    const all = [...ch.api.nodes.values()].map((n) => n.title);
-    assert.equal(all.includes("FF menu"), false);
+  });
+
+  it("shows the Firefox bookmarks menu as a folder in Chrome's other bookmarks, both ways", async () => {
+    const ff = await server.browser("firefox");
+    const ch = await server.browser("chrome");
+    await ff.api.create({ parentId: "menu________", title: "FF menu", url: "https://ffm.example/" });
+    await sync(ff, ch);
+    const folder = (b: Browser, parent: string) =>
+      b.api.nodes.get(parent)!.kids!.map((k) => b.api.nodes.get(k)!).find((n) => n.title === "Bookmarks Menu");
+    const inChrome = folder(ch, ch.api.other);
+    assert.ok(inChrome, "Chrome has a Bookmarks Menu folder in Other");
+    assert.deepEqual(inChrome!.kids!.map((k) => ch.api.nodes.get(k)!.title), ["FF menu"]);
+    // Firefox shows no extra folder: the content stays in the real menu.
+    assert.equal(folder(ff, ff.api.other), undefined);
+    // And back: something added to the folder in Chrome lands in the Firefox menu.
+    await ch.api.create({ parentId: inChrome!.id, title: "From Chrome", url: "https://chm.example/" });
+    await sync(ch, ff);
+    const menuTitles = ff.api.nodes.get("menu________")!.kids!.map((k) => ff.api.nodes.get(k)!.title).sort();
+    assert.deepEqual(menuTitles, ["FF menu", "From Chrome"]);
+    // Deleting the folder in Chrome empties the Firefox menu but cannot remove it.
+    await ch.api.removeTree(inChrome!.id);
+    await sync(ch, ff);
+    assert.ok(ff.api.nodes.has("menu________"));
+    await sync(ff, ch);
+    assert.equal(ff.api.nodes.get("menu________")!.kids!.length, 0);
   });
 });
