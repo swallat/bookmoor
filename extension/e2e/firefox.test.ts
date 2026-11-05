@@ -85,10 +85,7 @@ async function configure(d: WebDriver, server: Server): Promise<void> {
 }
 
 async function sync(d: WebDriver): Promise<void> {
-  const reply = await api(d, "runtime.sendMessage", { type: "bookmoor-sync-now" });
-  const st = await api(d, "storage.local.get", "bookmoor-status");
-  const tree = await api(d, "bookmarks.getTree");
-  console.log("sync reply", JSON.stringify(reply), "status", JSON.stringify(st), "tree", JSON.stringify(tree).slice(0, 1500));
+  await api(d, "runtime.sendMessage", { type: "bookmoor-sync-now" });
 }
 
 async function bar(d: WebDriver): Promise<{ title: string; url?: string }[]> {

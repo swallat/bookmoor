@@ -335,16 +335,13 @@ describe("end to end (chrome and firefox together)", { skip: bin ? false : "book
     assert.deepEqual(titles(ff, ff.api.other).sort(), ["CH other", "FF other"]);
   });
 
-  it("does not ask what to do just because Firefox's menu folder is there", async () => {
+  it("does not ask what to do because of Firefox's menu folder, which holds stock bookmarks", async () => {
     const ch = await server.browser("chrome");
     await ch.api.create({ parentId: ch.api.bar, title: "Already here", url: "https://here.example/" });
     await sync(ch);
     const ff = await server.browser("firefox");
+    await ff.api.create({ parentId: "menu________", title: "Stock", url: "https://stock.example/" });
     assert.equal(await flush(withMenu(ff.api), ff.store, ff.transport, ff.identity, true), "ok");
-    // With real content in the menu, it does ask.
-    const ff2 = await server.browser("firefox");
-    await ff2.api.create({ parentId: "menu________", title: "Mine", url: "https://mine.example/" });
-    assert.equal(await flush(withMenu(ff2.api), ff2.store, ff2.transport, ff2.identity, true), "decide");
   });
 
   it("settles when a folder lands after the menu among Other's items", async () => {
@@ -377,14 +374,14 @@ describe("end to end (chrome and firefox together)", { skip: bin ? false : "book
       b.api.nodes.get(parent)!.kids!.map((k) => b.api.nodes.get(k)!).find((n) => n.title === "Bookmarks Menu");
     const inChrome = folder(ch, ch.api.other);
     assert.ok(inChrome, "Chrome has a Bookmarks Menu folder in Other");
-    assert.deepEqual(inChrome!.kids!.map((k) => ch.api.nodes.get(k)!.title), ["FF menu"]);
+    assert.deepEqual(inChrome!.kids!.map((k) => ch.api.nodes.get(k)!.title).sort(), ["FF menu", "Stock"]);
     // Firefox shows no extra folder: the content stays in the real menu.
     assert.equal(folder(ff, ff.api.other), undefined);
     // And back: something added to the folder in Chrome lands in the Firefox menu.
     await ch.api.create({ parentId: inChrome!.id, title: "From Chrome", url: "https://chm.example/" });
     await sync(ch, ff);
     const menuTitles = ff.api.nodes.get("menu________")!.kids!.map((k) => ff.api.nodes.get(k)!.title).sort();
-    assert.deepEqual(menuTitles, ["FF menu", "From Chrome"]);
+    assert.deepEqual(menuTitles, ["FF menu", "From Chrome", "Stock"]);
     // Deleting the folder in Chrome empties the Firefox menu but cannot remove it.
     await ch.api.removeTree(inChrome!.id);
     await sync(ch, ff);

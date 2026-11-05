@@ -233,8 +233,9 @@ async function browserHasBookmarks(api: BookmarkApi): Promise<boolean> {
   return (tree[0]?.children ?? []).some(
     (root) =>
       roles.has(scratch.map[root.id] ?? "") &&
-      // Firefox's menu folder (menu.ts) is always there, so only its content counts.
-      (root.children ?? []).some((c) => !c.unmodifiable && !(c.virtual && !(c.children ?? []).length)),
+      // Firefox's menu folder (menu.ts) holds stock bookmarks in every fresh
+      // profile, so it does not count as the user's own.
+      (root.children ?? []).some((c) => !c.unmodifiable && !c.virtual),
   );
 }
 
