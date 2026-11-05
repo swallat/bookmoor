@@ -11,7 +11,10 @@ services:
       # BOOKMOOR_ADMIN_TOKEN: ""
       # Require the proxy's client-certificate verdict (README, "Client certificates"):
       # BOOKMOOR_CLIENT_CERT_HEADER: X-SSL-Client-Verify
-      # Optional: write the Dynacat page for one user and profile.
+      # Dynacat outputs made in the web UI (admin tab "Dynacat"): the directory
+      # Dynacat reads. Needs `mkdir dynacat && chown 10001 dynacat` first.
+      # BOOKMOOR_DYNACAT_DIR: /dynacat
+      # Optional: fixed outputs from the command line instead (read-only in the web UI).
       # One output per line: file=PATH[;profile=NAME][;folder=A/B/C]. Enable
       # only after `mkdir dynacat && chown 10001 dynacat`: the server exits
       # at startup if it cannot write the file.
