@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
-import { flush, type Outcome, type StateStore, type Transport } from "./flow.ts";
+import { flush, startOver, type Outcome, type Restart, type StateStore, type Transport } from "./flow.ts";
 import type { BookmarkApi, LocalNode, SyncState } from "./local.ts";
 import type { Settings } from "./settings.ts";
 import { httpTransport } from "./transport.ts";
@@ -163,6 +163,9 @@ export class Browser {
   flush(): Promise<Outcome> {
     return flush(this.api, this.store, this.transport, this.identity);
   }
+  startOver(mode: Restart): Promise<Outcome> {
+    return startOver(this.api, this.store, this.transport, this.identity, mode);
+  }
 }
 
 export interface Server {
@@ -231,7 +234,7 @@ export async function startServer(bin: string): Promise<Server> {
     });
     return ((await res.json()) as { token: string }).token;
   };
-  const settings = (token: string): Settings => ({ serverUrl: url, token, headers: [], query: [] });
+  const settings = (token: string): Settings => ({ serverUrl: url, token, headers: [], query: [], sso: false });
   return {
     url,
     admin,

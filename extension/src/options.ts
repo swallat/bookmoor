@@ -33,6 +33,7 @@ function showSync(status: SyncStatus | undefined): void {
     ? `${status.message} (${new Date(status.at).toLocaleString()})`
     : "No sync has run yet. Save the settings and change a bookmark.";
   el.className = status && status.outcome !== "ok" ? "bad" : "";
+  $("signin").hidden = status?.outcome !== "login";
 }
 
 /** What is stored, without showing the secret: lets the user see that the token arrived intact. */
@@ -75,6 +76,7 @@ async function init(): Promise<void> {
   if (!url.value) url.value = s.serverUrl;
   if (!token.value) token.value = s.token;
   showToken(s.token);
+  $<HTMLInputElement>("sso").checked = s.sso;
   for (const h of s.headers) $("headers").append(pairRow(h));
   for (const q of s.query) $("query").append(pairRow(q, "Parameter"));
   $("add").addEventListener("click", () => $("headers").append(pairRow()));
@@ -97,6 +99,7 @@ async function init(): Promise<void> {
         token: $<HTMLInputElement>("token").value.trim(),
         headers: readPairs("headers"),
         query: readPairs("query"),
+        sso: $<HTMLInputElement>("sso").checked,
       });
       showToken($<HTMLInputElement>("token").value.trim());
       status.textContent = "Saved.";
@@ -107,6 +110,29 @@ async function init(): Promise<void> {
   });
 }
 
+/** Ask for confirmation, then let the background script start over. */
+async function startOver(mode: "adopt" | "overwrite"): Promise<void> {
+  const ok = confirm(
+    mode === "adopt"
+      ? "Replace this browser's synced bookmarks with the server's? Links that only exist here are removed from this browser."
+      : "Replace the server's bookmarks with this browser's? Links that only exist on the server are removed from the profile and from its other devices (the server keeps a copy).",
+  );
+  if (!ok) return;
+  $("startover").textContent = "Working\u2026";
+  try {
+    const r = (await chrome.runtime.sendMessage({ type: "bookmoor-start-over", mode })) as
+      | { ok: boolean; message: string }
+      | undefined;
+    $("startover").textContent = r?.ok ? "Done." : `Not done: ${r?.message || "no answer from the background script"}`;
+    $("startover").className = r?.ok ? "" : "bad";
+  } catch (e) {
+    $("startover").textContent = `Could not reach the background script: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 $("syncnow").addEventListener("click", () => void syncNow());
+$("adopt").addEventListener("click", () => void startOver("adopt"));
+$("overwrite").addEventListener("click", () => void startOver("overwrite"));
+$("signin").addEventListener("click", () => void chrome.runtime.sendMessage({ type: "bookmoor-sign-in" }));
 
 void init();

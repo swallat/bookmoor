@@ -342,6 +342,96 @@ impl Engine {
         }
     }
 
+    /// How many bookmarks (not folders) are alive.
+    pub fn bookmark_count(&self) -> usize {
+        self.nodes
+            .values()
+            .filter(|r| r.alive() && r.kind == Kind::Bookmark)
+            .count()
+    }
+
+    /// Replace the whole tree by `nodes` (parent-first or not, as
+    /// [`tree`](Self::tree) returns them). Node ids are kept, so devices that
+    /// resync keep their pairings. The change log is dropped and the horizon
+    /// raised, so every device must resync and then removes what is gone and
+    /// creates what is new, as for a remote delete. Registered devices stay
+    /// registered.
+    pub fn replace_tree(&mut self, nodes: &[WireNode]) -> Result<(), String> {
+        let rev = self.rev + 1;
+        let st = Stamp {
+            rev,
+            by: "server".into(),
+        };
+        let mut recs = Vec::with_capacity(nodes.len());
+        for n in nodes {
+            let long = |s: &str| s.len() > MAX_FIELD_BYTES;
+            if long(&n.id)
+                || long(&n.title)
+                || n.parent.as_deref().is_some_and(long)
+                || n.url.as_deref().is_some_and(long)
+            {
+                return Err(format!("node {} has a field that is too long", n.id));
+            }
+            if n.id != ROOT && !position::is_valid(&n.position) {
+                return Err(format!("node {} has an invalid position", n.id));
+            }
+            match (n.kind, n.url.as_deref()) {
+                (Kind::Bookmark, Some(u)) if valid_url(u) => {}
+                (Kind::Folder, None) => {}
+                _ => return Err(format!("node {} has an invalid kind or URL", n.id)),
+            }
+            recs.push(Rec {
+                id: n.id.clone(),
+                parent: n.parent.clone(),
+                position: n.position.clone(),
+                kind: n.kind,
+                title: n.title.clone(),
+                url: n.url.clone(),
+                created: st.clone(),
+                title_st: st.clone(),
+                url_st: st.clone(),
+                place_st: st.clone(),
+                deleted: None,
+            });
+        }
+        if recs.len() > MAX_NODES {
+            return Err("the tree is too big".into());
+        }
+        let ids: HashSet<&str> = recs.iter().map(|r| r.id.as_str()).collect();
+        if ids.len() != recs.len() {
+            return Err("duplicate node ids".into());
+        }
+        if recs
+            .iter()
+            .any(|r| r.parent.as_deref().is_some_and(|p| !ids.contains(p)))
+        {
+            return Err("a node has an unknown parent".into());
+        }
+        let folders: HashSet<&str> = recs
+            .iter()
+            .filter(|r| r.kind == Kind::Folder)
+            .map(|r| r.id.as_str())
+            .collect();
+        if recs
+            .iter()
+            .any(|r| r.parent.as_deref().is_some_and(|p| !folders.contains(p)))
+        {
+            return Err("a bookmark has children".into());
+        }
+        let mut endpoints: Vec<String> = self.endpoints.iter().cloned().collect();
+        endpoints.sort();
+        *self = Engine::restore(Snapshot {
+            version: SNAPSHOT_VERSION,
+            nodes: recs,
+            rev,
+            horizon: rev,
+            log: Vec::new(),
+            endpoints,
+            seen: Vec::new(),
+        })?;
+        Ok(())
+    }
+
     /// Drop log entries and tombstones up to `rev`; older clients must resync.
     pub fn prune(&mut self, rev: u64) {
         let rev = rev.min(self.rev);
@@ -1591,6 +1681,57 @@ mod tests {
         // Tombstones are gone after pruning: the id is unknown again.
         let r = a.sync(&mut e, vec![rename("b1", "x")]);
         assert_eq!(r.rejected[0].reason, RejectReason::Gone);
+    }
+
+    #[test]
+    fn replacing_the_tree_makes_devices_resync_and_keeps_them_registered() {
+        let mut e = Engine::new();
+        let mut a = Client::new(&mut e, "a");
+        a.sync(
+            &mut e,
+            vec![
+                add_bm("b1", "toolbar", "V", "One"),
+                add_bm("b2", "toolbar", "W", "Two"),
+            ],
+        );
+        let mut keep = e.tree().nodes;
+        keep.retain(|n| n.id != "b2");
+        e.replace_tree(&keep).unwrap();
+        let req = SyncRequest {
+            endpoint_id: "a".into(),
+            since_rev: a.rev,
+            ops: vec![],
+        };
+        assert!(e.sync(&req).unwrap().resync);
+        // After the full tree is taken over, syncing works again.
+        let tree = e.tree();
+        assert!(tree.nodes.iter().any(|n| n.id == "b1"));
+        assert!(!tree.nodes.iter().any(|n| n.id == "b2"));
+        let req = SyncRequest {
+            since_rev: tree.rev,
+            ..req
+        };
+        assert!(!e.sync(&req).unwrap().resync);
+    }
+
+    #[test]
+    fn a_broken_replacement_is_refused_and_changes_nothing() {
+        let mut e = Engine::new();
+        let mut nodes = e.tree().nodes;
+        let before = e.rev();
+        nodes.push(WireNode {
+            id: "x".into(),
+            parent: Some("ghost".into()),
+            position: "V".into(),
+            kind: Kind::Folder,
+            title: "x".into(),
+            url: None,
+        });
+        assert!(e.replace_tree(&nodes).is_err());
+        nodes.pop();
+        nodes.retain(|n| n.id != "toolbar");
+        assert!(e.replace_tree(&nodes).is_err());
+        assert_eq!(e.rev(), before);
     }
 
     #[test]
