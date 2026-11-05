@@ -33,6 +33,78 @@ const MAX_DEPTH: usize = 32;
 /// Group title (none for the leading one) and its `(title, url)` links.
 type Groups = Vec<(Option<String>, Vec<(String, String)>)>;
 
+/// How a group is titled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupNames {
+    /// The whole path, `toolbar / Dev / Rust` (default, never ambiguous).
+    #[default]
+    Path,
+    /// Only the folder's own name, `Rust` (shorter, can repeat).
+    Name,
+}
+
+/// Looks of the generated widget. The default is the plain output of
+/// [`render_widget`]; every option only changes how things are shown.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Style {
+    /// Widget title shown above the bookmarks (tells pages or profiles apart).
+    pub title: Option<String>,
+    /// Group titles: full path or just the folder name.
+    pub names: GroupNames,
+    /// Deepest folder level (below the chosen folder) that gets a group of
+    /// its own; bookmarks of deeper folders join the group of their ancestor
+    /// at that level. `None` = no limit. Fewer groups, longer ones.
+    pub depth: Option<usize>,
+    /// Cut link titles longer than this many characters (with `…`).
+    pub max_title: Option<usize>,
+    /// Ask for the site icon (`https://HOST/favicon.ico`) of every link. The
+    /// browser showing the dashboard then contacts each site.
+    pub icons: bool,
+    /// No arrow behind the links.
+    pub hide_arrow: bool,
+    /// Open links in the same tab.
+    pub same_tab: bool,
+}
+
+impl Style {
+    /// The longest title Bookmoor accepts for the widget.
+    pub const MAX_TITLE: usize = 80;
+
+    /// Reject values that would make a useless or odd widget.
+    pub fn check(&self) -> Result<(), String> {
+        if let Some(t) = &self.title {
+            if t.trim().is_empty() || t.chars().count() > Self::MAX_TITLE || t.contains(';') {
+                return Err(format!(
+                    "title: 1 to {} characters, no semicolon",
+                    Self::MAX_TITLE
+                ));
+            }
+        }
+        if self.depth.is_some_and(|d| d > MAX_DEPTH) {
+            return Err(format!("depth: at most {MAX_DEPTH}"));
+        }
+        if self.max_title.is_some_and(|m| !(8..=500).contains(&m)) {
+            return Err("max title length: between 8 and 500 characters".into());
+        }
+        Ok(())
+    }
+}
+
+/// Cut `s` to at most `max` characters, ending in `…` when shortened.
+fn shorten(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut t: String = s.chars().take(max - 1).collect();
+    while t.ends_with(char::is_whitespace) {
+        t.pop();
+    }
+    t.push('…');
+    t
+}
+
 /// Render `nodes` (any order, as returned by `GET /v1/tree`) as widget YAML.
 pub fn render_widget(nodes: &[WireNode]) -> String {
     render_folder(nodes, &[]).unwrap_or_else(empty_widget)
@@ -89,6 +161,11 @@ pub fn folder_paths(nodes: &[WireNode]) -> Vec<Vec<String>> {
 /// same title the first in sibling order is taken. `None` when the folder (or the
 /// root) does not exist.
 pub fn render_folder(nodes: &[WireNode], folder: &[&str]) -> Option<String> {
+    render_styled(nodes, folder, &Style::default())
+}
+
+/// [`render_folder`] with a [`Style`].
+pub fn render_styled(nodes: &[WireNode], folder: &[&str], style: &Style) -> Option<String> {
     let mut kids: BTreeMap<&str, Vec<&WireNode>> = BTreeMap::new();
     let mut root = None;
     for n in nodes {
@@ -117,10 +194,18 @@ pub fn render_folder(nodes: &[WireNode], folder: &[&str]) -> Option<String> {
             .find(|c| c.kind == Kind::Folder && title_of(c) == want)?;
     }
     let mut groups: Groups = Vec::new();
-    collect(&kids, start, None, 0, &mut groups);
+    collect(&kids, start, None, 0, style, &mut groups);
 
     let mut out = String::from(HEADER);
     out.push_str("type: bookmarks\n");
+    if let Some(t) = style
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        out.push_str(&format!("title: {}\n", scalar(t)));
+    }
     if groups.is_empty() {
         out.push_str(EMPTY_GROUPS);
         return Some(out);
@@ -134,11 +219,26 @@ pub fn render_folder(nodes: &[WireNode], folder: &[&str]) -> Option<String> {
         }
         out.push_str(&format!("{lead}links:\n"));
         for (t, u) in links {
+            let t = match style.max_title {
+                Some(m) => shorten(t, m),
+                None => t.clone(),
+            };
             out.push_str(&format!(
                 "      - title: {}\n        url: {}\n",
-                scalar(t),
+                scalar(&t),
                 scalar(u)
             ));
+            if style.icons {
+                if let Some(i) = icon_url(u) {
+                    out.push_str(&format!("        icon: {}\n", scalar(&i)));
+                }
+            }
+            if style.hide_arrow {
+                out.push_str("        hide-arrow: true\n");
+            }
+            if style.same_tab {
+                out.push_str("        same-tab: true\n");
+            }
         }
     }
     Some(out)
@@ -151,13 +251,58 @@ fn collect(
     folder: &WireNode,
     path: Option<&str>,
     depth: usize,
+    style: &Style,
     groups: &mut Groups,
 ) {
     let children = kids
         .get(folder.id.as_str())
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let links: Vec<(String, String)> = children
+    let mut links = own_links(children);
+    // At the depth limit the folders below join this group.
+    let merge = style.depth.is_some_and(|d| depth >= d);
+    if merge {
+        fn all(
+            kids: &BTreeMap<&str, Vec<&WireNode>>,
+            id: &str,
+            left: usize,
+            out: &mut Vec<(String, String)>,
+        ) {
+            if left == 0 {
+                return;
+            }
+            for c in kids.get(id).map(Vec::as_slice).unwrap_or(&[]) {
+                if c.kind == Kind::Folder {
+                    let kids_of = kids.get(c.id.as_str()).map(Vec::as_slice).unwrap_or(&[]);
+                    out.extend(own_links(kids_of));
+                    all(kids, &c.id, left - 1, out);
+                }
+            }
+        }
+        all(kids, &folder.id, MAX_DEPTH - depth, &mut links);
+    }
+    if !links.is_empty() {
+        groups.push((path.map(str::to_string), links));
+    }
+    if merge || depth >= MAX_DEPTH {
+        return;
+    }
+    for c in children.iter().filter(|c| c.kind == Kind::Folder) {
+        let name = match c.title.trim() {
+            "" => "(unnamed)",
+            n => n,
+        };
+        let sub = match (path, style.names) {
+            (Some(p), GroupNames::Path) => format!("{p} / {name}"),
+            _ => name.to_string(),
+        };
+        collect(kids, c, Some(&sub), depth + 1, style, groups);
+    }
+}
+
+/// The http(s) bookmarks among `children`, as `(title, url)`.
+fn own_links(children: &[&WireNode]) -> Vec<(String, String)> {
+    children
         .iter()
         .filter(|c| c.kind == Kind::Bookmark)
         .filter_map(|c| {
@@ -173,24 +318,18 @@ fn collect(
             };
             Some((title.to_string(), url.to_string()))
         })
-        .collect();
-    if !links.is_empty() {
-        groups.push((path.map(str::to_string), links));
+        .collect()
+}
+
+/// `https://host[:port]/favicon.ico` for a http(s) URL.
+fn icon_url(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    // Credentials in the URL must never end up in a second URL.
+    if host.is_empty() || host.contains('@') {
+        return None;
     }
-    if depth >= MAX_DEPTH {
-        return;
-    }
-    for c in children.iter().filter(|c| c.kind == Kind::Folder) {
-        let name = match c.title.trim() {
-            "" => "(unnamed)",
-            n => n,
-        };
-        let sub = match path {
-            Some(p) => format!("{p} / {name}"),
-            None => name.to_string(),
-        };
-        collect(kids, c, Some(&sub), depth + 1, groups);
-    }
+    Some(format!("{scheme}://{host}/favicon.ico"))
 }
 
 /// A YAML double-quoted scalar. JSON string syntax is valid YAML, and
@@ -273,6 +412,64 @@ mod tests {
             node("empty", Some("bar"), "d", Kind::Folder, "Empty", None),
             node("other", Some("root"), "b", Kind::Folder, "Other", None),
         ]
+    }
+
+    #[test]
+    fn style_options_shape_the_widget() {
+        let st = Style {
+            title: Some("Work".into()),
+            names: GroupNames::Name,
+            depth: Some(1),
+            max_title: Some(8),
+            icons: true,
+            hide_arrow: true,
+            same_tab: true,
+        };
+        st.check().unwrap();
+        let y = render_styled(&sample(), &["Bar"], &st).unwrap();
+        // Bar's own links lead; its subfolder Dev is at the depth limit.
+        assert!(
+            y.contains("type: bookmarks\ntitle: \"Work\"\ngroups:"),
+            "{y}"
+        );
+        assert!(y.contains("title: \"First:…\""), "{y}");
+        assert!(y.contains("icon: \"https://one.example/favicon.ico\""));
+        assert!(y.contains("hide-arrow: true") && y.contains("same-tab: true"));
+        assert!(y.contains("  - title: \"Dev\"\n"), "{y}");
+        // Depth 0: everything under the folder in one untitled group.
+        let flat = Style {
+            depth: Some(0),
+            ..Style::default()
+        };
+        let y = render_styled(&sample(), &["Bar"], &flat).unwrap();
+        assert_eq!(y.matches("links:").count(), 1, "{y}");
+        assert!(y.contains("http://dev.example") && !y.contains("javascript"));
+        // The default style is the plain output.
+        assert_eq!(
+            render_styled(&sample(), &[], &Style::default()),
+            render_folder(&sample(), &[])
+        );
+        assert!(Style {
+            title: Some("a;b".into()),
+            ..Style::default()
+        }
+        .check()
+        .is_err());
+        assert!(Style {
+            max_title: Some(2),
+            ..Style::default()
+        }
+        .check()
+        .is_err());
+    }
+
+    #[test]
+    fn icon_urls_never_carry_credentials() {
+        assert_eq!(
+            icon_url("https://a.example:8443/x?y#z").unwrap(),
+            "https://a.example:8443/favicon.ico"
+        );
+        assert!(icon_url("https://user:pw@a.example/").is_none());
     }
 
     #[test]
