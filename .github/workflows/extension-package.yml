@@ -5,7 +5,7 @@ name: Extension package
 # repository secrets, a signed Firefox .xpi. Download them from the run's
 # "Artifacts" section. The Chrome zip goes to the Chrome Web Store for review
 # only for a release (a pushed tag vX.Y.Z) or when the run is started by hand with the
-# "chrome_store" box ticked, and only if the store secrets are set (see README). Pull requests do not run this: they have no secrets and
+# "chrome_store" box ticked, and only if the store secrets are set (see docs/development.md). Pull requests do not run this: they have no secrets and
 # every signing uses up a version number at Mozilla.
 
 on:
@@ -48,7 +48,7 @@ jobs:
       # and add them under Settings > Secrets and variables > Actions.
       WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
       WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
-      # Optional. Chrome Web Store upload, see README "Chrome Web Store".
+      # Optional. Chrome Web Store upload, see docs/development.md "Chrome Web Store".
       CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
       CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
       CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}

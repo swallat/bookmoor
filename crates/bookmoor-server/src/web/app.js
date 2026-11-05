@@ -719,7 +719,17 @@ async function dynacatView() {
           })
         : h("span", { class: "tag", text: "Command line" }))));
 
-  let create = h("p", { class: "muted", text: "Start the server with --dynacat-dir DIRECTORY (the directory Dynacat reads) to create outputs here." });
+  // Without a directory the form cannot work, so say how to switch it on. A
+  // command-line output already shows which directory Dynacat reads.
+  const cli = info.outputs.find((o) => !o.id);
+  let guess = cli ? cli.file.replace(/[\\/][^\\/]*$/, "") : "";
+  if (!guess || guess === cli.file) guess = "/dynacat";
+  let create = h("div", { class: "notice stack-sm", role: "note" },
+    h("p", { text: "Adding and changing outputs here is switched off: the server does not know which directory Dynacat reads." }),
+    h("p", { class: "small" }, "Set ", h("code", { text: "BOOKMOOR_DYNACAT_DIR=" + guess }),
+      " (Docker: under environment; otherwise ", h("code", { text: "--dynacat-dir " + guess }),
+      "), make that directory writable by the server and restart it. ",
+      cli ? "Outputs from the command line, like the one below, stay read-only: change them where the server is started." : ""));
   if (info.dir) {
     const folder = h("select", { id: "dyn-folder", name: "folder" }, h("option", { value: "", text: "Whole tree" }));
     const profile = h("select", { id: "dyn-profile", name: "profile" },
@@ -746,21 +756,22 @@ async function dynacatView() {
     load();
     prefill();
     create = form([
-      h("div", { class: "form-row three" },
+      h("div", { class: "form-row fields" },
         field("dyn-file", "File name", { type: "text", placeholder: "dev.yml", required: true, maxlength: "64", autocapitalize: "off" }),
         h("div", { class: "field" }, h("label", { for: "dyn-profile", text: "Profile" }), profile),
         h("div", { class: "field" }, h("label", { for: "dyn-folder", text: "Folder" }), folder)),
-      h("div", { class: "form-row three" },
+      h("div", { class: "form-row fields" },
         titleField,
         h("div", { class: "field" }, h("label", { for: "dyn-names", text: "Group titles" }),
           h("select", { id: "dyn-names", name: "names" },
             h("option", { value: "path", text: "Full path (toolbar / Dev)" }),
             h("option", { value: "name", text: "Folder name only (Dev)" }))),
         field("dyn-depth", "Group depth", { type: "number", min: "0", max: "32", placeholder: "no limit" }, "Folders deeper than this are merged into their parent group: fewer, longer groups.")),
-      h("div", { class: "form-row three" },
+      h("div", { class: "form-row fields" },
         field("dyn-max", "Shorten titles to", { type: "number", min: "8", max: "500", placeholder: "no limit" }, "Characters; longer link titles end in …"),
-        h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-icons" }), h("span", { text: " Site icons" }),
-          h("span", { class: "hint", text: " Dynacat's browser asks each site for /favicon.ico, so those sites see the viewer's IP address." })),
+        h("div", { class: "field-check" },
+          h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-icons", "aria-describedby": "dyn-icons-hint" }), h("span", { text: "Site icons" })),
+          h("p", { class: "hint", id: "dyn-icons-hint", text: "Dynacat's browser asks each site for /favicon.ico, so those sites see the viewer's IP address." })),
         h("div", { class: "stack-sm" },
           h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-arrow" }), h("span", { text: " Hide the arrow" })),
           h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-tab" }), h("span", { text: " Open in the same tab" })))),
@@ -925,6 +936,8 @@ async function connectView() {
 async function start() {
   const s = await api("GET", "session").catch(() => ({ state: "login" }));
   sso = s.sso || null;
+  const ver = document.getElementById("version");
+  if (ver && s.version) ver.textContent = "bookmoor " + s.version + (s.commit ? " (" + s.commit + ")" : "");
   if (s.state === "user") { me = s.user; return connectAsk && !me.mfa_setup_needed ? connectView() : render(); }
   me = null;
   return s.state === "setup" ? setupView() : loginView();
