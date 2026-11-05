@@ -73,14 +73,16 @@ async function bookmarksView() {
   const ix = bmIndex(tree.nodes);
   const count = tree.nodes.filter((n) => n.kind === "bookmark").length;
 
-  if (!ix.byId.has(bmSel) || ix.byId.get(bmSel).kind !== "folder") bmSel = ix.root.id;
+  if (!ix.byId.has(bmSel) || ix.byId.get(bmSel).kind !== "folder") bmSel = ix.byId.has("toolbar") ? "toolbar" : ix.root.id;
   const list = h("div", { class: "list bm-list" });
   const side = h("nav", { class: "bm-side list", "aria-label": "Folders" });
   const crumbs = h("nav", { class: "bm-crumbs", "aria-label": "Folder path" });
   const fill = () => {
+    const had = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.k : null;
     side.replaceChildren(...bmSide(ix));
     crumbs.replaceChildren(...bmCrumbs(ix));
     list.replaceChildren(...bmRows(ix, bmQuery.trim().toLowerCase()));
+    if (had) { const el = document.querySelector('[data-k="' + CSS.escape(had) + '"]'); if (el) el.focus(); }
   };
 
   const edit = async (body, done) => {
@@ -115,11 +117,24 @@ async function bookmarksView() {
     h("div", { class: "bm-split" }, side, h("div", { class: "bm-main" }, crumbs, list)));
 }
 
-/** Count of bookmarks in a folder, including everything below it. */
+/** Count of bookmarks in a folder, including everything below it (memoized per index). */
 function bmCount(ix, f) {
+  ix.counts = ix.counts || new Map();
+  if (ix.counts.has(f.id)) return ix.counts.get(f.id);
   let c = 0;
   for (const n of ix.kids.get(f.id) || []) c += n.kind === "folder" ? bmCount(ix, n) : 1;
+  ix.counts.set(f.id, c);
   return c;
+}
+
+/** Show a folder: leave search, unfold the path to it. */
+function bmSelect(ix, id) {
+  bmSel = id;
+  bmQuery = "";
+  const box = document.getElementById("bm-search");
+  if (box) box.value = "";
+  for (let p = ix.byId.get(id); p; p = ix.byId.get(p.parent)) bmClosed.delete(p.id);
+  bmFill();
 }
 
 /** Sidebar: the folder tree with counts. Click selects, the caret folds. */
@@ -132,19 +147,24 @@ function bmSide(ix) {
       const open = !bmClosed.has(n.id);
       const row = h("div", { class: "bm-node" + (n.id === bmSel ? " sel" : "") });
       row.style.setProperty("--d", String(depth));
-      row.append(
-        sub ? h("button", { class: "bm-twist", type: "button", "aria-label": (open ? "Fold " : "Unfold ") + bmTitle(n),
+          row.append(
+        sub ? h("button", { class: "bm-twist", type: "button", "data-k": "t" + n.id, "aria-label": (open ? "Fold " : "Unfold ") + bmTitle(n),
           "aria-expanded": String(open), text: open ? "▾" : "▸",
           onclick: () => { open ? bmClosed.add(n.id) : bmClosed.delete(n.id); bmFill(); } })
           : h("span", { class: "bm-twist" }),
-        h("button", { class: "bm-pick", type: "button", "aria-current": n.id === bmSel ? "true" : null,
-          onclick: () => { bmSel = n.id; bmFill(); } },
+        h("button", { class: "bm-pick", type: "button", "data-k": "p" + n.id, "aria-current": n.id === bmSel ? "true" : null,
+          onclick: () => bmSelect(ix, n.id) },
           h("span", { class: "name", text: bmTitle(n) }),
           h("span", { class: "tag", text: String(bmCount(ix, n)) })));
       out.push(row);
       if (sub && open) walk(n, depth + 1);
     }
   };
+  const all = h("div", { class: "bm-node" + (bmSel === ix.root.id ? " sel" : "") });
+  all.append(h("span", { class: "bm-twist" }),
+    h("button", { class: "bm-pick", type: "button", "data-k": "pall", onclick: () => bmSelect(ix, ix.root.id) },
+      h("span", { class: "name", text: "All bookmarks" }), h("span", { class: "tag", text: String(bmCount(ix, ix.root)) })));
+  out.push(all);
   walk(ix.root, 0);
   return out;
 }
@@ -152,12 +172,13 @@ function bmSide(ix) {
 function bmCrumbs(ix) {
   const chain = [];
   for (let n = ix.byId.get(bmSel); n && n.parent != null; n = ix.byId.get(n.parent)) chain.unshift(n);
+  if (!chain.length) return [h("strong", { text: "All bookmarks" })];
   const out = [];
   chain.forEach((n, i) => {
     if (i) out.push(h("span", { class: "muted", "aria-hidden": "true", text: " / " }));
     out.push(i === chain.length - 1
       ? h("strong", { text: bmTitle(n) })
-      : h("button", { class: "bm-crumb", type: "button", text: bmTitle(n), onclick: () => { bmSel = n.id; bmFill(); } }));
+      : h("button", { class: "bm-crumb", type: "button", text: bmTitle(n), onclick: () => bmSelect(ix, n.id) }));
   });
   return out;
 }
@@ -184,12 +205,11 @@ function bmRows(ix, q) {
 function bmRow(ix, n, depth, searching, siblings, i) {
   const protectedNode = Object.hasOwn(ROLE_LABELS, n.id);
   const row = h("div", { class: "row bm-row" + (n.kind === "folder" ? " folder" : "") });
-  row.style.setProperty("--d", String(depth));
   const acts = h("div", { class: "actions" });
   let main;
   if (n.kind === "folder") {
     main = h("button", { class: "bm-fold", type: "button", title: "Open folder",
-      onclick: () => { bmSel = n.id; bmFill(); } },
+      onclick: () => bmSelect(ix, n.id) },
       h("span", { class: "bm-folder-icon", "aria-hidden": "true", text: "📁" }),
       h("span", { class: "name", text: bmTitle(n) }), " ",
       h("span", { class: "tag", text: String(bmCount(ix, n)) }));
