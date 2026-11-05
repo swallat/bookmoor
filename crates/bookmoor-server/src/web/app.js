@@ -174,7 +174,7 @@ function setupView() {
 
 function shell(content) {
   const tabs = me.mfa_setup_needed ? [["account", "Account"]]
-    : [["devices", "Devices"], ["profiles", "Profiles"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"]] : []), ["account", "Account"]];
+    : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -632,10 +632,10 @@ async function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, profiles: profilesView, users: usersView, sso: ssoAdminView, account: accountView };
+  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, sso: ssoAdminView, account: accountView };
   if ((tab === "users" || tab === "sso") && !me.admin) tab = "devices";
   if (me.mfa_setup_needed) tab = "account"; // nothing else works until it is set up
-  document.title = { devices: "Devices", profiles: "Profiles", users: "Users", sso: "Single sign-on", account: "Account" }[tab] + " · bookmoor";
+  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", sso: "Single sign-on", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }
