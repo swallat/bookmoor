@@ -357,6 +357,17 @@ async fn main() {
             bookmoor_server::oidc::callback_url(&oidc.cfg.public_url)
         );
         state.oidc = Some(Arc::new(oidc));
+        state.oidc_env = true;
+    } else {
+        // Settings saved in the web UI.
+        let saved = state.oidc_config.take();
+        state.apply_oidc(saved);
+        if let Some(o) = &state.oidc {
+            println!(
+                "single sign-on (web UI settings): redirect URL {}",
+                bookmoor_server::oidc::callback_url(&o.cfg.public_url)
+            );
+        }
     }
     if let Some(dir) = &dynacat_dir {
         if !dir.is_dir() {

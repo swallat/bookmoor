@@ -75,9 +75,41 @@ pub struct AppState {
     /// Single sign-on for the web UI (none = off).
     pub oidc: Option<std::sync::Arc<crate::oidc::Oidc>>,
     pub oidc_flows: crate::oidc::Flows,
+    /// Single sign-on as an admin set it up in the web UI (saved with the state).
+    pub oidc_config: Option<crate::oidc::OidcConfig>,
+    /// Single sign-on comes from the environment or flags, which win over `oidc_config`.
+    pub oidc_env: bool,
 }
 
 impl AppState {
+    /// Make `cfg` the web-UI single sign-on settings and, unless the
+    /// environment configures it, the live provider. Flows in progress belong
+    /// to the old settings and end here. A bad stored config switches
+    /// single sign-on off (with a message) rather than stopping the server.
+    pub fn apply_oidc(&mut self, cfg: Option<crate::oidc::OidcConfig>) {
+        // Unchanged (e.g. a failed save of something else reloads the state):
+        // keep the live provider and the sign-ins in progress.
+        if self.oidc_config == cfg && (self.oidc_env || self.oidc.is_some() == cfg.is_some()) {
+            return;
+        }
+        self.oidc_config = cfg;
+        if self.oidc_env {
+            return;
+        }
+        self.oidc_flows = Default::default();
+        self.oidc = None;
+        if let Some(c) = self.oidc_config.clone() {
+            match crate::oidc::Oidc::new(c) {
+                Ok(o) => {
+                    // Keep what the provider really uses (trimmed, default label).
+                    self.oidc_config = Some(o.cfg.clone());
+                    self.oidc = Some(std::sync::Arc::new(o));
+                }
+                Err(e) => eprintln!("single sign-on settings ignored: {e}"),
+            }
+        }
+    }
+
     /// The profile whose tree the Dynacat file shows: `dynacat_profile`, else
     /// the user's only profile, else (several) their `Default` one.
     pub(crate) fn dynacat_target(&self, profile: Option<&str>) -> Result<String, String> {
@@ -396,6 +428,7 @@ impl AppState {
     /// Remove a user with their tree and all their tokens.
     pub fn remove_user(&mut self, id: &str) -> bool {
         self.sessions.end_user(id);
+        self.sessions.end_setup(id);
         for p in self.profiles.remove_user(id) {
             self.engines.remove(&p);
         }
@@ -504,6 +537,13 @@ async fn require_auth(
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .and_then(|text| st.tokens.authenticate(text))
+            // A disabled user's devices stop syncing; the tokens stay.
+            .filter(|r| {
+                !r.user_id
+                    .as_deref()
+                    .and_then(|id| st.users.get(id))
+                    .is_some_and(|u| u.disabled)
+            })
             .cloned();
         match found {
             Some(rec) => {

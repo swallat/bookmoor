@@ -23,6 +23,9 @@ struct SaveFile<'a> {
     tokens: &'a [TokenRecord],
     backups: &'a BTreeMap<String, Backup>,
     dynacat: &'a [UiOutput],
+    /// Single sign-on set up in the web UI (holds the client secret).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    oidc: Option<&'a crate::oidc::OidcConfig>,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +44,7 @@ struct LoadFile {
     backups: BTreeMap<String, Backup>,
     #[serde(default)]
     dynacat: Vec<UiOutput>,
+    oidc: Option<crate::oidc::OidcConfig>,
 }
 
 /// Everything the state file holds.
@@ -52,6 +56,7 @@ pub struct Loaded {
     pub tokens: Tokens,
     pub backups: BTreeMap<String, Backup>,
     pub dynacat: Vec<UiOutput>,
+    pub oidc: Option<crate::oidc::OidcConfig>,
 }
 
 /// An exclusive OS lock on `<state>.lock`, so the server and the token
@@ -121,6 +126,7 @@ impl Store {
                 admin: true,
                 password_hash: None,
                 oidc: None,
+                ..User::blank()
             };
             engines.insert(owner.id.clone(), legacy);
             for t in tokens.iter_mut().filter(|t| t.scope != Scope::Admin) {
@@ -202,9 +208,11 @@ impl Store {
             tokens: Tokens::from_records(tokens),
             backups,
             dynacat,
+            oidc: f.oidc,
         }))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn save(
         &self,
         users: &Users,
@@ -213,6 +221,7 @@ impl Store {
         tokens: &Tokens,
         backups: &BTreeMap<String, Backup>,
         dynacat: &[UiOutput],
+        oidc: Option<&crate::oidc::OidcConfig>,
     ) -> io::Result<()> {
         let records = tokens.records();
         let user_records = users.records();
@@ -227,6 +236,7 @@ impl Store {
             tokens: &records,
             backups,
             dynacat,
+            oidc,
         })
         .map_err(io::Error::other)?;
         let tmp = tmp_path(&self.path);
@@ -280,6 +290,7 @@ impl AppState {
             tokens: l.tokens,
             backups: l.backups,
             dynacat_ui: l.dynacat,
+            oidc_config: l.oidc,
             store: Some(store),
             ..AppState::default()
         })
@@ -295,6 +306,7 @@ impl AppState {
                 &self.tokens,
                 &self.backups,
                 &self.dynacat_ui,
+                self.oidc_config.as_ref(),
             ),
             None => Ok(()),
         }
@@ -318,6 +330,7 @@ impl AppState {
                     self.tokens = l.tokens;
                     self.backups = l.backups;
                     self.dynacat_ui = l.dynacat;
+                    self.apply_oidc(l.oidc);
                 }
                 _ => {
                     eprintln!("fatal: cannot save or reload state ({err}); exiting");
@@ -704,6 +717,7 @@ mod tests {
                 &st.tokens,
                 &st.backups,
                 &st.dynacat_ui,
+                None,
             )
             .unwrap();
         let err = Store::new(&path).load().err().unwrap();
@@ -721,6 +735,7 @@ mod tests {
                 &st.tokens,
                 &st.backups,
                 &st.dynacat_ui,
+                None,
             )
             .unwrap();
         assert!(Store::new(&path).load().is_err());
