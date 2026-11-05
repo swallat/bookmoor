@@ -91,8 +91,7 @@ input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var
 .form-row.fields { align-items: start; }
 .form-row.fields + .form-row.fields { margin-top: 16px; }
 .field-check { display: grid; gap: 2px; }
-@media (min-width: 40rem) { .form-row.fields { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); } }
-.field select, .field input[type=text], .field input[type=number] { min-width: 0; width: 100%; }
+@media (min-width: 44rem) { .form-row.fields { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .check input { width: 20px; height: 20px; accent-color: var(--blue); }
 .hint { font-size: .875rem; color: var(--muted); }
