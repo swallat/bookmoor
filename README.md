@@ -116,7 +116,7 @@ docker compose start bookmoor
 ```
 
 For the Dynacat adapter, mount a writable directory (uid 10001) and point
-`BOOKMOOR_DYNACAT_OUTPUTS` at files in it (one `file=PATH[;profile=NAME][;folder=A/B/C]`
+`BOOKMOOR_DYNACAT_OUTPUTS` at files in it (one `file=PATH[;profile=NAME][;folder=A/B/C]`, plus optional look settings,
 per line, see [docs/adapters/dynacat.md](docs/adapters/dynacat.md)); mount the same
 directory into Dynacat. The example compose file shows both. Build locally with
 `docker build -t bookmoor .`. If a command overrides `--bind` with another port, the

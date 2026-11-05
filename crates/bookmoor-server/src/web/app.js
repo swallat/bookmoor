@@ -674,12 +674,17 @@ async function dynacatView() {
           h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-arrow" }), h("span", { text: " Hide the arrow" })),
           h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-tab" }), h("span", { text: " Open in the same tab" })))),
     ], "Add output", async (fd, f) => {
-      const num = (id) => { const v = document.getElementById(id).value; return v === "" ? null : Number(v); };
+      const num = (id, what) => {
+        const v = document.getElementById(id).value.trim();
+        if (v === "") return null;
+        if (!/^\d+$/.test(v)) throw new Error(what + " must be a whole number");
+        return Number(v);
+      };
       const style = {
         title: document.getElementById("dyn-title").value.trim() || null,
         names: document.getElementById("dyn-names").value,
-        depth: num("dyn-depth"),
-        max_title: num("dyn-max"),
+        depth: num("dyn-depth", "Group depth"),
+        max_title: num("dyn-max", "Shorten titles to"),
         icons: document.getElementById("dyn-icons").checked,
         hide_arrow: document.getElementById("dyn-arrow").checked,
         same_tab: document.getElementById("dyn-tab").checked,

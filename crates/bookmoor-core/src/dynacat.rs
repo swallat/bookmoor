@@ -7,7 +7,8 @@
 //!
 //! Dynacat groups are flat, so folders are mapped like this:
 //! - bookmarks directly under the root form a leading group without title,
-//! - every folder becomes a group titled with its path (`Parent / Child`),
+//! - every folder becomes a group titled with its path (`Parent / Child`;
+//!   see [`Style`] for short names, a depth limit, icons and more),
 //!   listed depth first in sibling order,
 //! - folders without any usable bookmark are left out,
 //! - only `http` and `https` URLs are written (`javascript:`, `chrome:` and
@@ -75,11 +76,8 @@ impl Style {
     /// Reject values that would make a useless or odd widget.
     pub fn check(&self) -> Result<(), String> {
         if let Some(t) = &self.title {
-            if t.trim().is_empty() || t.chars().count() > Self::MAX_TITLE || t.contains(';') {
-                return Err(format!(
-                    "title: 1 to {} characters, no semicolon",
-                    Self::MAX_TITLE
-                ));
+            if t.trim().is_empty() || t.chars().count() > Self::MAX_TITLE {
+                return Err(format!("title: 1 to {} characters", Self::MAX_TITLE));
             }
         }
         if self.depth.is_some_and(|d| d > MAX_DEPTH) {
@@ -97,6 +95,8 @@ fn shorten(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
+    // Never trust the value (a hand-edited state file): keep room for `…`.
+    let max = max.max(2);
     let mut t: String = s.chars().take(max - 1).collect();
     while t.ends_with(char::is_whitespace) {
         t.pop();

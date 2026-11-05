@@ -49,13 +49,14 @@ the plain output.
 | Site icons | `icons=yes` | `icon: https://HOST/favicon.ico` per link; the viewer's browser contacts each site |
 | Hide the arrow / same tab | `hide-arrow=yes`, `same-tab=yes` | per-link flags |
 
-The title must not contain `;`. Several pages for one profile are several
+On the command line the title cannot contain `;`. Several pages for one profile are several
 outputs of that profile, each with its own folder (and title).
 
 ## One file per Dynacat page (command line)
 
 `--dynacat-output SPEC` can be given several times (or one spec per line in
-`BOOKMOOR_DYNACAT_OUTPUTS`). A spec is `file=PATH[;profile=NAME][;folder=A/B/C]`
+`BOOKMOOR_DYNACAT_OUTPUTS`). A spec is `file=PATH[;profile=NAME][;folder=A/B/C]` plus the optional
+keys `title`, `names`, `depth`, `max-title`, `icons`, `hide-arrow`, `same-tab` (see above)
 (a bare `PATH` works too). `--dynacat-file PATH` and `BOOKMOOR_DYNACAT_FILE` take a plain path
 without any options. Two outputs must not write the same file.
 
