@@ -58,3 +58,4 @@
 .bm-row .main { flex: 1 1 0; min-width: 0; }
 .bm-row .actions { flex-wrap: nowrap; }
 @media (max-width: 64rem) { .bm-row .actions { flex-wrap: wrap; } }
+.shell.wide .stack > p.muted { max-width: 60rem; }
