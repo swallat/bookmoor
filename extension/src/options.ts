@@ -35,19 +35,32 @@ function showSync(status: SyncStatus | undefined): void {
     : "No sync has run yet. Save the settings and change a bookmark.";
   el.className = status && status.outcome !== "ok" ? "bad" : "";
   $("signin").hidden = status?.outcome !== "login";
+  const dialog = $<HTMLDialogElement>("choice");
+  if (status?.outcome === "decide") {
+    if (!dialog.open && !dismissedChoice && !applyingChoice) dialog.showModal();
+  } else {
+    dismissedChoice = false;
+    if (dialog.open) dialog.close();
+  }
 }
+
+/** The user closed the dialog with "Decide later"; do not reopen it until the next sync. */
+let dismissedChoice = false;
+/** A choice from the dialog is being applied; the status still says "decide" until it is done. */
+let applyingChoice = false;
 
 /** What is stored, without showing the secret: lets the user see that the token arrived intact. */
 function showToken(token: string): void {
   const el = $("tokeninfo");
   if (!token) {
-    el.textContent = "No token stored.";
+    el.textContent = "Not signed in yet.";
     el.className = "hint";
   } else if (!token.startsWith("bkm_")) {
     el.textContent = `Stored: ${token.length} characters. Tokens normally start with "bkm_", check that you pasted the whole token.`;
+    $<HTMLDetailsElement>("advanced").open = true;
     el.className = "hint bad";
   } else {
-    el.textContent = `Stored: ${token.slice(0, 8)}\u2026 (${token.length} characters)`;
+    el.textContent = `Token stored: ${token.slice(0, 8)}\u2026`;
     el.className = "hint";
   }
 }
@@ -56,6 +69,7 @@ function showToken(token: string): void {
 async function syncNow(): Promise<void> {
   $("sync").textContent = "Syncing\u2026";
   $("sync").className = "";
+  dismissedChoice = false;
   try {
     await chrome.runtime.sendMessage({ type: "bookmoor-sync-now" });
   } catch (e) {
@@ -77,7 +91,7 @@ async function init(): Promise<void> {
   if (!url.value) url.value = s.serverUrl;
   if (!token.value) token.value = s.token;
   showToken(s.token);
-  $<HTMLInputElement>("sso").checked = s.sso;
+  if (s.headers.length || s.query.length) $<HTMLDetailsElement>("advanced").open = true;
   for (const h of s.headers) $("headers").append(pairRow(h));
   for (const q of s.query) $("query").append(pairRow(q, "Parameter"));
   $("add").addEventListener("click", () => $("headers").append(pairRow()));
@@ -100,7 +114,6 @@ async function init(): Promise<void> {
         token: $<HTMLInputElement>("token").value.trim(),
         headers: readPairs("headers"),
         query: readPairs("query"),
-        sso: $<HTMLInputElement>("sso").checked,
       });
       showToken($<HTMLInputElement>("token").value.trim());
       status.textContent = "Saved.";
@@ -111,9 +124,9 @@ async function init(): Promise<void> {
   });
 }
 
-/** Ask for confirmation, then let the background script start over. */
-async function startOver(mode: "adopt" | "overwrite"): Promise<void> {
-  const ok = confirm(
+/** Ask for confirmation (not for a merge), then let the background script start over. */
+async function startOver(mode: "adopt" | "overwrite" | "merge", confirmFirst = true): Promise<void> {
+  const ok = !confirmFirst || confirm(
     mode === "adopt"
       ? "Replace this browser's synced bookmarks with the server's? Links that only exist here are removed from this browser."
       : "Replace the server's bookmarks with this browser's? Links that only exist on the server are removed from the profile and from its other devices (the server keeps a copy).",
@@ -151,6 +164,23 @@ $("signinserver").addEventListener("click", async () => {
 });
 $("syncnow").addEventListener("click", () => void syncNow());
 $("adopt").addEventListener("click", () => void startOver("adopt"));
+// The dialog already spells out the consequences, so it asks only once.
+for (const mode of ["merge", "adopt", "overwrite"] as const) {
+  $(`choice-${mode}`).addEventListener("click", () => {
+    $<HTMLDialogElement>("choice").close();
+    applyingChoice = true;
+    void startOver(mode, false).finally(() => {
+      applyingChoice = false;
+    });
+  });
+}
+$("choice").addEventListener("cancel", () => {
+  dismissedChoice = true;
+});
+$("choice-later").addEventListener("click", () => {
+  dismissedChoice = true;
+  $<HTMLDialogElement>("choice").close();
+});
 $("overwrite").addEventListener("click", () => void startOver("overwrite"));
 $("signin").addEventListener("click", () => void chrome.runtime.sendMessage({ type: "bookmoor-sign-in" }));
 

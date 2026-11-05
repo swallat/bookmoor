@@ -985,6 +985,7 @@ struct DynacatRow {
     file: String,
     profile: String,
     folder: String,
+    style: bookmoor_core::dynacat::Style,
     error: Option<String>,
 }
 
@@ -1029,6 +1030,7 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
             file,
             profile,
             folder: o.folder.join("/"),
+            style: o.style.clone(),
         });
     }
     for o in &st.dynacat_ui {
@@ -1037,6 +1039,7 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
             file: o.file.clone(),
             profile: profile_label(&st, &o.profile_id),
             folder: o.folder.join("/"),
+            style: o.style.clone(),
             error: if st.dynacat_dir.is_none() {
                 Some("not written: the server runs without --dynacat-dir".into())
             } else {
@@ -1090,6 +1093,8 @@ struct NewDynacat {
     /// `A/B/C`, empty for the whole tree.
     #[serde(default)]
     folder: String,
+    #[serde(default)]
+    style: bookmoor_core::dynacat::Style,
 }
 
 async fn add_dynacat(
@@ -1106,7 +1111,7 @@ async fn add_dynacat(
         .filter(|p| !p.is_empty())
         .map(String::from)
         .collect();
-    st.add_dynacat_output(&b.file, &b.profile, folder)
+    st.add_dynacat_output(&b.file, &b.profile, folder, b.style)
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok(StatusCode::CREATED)

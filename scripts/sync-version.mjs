@@ -8,6 +8,7 @@
 //   node scripts/sync-version.mjs --check    fail if they differ (CI)
 //   node scripts/sync-version.mjs --tag v1.2.3   fail unless the Git tag matches (release)
 //   node scripts/sync-version.mjs --print    print the version
+//   node scripts/sync-version.mjs --prerelease   print true for 0.x (beta), else false
 //   node scripts/sync-version.mjs --set 1.2.3    change Cargo.toml, then sync
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -53,6 +54,11 @@ if (!SEMVER.test(version)) {
 }
 if (cmp(version.split(".").map(Number), FLOOR) <= 0) {
   throw new Error(`version ${version} must be higher than ${FLOOR.join(".")}, which was already published as a dev build`);
+}
+if (args.includes("--prerelease")) {
+  // 0.x is beta: GitHub pre-release, no Docker "latest".
+  console.log(version.startsWith("0.") ? "true" : "false");
+  process.exit(0);
 }
 if (args.includes("--print")) {
   console.log(version);

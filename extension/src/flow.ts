@@ -54,8 +54,12 @@ export interface StateStore {
   save(s: SyncState): Promise<void>;
 }
 
-/** `auth`: stop until the token is fixed; `login`: stop until the user signs in at the proxy; `retry`: try again later. */
-export type Outcome = "ok" | "auth" | "login" | "retry";
+/**
+ * `auth`: stop until the token is fixed; `login`: stop until the user signs in at the proxy; `retry`: try again
+ * later; `decide`: the first sync of this device found bookmarks on both sides and waits for the user to say
+ * what should happen (see `Restart`).
+ */
+export type Outcome = "ok" | "auth" | "login" | "retry" | "decide";
 
 const BATCH = 500;
 
@@ -213,23 +217,50 @@ function ignoreNode(state: SyncState, sid: string): void {
   }
 }
 
+const isRole = (id: string) => id === ROOT || (ROLES as readonly string[]).includes(id);
+
+/** Whether the server's tree holds anything besides its built-in roots. */
+function serverHasBookmarks(tree: TreeResponse): boolean {
+  return tree.nodes.some((n) => !isRole(n.id));
+}
+
+/** Whether the browser has bookmarks of its own in the synced roots. */
+async function browserHasBookmarks(api: BookmarkApi): Promise<boolean> {
+  const tree = await api.getTree();
+  const scratch = emptyState("");
+  mapRoots(scratch, tree);
+  const roles = new Set<string>(ROLES);
+  return (tree[0]?.children ?? []).some(
+    (root) =>
+      roles.has(scratch.map[root.id] ?? "") &&
+      // Firefox's menu folder (menu.ts) holds stock bookmarks in every fresh
+      // profile, so it does not count as the user's own.
+      (root.children ?? []).some((c) => !c.unmodifiable && !c.virtual),
+  );
+}
+
 /**
  * One sync round. `identity` names the server and token in use; when it
  * differs from the saved state's the device starts afresh (a new token is
- * bound to a new endpoint).
+ * bound to a new endpoint). With `ask`, that first sync does not merge on its
+ * own when both the server and the browser already have bookmarks: it changes
+ * nothing and returns `decide`, so the user can choose (`startOver`).
  */
 export async function flush(
   api: BookmarkApi,
   store: StateStore,
   transport: Transport,
   identity = "",
+  ask = false,
 ): Promise<Outcome> {
   try {
     let state = await store.load();
     if (state && state.identity !== identity) state = null;
     if (!state) {
+      const theirs = await transport.tree();
+      if (ask && serverHasBookmarks(theirs) && (await browserHasBookmarks(api))) return "decide";
       state = emptyState(await transport.endpoint(), identity);
-      await matchTree(api, state, await transport.tree());
+      await matchTree(api, state, theirs);
       await store.save(state);
     }
     const save = () => store.save(state!);
@@ -296,10 +327,10 @@ export async function flush(
  * `adopt`: make the server's bookmarks this browser's (what the browser has
  * but the server has not is removed here). `overwrite`: make this browser's
  * bookmarks the server's (what the server has but the browser has not is
- * dropped, on every device). Anything else is a normal merge, which is what
- * the first sync does anyway.
+ * dropped, on every device). `merge`: pair what is on both sides, add the
+ * rest on both sides, delete nothing (the answer to `decide`).
  */
-export type Restart = "adopt" | "overwrite";
+export type Restart = "adopt" | "overwrite" | "merge";
 
 export async function startOver(
   api: BookmarkApi,
@@ -314,10 +345,10 @@ export async function startOver(
     await store.save(emptyState("", `\u0000starting over\n${identity}`));
     if (mode === "overwrite") {
       await transport.reset();
-    } else {
+    } else if (mode === "adopt") {
       // Make sure there is something to take over before removing anything.
       const theirs = await transport.tree();
-      if (theirs.nodes.every((n) => n.id === ROOT || (ROLES as readonly string[]).includes(n.id))) {
+      if (!serverHasBookmarks(theirs)) {
         throw new Error("The server has no bookmarks in this profile, so there is nothing to take over.");
       }
       const tree = await api.getTree();

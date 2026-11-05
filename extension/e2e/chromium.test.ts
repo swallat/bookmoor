@@ -38,6 +38,7 @@ async function configure(p: Profile, server: Server): Promise<void> {
   const page = await p.ctx.newPage();
   await page.goto(`chrome-extension://${p.id}/options.html`);
   await page.fill("#url", server.url);
+  await page.click("#advanced summary");
   await page.fill("#token", token);
   await page.click("#save");
   await page.waitForFunction(() => document.getElementById("status")?.textContent === "Saved.");

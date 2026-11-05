@@ -13,6 +13,9 @@ export const STATUS_KEY = "bookmoor-status";
 /** A sentence for the user; `error` is what made `flush` return `outcome`. */
 export function describe(outcome: Outcome, error: unknown): string {
   if (outcome === "ok") return "Last sync succeeded.";
+  if (outcome === "decide") {
+    return "The server already has bookmarks for this profile. Choose how to combine them with this browser's.";
+  }
   if (outcome === "login") {
     return "The login in front of the server has expired. Sign in again, then sync resumes by itself.";
   }
