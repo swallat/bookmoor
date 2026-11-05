@@ -27,4 +27,4 @@
 .bm-dialog form { display: grid; gap: 0; }
 .bm-dialog .btn { margin-top: 12px; }
 .bm-icon { width: 20px; height: 20px; vertical-align: -4px; margin-right: 8px; border-radius: 3px; }
-.bm-icon.missing { visibility: hidden; }
+.bm-icon.missing { display: none; }

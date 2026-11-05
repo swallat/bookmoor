@@ -19,7 +19,7 @@ function bmSetIcons(on) {
 
 function bmIcon(url) {
   let origin;
-  try { const u = new URL(url); if (u.protocol !== "https:" && u.protocol !== "http:") return null; origin = u.origin; } catch { return null; }
+  try { const u = new URL(url); if (u.protocol !== "https:") return null; origin = u.origin; } catch { return null; }
   const img = h("img", { class: "bm-icon", src: origin + "/favicon.ico", alt: "", width: "20", height: "20",
     loading: "lazy", referrerpolicy: "no-referrer", decoding: "async" });
   img.addEventListener("error", () => img.classList.add("missing"));
