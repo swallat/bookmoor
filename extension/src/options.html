@@ -31,6 +31,9 @@
       <input id="token" name="bookmoor-api-token" type="password" spellcheck="false" />
       <div id="tokeninfo" class="hint"></div>
 
+      <label class="check"><input id="sso" type="checkbox" /> Server is behind a login page (Pangolin SSO, OIDC proxy)</label>
+      <div class="hint">Sign in to the server URL once in a browser tab; the extension then sends that session. The API token is still required.</div>
+
       <label>Extra headers</label>
       <div class="hint">For example reverse-proxy header auth.</div>
       <div id="headers"></div>
@@ -51,6 +54,7 @@
     <section class="card">
       <h2>Sync status</h2>
       <div id="sync" role="status"></div>
+      <button id="signin" type="button" hidden>Sign in</button>
     </section>
   </main>
   <script type="module" src="options.js"></script>

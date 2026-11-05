@@ -33,6 +33,7 @@ function showSync(status: SyncStatus | undefined): void {
     ? `${status.message} (${new Date(status.at).toLocaleString()})`
     : "No sync has run yet. Save the settings and change a bookmark.";
   el.className = status && status.outcome !== "ok" ? "bad" : "";
+  $("signin").hidden = status?.outcome !== "login";
 }
 
 /** What is stored, without showing the secret: lets the user see that the token arrived intact. */
@@ -75,6 +76,7 @@ async function init(): Promise<void> {
   if (!url.value) url.value = s.serverUrl;
   if (!token.value) token.value = s.token;
   showToken(s.token);
+  $<HTMLInputElement>("sso").checked = s.sso;
   for (const h of s.headers) $("headers").append(pairRow(h));
   for (const q of s.query) $("query").append(pairRow(q, "Parameter"));
   $("add").addEventListener("click", () => $("headers").append(pairRow()));
@@ -97,6 +99,7 @@ async function init(): Promise<void> {
         token: $<HTMLInputElement>("token").value.trim(),
         headers: readPairs("headers"),
         query: readPairs("query"),
+        sso: $<HTMLInputElement>("sso").checked,
       });
       showToken($<HTMLInputElement>("token").value.trim());
       status.textContent = "Saved.";
@@ -108,5 +111,6 @@ async function init(): Promise<void> {
 }
 
 $("syncnow").addEventListener("click", () => void syncNow());
+$("signin").addEventListener("click", () => void chrome.runtime.sendMessage({ type: "bookmoor-sign-in" }));
 
 void init();
