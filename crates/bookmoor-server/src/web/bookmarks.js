@@ -104,7 +104,7 @@ async function bookmarksView() {
         onchange: (e) => { bmProfile = e.target.value; bmQuery = ""; bmClosed.clear(); bmSel = "toolbar"; render(); } },
         profiles.map((p) => h("option", { value: p.id, text: p.name, selected: p.id === bmProfile })))),
     h("p", { class: "muted", text: "This is what the server has saved for the profile. Changes here reach every browser of the profile on its next sync. Deleting a folder that holds bookmarks saves the tree as the copy for Restore under Profiles, replacing an older copy, and Restore replaces everything." }),
-    h("label", { class: "check" },
+    h("label", { class: "check bm-check" },
       h("input", { type: "checkbox", checked: bmIcons(),
         onchange: (e) => { bmSetIcons(e.target.checked); fill(); } }),
       h("span", { text: "Show site icons" }),

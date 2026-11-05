@@ -250,7 +250,7 @@ function setupView() {
 function shell(content) {
   const tabs = me.mfa_setup_needed ? [["account", "Account"]]
     : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"], ["dynacat", "Dynacat"]] : []), ["account", "Account"]];
-  app.replaceChildren(h("div", { class: "shell" },
+  app.replaceChildren(h("div", { class: "shell" + (tab === "bookmarks" ? " wide" : "") },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
       h("span", { class: "brand", text: "bookmoor" }),

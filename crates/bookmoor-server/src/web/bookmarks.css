@@ -30,7 +30,7 @@
 .bm-icon.missing { display: none; }
 
 /* Folder sidebar + folder contents, like a tag tree next to its list. */
-.bm-split { display: grid; grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr); gap: 16px; align-items: start; }
+.bm-split { display: grid; grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr); gap: 16px; align-items: start; }
 .bm-side { padding: 8px; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; }
 .bm-node { display: flex; align-items: center; padding-left: calc(var(--d) * 14px); }
 .bm-twist { appearance: none; background: none; border: 0; font: inherit; color: var(--blue); width: 1.6em; min-height: 32px; flex: none; cursor: pointer; padding: 0; }
@@ -49,3 +49,13 @@
   .bm-split { grid-template-columns: minmax(0, 1fr); }
   .bm-side { position: static; max-height: 14rem; }
 }
+
+.shell.wide .bm-tools { max-width: 60rem; }
+.bm-fold { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.bm-fold .name { overflow-wrap: anywhere; }
+.bm-fold .tag { flex: none; }
+.bm-folder-icon { flex: none; margin-right: 0; }
+.bm-row .main { flex: 1 1 0; min-width: 0; }
+.bm-row .actions { flex-wrap: nowrap; }
+@media (max-width: 64rem) { .bm-row .actions { flex-wrap: wrap; } }
+.shell.wide .stack > p.muted { max-width: 60rem; }
