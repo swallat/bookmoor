@@ -993,6 +993,7 @@ struct DynacatRow {
 struct DynacatProfile {
     id: String,
     label: String,
+    name: String,
 }
 
 #[derive(Serialize)]
@@ -1053,6 +1054,7 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
         .map(|p| DynacatProfile {
             id: p.id.clone(),
             label: profile_label(&st, &p.id),
+            name: p.name.clone(),
         })
         .collect();
     Json(DynacatInfo {
