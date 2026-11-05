@@ -122,6 +122,18 @@ directory into Dynacat. The example compose file shows both. Build locally with
 `docker build -t bookmoor .`. If a command overrides `--bind` with another port, the
 image's healthcheck (port 8787) reports unhealthy.
 
+## Signing the extension in
+
+Instead of pasting a token, press "Sign in with bookmoor" in the extension
+settings (server URL first). The browser opens the server's page in an auth
+window: sign in to the web UI (and to a proxy login in front of it, if any),
+pick the device name and profile, and confirm. The server creates a **new**
+`sync` token for that device on every sign-in (revoke old ones on the Devices
+tab) and returns it in the URL fragment of the extension's redirect address,
+so it reaches no log. The server only redirects to extension addresses
+(`*.chromiumapp.org`, `*.extensions.allizom.org`). The extension needs the
+`identity` permission for this; pasting a token still works.
+
 ## Client certificates (mTLS)
 
 Optionally the server can require a client certificate in addition to the

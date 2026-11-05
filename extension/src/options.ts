@@ -1,4 +1,5 @@
 import { STATUS_KEY, type SyncStatus } from "./status";
+import { signInWithServer } from "./connect";
 import { loadSettings, originPattern, hasHostAccess, saveSettings, type HeaderEntry } from "./settings";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -130,6 +131,24 @@ async function startOver(mode: "adopt" | "overwrite"): Promise<void> {
   }
 }
 
+$("signinserver").addEventListener("click", async () => {
+  const status = $("status");
+  try {
+    const serverUrl = $<HTMLInputElement>("url").value.trim();
+    if (!serverUrl) throw new Error("Enter the server URL first.");
+    // Must run inside the click handler: permission requests need a user gesture.
+    if (!(await chrome.permissions.request({ origins: [originPattern(serverUrl)] }))) {
+      throw new Error(`The browser did not give the extension access to ${new URL(serverUrl).host}.`);
+    }
+    const token = await signInWithServer(serverUrl);
+    $<HTMLInputElement>("token").value = token;
+    showToken(token);
+    status.textContent = "Signed in. Saving\u2026";
+    $("save").click();
+  } catch (e) {
+    status.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
+  }
+});
 $("syncnow").addEventListener("click", () => void syncNow());
 $("adopt").addEventListener("click", () => void startOver("adopt"));
 $("overwrite").addEventListener("click", () => void startOver("overwrite"));

@@ -384,9 +384,42 @@ async function render() {
   shell(content);
 }
 
+// The extension's sign-in opens this page as /?connect=<its redirect URL>&state=...&name=...
+const connectAsk = (() => {
+  const q = new URLSearchParams(location.search);
+  return q.has("connect") && q.has("state")
+    ? { redirect: q.get("connect"), state: q.get("state"), name: q.get("name") || "Browser" }
+    : null;
+})();
+
+async function connectView() {
+  document.title = "Connect browser · bookmoor";
+  const profiles = await api("GET", "profiles");
+  const select = profiles.length > 1
+    ? h("div", { class: "field" },
+        h("label", { for: "profile", text: "Profile" }),
+        h("select", { id: "profile", name: "profile" },
+          profiles.map((p) => h("option", { value: p.id, text: p.name }))))
+    : null;
+  centered("Connect this browser?",
+    "The bookmoor extension asks to sync as " + me.name + ". This creates a new device token; you can revoke it on the Devices tab.",
+    form([
+      h("div", { class: "stack-sm" },
+        field("devname", "Device name", { type: "text", required: true, value: connectAsk.name, autocomplete: "off" }),
+        select),
+    ], "Connect", async (fd) => {
+      const r = await api("POST", "connect", {
+        redirect: connectAsk.redirect, state: connectAsk.state,
+        name: String(fd.get("devname") || "").trim() || "Browser",
+        profile: select ? fd.get("profile") : undefined,
+      });
+      location.href = r.url;
+    }));
+}
+
 async function start() {
   const s = await api("GET", "session").catch(() => ({ state: "login" }));
-  if (s.state === "user") { me = s.user; return render(); }
+  if (s.state === "user") { me = s.user; return connectAsk ? connectView() : render(); }
   me = null;
   return s.state === "setup" ? setupView() : loginView();
 }
