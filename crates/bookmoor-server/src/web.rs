@@ -21,6 +21,8 @@ use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
+mod mfa;
+
 const INDEX: &str = include_str!("web/index.html");
 const APP_JS: &str = include_str!("web/app.js");
 const APP_CSS: &str = include_str!("web/app.css");
@@ -69,6 +71,8 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/oidc/start", get(oidc_start))
         .route("/ui/api/oidc/callback", get(oidc_callback))
         .route("/ui/api/oidc/unlink", post(oidc_unlink))
+        .route("/ui/api/sso", get(sso_get).put(sso_put).delete(sso_delete))
+        .route("/ui/api/sso/test", post(sso_test))
         .route("/ui/api/profiles", get(profiles).post(add_profile))
         .route("/ui/api/profiles/{id}", delete(remove_profile))
         .route("/ui/api/profiles/{id}/rename", post(rename_profile))
@@ -84,6 +88,7 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/users/{id}", delete(remove_user))
         .route("/ui/api/users/{id}/password", post(reset_password))
         .route("/ui/api/users/{id}/admin", post(set_admin))
+        .merge(mfa::routes())
         .layer(middleware::from_fn(page_headers))
 }
 
@@ -166,8 +171,18 @@ impl FromRequestParts<Shared> for Authed {
             .sessions
             .user_for(&session, Instant::now())
             .and_then(|id| st.users.get(id))
+            .filter(|u| !u.disabled)
             .cloned()
             .ok_or(ApiError::Unauthorized)?;
+        // An admin can require a second factor: until it is set up, the
+        // session may only do what the setup needs.
+        if user.mfa_required
+            && user.totp.is_none()
+            && !st.sessions.is_sso(&session)
+            && !mfa::allowed_before_setup(parts.uri.path())
+        {
+            return Err(ApiError::Denied("set up two-factor authentication first"));
+        }
         Ok(Authed { user, session })
     }
 }
@@ -202,6 +217,12 @@ struct Me {
     admin: bool,
     /// Linked to a single sign-on account.
     oidc: bool,
+    /// Has an authenticator app for the password login.
+    mfa: bool,
+    /// An admin requires one.
+    mfa_required: bool,
+    /// Required but not set up yet: the UI offers nothing else.
+    mfa_setup_needed: bool,
 }
 
 impl From<&User> for Me {
@@ -211,6 +232,9 @@ impl From<&User> for Me {
             name: u.name.clone(),
             admin: u.admin,
             oidc: u.oidc.is_some(),
+            mfa: u.totp.is_some(),
+            mfa_required: u.mfa_required,
+            mfa_setup_needed: u.mfa_required && u.totp.is_none(),
         }
     }
 }
@@ -273,11 +297,19 @@ async fn verify_blocking(hash: Option<String>, pw: String) -> bool {
 
 async fn session(State(s): State<Shared>, headers: HeaderMap) -> Json<serde_json::Value> {
     let st = s.lock().unwrap();
-    let user = cookie_value(&headers)
-        .and_then(|c| st.sessions.user_for(&c, Instant::now()).map(String::from))
+    let cookie = cookie_value(&headers);
+    let user = cookie
+        .as_deref()
+        .and_then(|c| st.sessions.user_for(c, Instant::now()).map(String::from))
         .and_then(|id| st.users.get(&id));
+    let sso = cookie.as_deref().is_some_and(|c| st.sessions.is_sso(c));
     let mut out = match user {
-        Some(u) => serde_json::json!({ "state": "user", "user": Me::from(u) }),
+        Some(u) => {
+            let mut me = Me::from(u);
+            // Single sign-on leaves the second factor to the provider.
+            me.mfa_setup_needed &= !sso;
+            serde_json::json!({ "state": "user", "user": me })
+        }
         None if !st.users.any_login() => serde_json::json!({ "state": "setup" }),
         None => serde_json::json!({ "state": "login" }),
     };
@@ -304,14 +336,20 @@ async fn login(
         throttle(&mut st, peer)?;
         st.users
             .by_name(&b.name)
+            .filter(|u| !u.disabled)
             .map(|u| (u.id.clone(), u.password_hash.clone()))
     };
     let ok = verify_blocking(found.as_ref().and_then(|f| f.1.clone()), b.password).await;
     let mut st = s.lock().unwrap();
     match found {
         Some((id, _)) if ok => match st.users.get(&id).cloned() {
-            Some(user) => Ok(signed_in(&mut st, &user)),
-            None => Err(ApiError::Unauthorized),
+            // The password was right; the second factor comes next.
+            Some(user) if user.totp.is_some() && !user.disabled => {
+                let ticket = st.sessions.start_ticket(&user.id, Instant::now());
+                Ok(Json(serde_json::json!({ "state": "mfa", "ticket": ticket })).into_response())
+            }
+            Some(user) if !user.disabled => Ok(signed_in(&mut st, &user)),
+            _ => Err(ApiError::Unauthorized),
         },
         _ => Err(ApiError::Unauthorized),
     }
@@ -709,8 +747,11 @@ fn finish_sso(
         }
         None => return back_to("", Some("unlinked")),
     };
+    if user.disabled {
+        return back_to("", Some("disabled"));
+    }
     let mut resp = back_to(ret, None);
-    let token = st.sessions.create(&user.id, Instant::now());
+    let token = st.sessions.create_with(&user.id, Instant::now(), true);
     resp.headers_mut().append(
         header::SET_COOKIE,
         set_cookie(
@@ -736,6 +777,182 @@ async fn oidc_unlink(State(s): State<Shared>, a: Authed) -> Result<StatusCode, A
         .map_err(ApiError::Unprocessable)?;
     save(&mut st)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- single sign-on settings (admins) ---------------------------------------
+
+#[derive(Serialize)]
+struct SsoShown {
+    issuer: String,
+    client_id: String,
+    public_url: String,
+    label: String,
+    create_users: bool,
+    /// Whether a client secret is stored. It is never sent back.
+    has_secret: bool,
+}
+
+impl From<&crate::oidc::OidcConfig> for SsoShown {
+    fn from(c: &crate::oidc::OidcConfig) -> Self {
+        SsoShown {
+            issuer: c.issuer.clone(),
+            client_id: c.client_id.clone(),
+            public_url: c.public_url.clone(),
+            label: c.label.clone(),
+            create_users: c.create_users,
+            has_secret: c.client_secret.is_some(),
+        }
+    }
+}
+
+/// `environment`: set by variables or flags, read-only here and winning over
+/// the settings. `settings`: set up in the web UI. `none`: single sign-on is off.
+async fn sso_get(State(s): State<Shared>, _: Admin) -> Json<serde_json::Value> {
+    Json(sso_view(&s.lock().unwrap()))
+}
+
+fn sso_view(st: &AppState) -> serde_json::Value {
+    let source = if st.oidc_env {
+        "environment"
+    } else if st.oidc.is_some() || st.oidc_config.is_some() {
+        "settings"
+    } else {
+        "none"
+    };
+    // What is in effect, else what is saved.
+    let shown = if st.oidc_env {
+        st.oidc.as_ref().map(|o| SsoShown::from(&o.cfg))
+    } else {
+        st.oidc_config.as_ref().map(SsoShown::from)
+    };
+    serde_json::json!({
+        "source": source,
+        // Saved settings the server could not use, so single sign-on is off.
+        "broken": !st.oidc_env && st.oidc.is_none() && st.oidc_config.is_some(),
+        "config": shown,
+        "callback_url": shown_callback(st),
+        // Saved settings that the environment overrides.
+        "overridden": st.oidc_env && st.oidc_config.is_some(),
+    })
+}
+
+fn shown_callback(st: &AppState) -> Option<String> {
+    let url = if st.oidc_env {
+        st.oidc.as_ref().map(|o| o.cfg.public_url.clone())
+    } else {
+        st.oidc_config.as_ref().map(|c| c.public_url.clone())
+    }?;
+    Some(crate::oidc::callback_url(&url))
+}
+
+#[derive(Deserialize)]
+struct SsoBody {
+    issuer: String,
+    client_id: String,
+    /// Absent or empty keeps the saved secret (if the provider is unchanged).
+    #[serde(default)]
+    client_secret: Option<String>,
+    /// Remove the saved secret (a public client).
+    #[serde(default)]
+    clear_secret: bool,
+    public_url: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    create_users: bool,
+}
+
+/// The settings a form describes. A saved secret carries over only to the
+/// same issuer and client ID, never to another provider.
+fn sso_config(st: &AppState, b: SsoBody) -> Result<crate::oidc::OidcConfig, ApiError> {
+    let issuer = b.issuer.trim().to_string();
+    let client_id = b.client_id.trim().to_string();
+    let typed = b.client_secret.filter(|v| !v.is_empty());
+    // With the environment in charge, the saved settings are not in use.
+    let saved = st
+        .oidc_config
+        .as_ref()
+        .filter(|_| !st.oidc_env)
+        .filter(|c| c.issuer == issuer && c.client_id == client_id)
+        .and_then(|c| c.client_secret.clone());
+    // A secret typed in wins over "remove the saved one".
+    let client_secret = typed.or(if b.clear_secret { None } else { saved });
+    Ok(crate::oidc::OidcConfig {
+        issuer,
+        client_id,
+        client_secret,
+        public_url: b.public_url,
+        label: b.label,
+        create_users: b.create_users,
+    })
+}
+
+fn not_from_environment(st: &AppState) -> Result<(), ApiError> {
+    if st.oidc_env {
+        return Err(ApiError::Unprocessable(
+            "single sign-on is set by the server's environment or flags; remove them to manage it here"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn sso_put(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Json(b): Json<SsoBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    not_from_environment(&st)?;
+    let cfg = sso_config(&st, b)?;
+    // Same checks as at start-up, so what is saved can always be loaded again.
+    crate::oidc::Oidc::new(cfg.clone()).map_err(ApiError::Unprocessable)?;
+    let before = st.oidc_config.clone();
+    st.apply_oidc(Some(cfg));
+    if let Err(e) = save(&mut st) {
+        // persist_or_revert reloads from disk when there is a store; without
+        // one the old settings have to be put back by hand.
+        if st.store.is_none() {
+            st.apply_oidc(before);
+        }
+        return Err(e);
+    }
+    Ok(Json(sso_view(&st)))
+}
+
+async fn sso_delete(State(s): State<Shared>, Admin(a): Admin) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    not_from_environment(&st)?;
+    let before = st.oidc_config.clone();
+    st.apply_oidc(None);
+    if let Err(e) = save(&mut st) {
+        if st.store.is_none() {
+            st.apply_oidc(before);
+        }
+        return Err(e);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Contact the provider with the settings in the form (nothing is saved).
+async fn sso_test(
+    State(s): State<Shared>,
+    _: Admin,
+    Json(b): Json<SsoBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let cfg = {
+        let st = s.lock().unwrap();
+        sso_config(&st, b)?
+    };
+    let oidc = crate::oidc::Oidc::new(cfg).map_err(ApiError::Unprocessable)?;
+    let endpoint = oidc.check().await.map_err(ApiError::Unprocessable)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "authorization_endpoint": endpoint,
+        "callback_url": crate::oidc::callback_url(&oidc.cfg.public_url),
+    })))
 }
 
 #[derive(Serialize)]
@@ -1015,6 +1232,12 @@ struct UserRow {
     admin: bool,
     has_password: bool,
     devices: usize,
+    disabled: bool,
+    /// Has an authenticator app.
+    mfa: bool,
+    mfa_required: bool,
+    /// Linked to a single sign-on account.
+    oidc: bool,
 }
 
 async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
@@ -1029,6 +1252,10 @@ async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
                 admin: u.admin,
                 has_password: u.password_hash.is_some(),
                 devices: counts.get(u.id.as_str()).copied().unwrap_or(0),
+                disabled: u.disabled,
+                mfa: u.totp.is_some(),
+                mfa_required: u.mfa_required,
+                oidc: u.oidc.is_some(),
             })
             .collect(),
     )

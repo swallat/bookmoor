@@ -21,6 +21,9 @@ struct SaveFile<'a> {
     engines: BTreeMap<&'a str, Snapshot>,
     tokens: &'a [TokenRecord],
     backups: &'a BTreeMap<String, Backup>,
+    /// Single sign-on set up in the web UI (holds the client secret).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    oidc: Option<&'a crate::oidc::OidcConfig>,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +40,8 @@ struct LoadFile {
     tokens: Vec<TokenRecord>,
     #[serde(default)]
     backups: BTreeMap<String, Backup>,
+    #[serde(default)]
+    oidc: Option<crate::oidc::OidcConfig>,
 }
 
 /// Everything the state file holds.
@@ -47,6 +52,7 @@ pub struct Loaded {
     pub engines: BTreeMap<String, Engine>,
     pub tokens: Tokens,
     pub backups: BTreeMap<String, Backup>,
+    pub oidc: Option<crate::oidc::OidcConfig>,
 }
 
 /// An exclusive OS lock on `<state>.lock`, so the server and the token
@@ -116,6 +122,7 @@ impl Store {
                 admin: true,
                 password_hash: None,
                 oidc: None,
+                ..User::blank()
             };
             engines.insert(owner.id.clone(), legacy);
             for t in tokens.iter_mut().filter(|t| t.scope != Scope::Admin) {
@@ -191,6 +198,7 @@ impl Store {
             engines: restored,
             tokens: Tokens::from_records(tokens),
             backups,
+            oidc: f.oidc,
         }))
     }
 
@@ -201,6 +209,7 @@ impl Store {
         engines: &BTreeMap<String, Engine>,
         tokens: &Tokens,
         backups: &BTreeMap<String, Backup>,
+        oidc: Option<&crate::oidc::OidcConfig>,
     ) -> io::Result<()> {
         let records = tokens.records();
         let user_records = users.records();
@@ -214,6 +223,7 @@ impl Store {
                 .collect(),
             tokens: &records,
             backups,
+            oidc,
         })
         .map_err(io::Error::other)?;
         let tmp = tmp_path(&self.path);
@@ -266,6 +276,7 @@ impl AppState {
             engines: l.engines,
             tokens: l.tokens,
             backups: l.backups,
+            oidc_config: l.oidc,
             store: Some(store),
             ..AppState::default()
         })
@@ -280,6 +291,7 @@ impl AppState {
                 &self.engines,
                 &self.tokens,
                 &self.backups,
+                self.oidc_config.as_ref(),
             ),
             None => Ok(()),
         }
@@ -302,6 +314,7 @@ impl AppState {
                     self.engines = l.engines;
                     self.tokens = l.tokens;
                     self.backups = l.backups;
+                    self.apply_oidc(l.oidc);
                 }
                 _ => {
                     eprintln!("fatal: cannot save or reload state ({err}); exiting");
@@ -687,6 +700,7 @@ mod tests {
                 &st.engines,
                 &st.tokens,
                 &st.backups,
+                None,
             )
             .unwrap();
         let err = Store::new(&path).load().err().unwrap();
@@ -703,6 +717,7 @@ mod tests {
                 &st.engines,
                 &st.tokens,
                 &st.backups,
+                None,
             )
             .unwrap();
         assert!(Store::new(&path).load().is_err());
