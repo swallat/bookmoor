@@ -245,9 +245,11 @@ is `[workspace.package] version` in `Cargo.toml`; `extension/package.json`,
 `package-lock.json` and `manifest.json` are copies that
 `node scripts/sync-version.mjs` writes (CI fails if they drift). To release:
 
-1. `node scripts/sync-version.mjs --set 0.2.0 && cargo update --workspace`, open a PR, merge it.
-2. Publish a GitHub release with the tag `v0.2.0` on that commit. The workflows refuse a tag that differs from `Cargo.toml`.
-3. The release builds the Chrome zip and the signed Firefox `.xpi` with exactly `0.2.0`, submits Chrome to the Web Store and pushes the Docker image as `0.2.0`, `0.2` and `latest`.
+1. `node scripts/sync-version.mjs --set 0.11.0 && cargo update --workspace`, open a PR, merge it.
+2. Publish a GitHub release with the tag `v0.11.0` on that commit. The workflows refuse a tag that differs from `Cargo.toml`.
+3. The release builds the Chrome zip and the signed Firefox `.xpi` with exactly `0.11.0`, submits Chrome to the Web Store and pushes the Docker image as `0.11.0`, `0.11` and `latest`.
+
+The script refuses any version not above `0.9.1`, the highest number CI signed before releases were coordinated (Mozilla and the stores never accept a lower one). The first release is therefore `0.10.0` (already set in `Cargo.toml`).
 
 Builds from `main` and manual runs are dev builds numbered `X.Y.Z.<run>` (browsers allow at most four parts); they sort after `X.Y.Z`, so they are signed only while the tag `vX.Y.Z` exists. Between a version bump and its release tag they are built but not signed. Only plain `X.Y.Z` tags are supported (no `-rc` suffixes, browsers reject them).
 
