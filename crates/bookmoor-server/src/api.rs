@@ -216,6 +216,12 @@ impl AppState {
         Ok(done)
     }
 
+    /// Replace a profile's tree by an imported one (the old one becomes the
+    /// backup). Refused, with nothing changed, if the tree is not valid.
+    pub fn import_profile(&mut self, profile: &str, nodes: &[WireNode]) -> Result<(), String> {
+        self.replace_tree(profile, nodes)
+    }
+
     /// Bring back the tree saved before the last clear or tidy-up (which
     /// becomes the new backup, so restoring twice undoes itself).
     pub fn restore_profile(&mut self, profile: &str) -> Result<(), String> {

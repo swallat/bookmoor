@@ -312,6 +312,10 @@ Matching never deletes, so some situations need an explicit step:
   `POST /v1/tree/reset` (sync scope, empties the token's profile, keeps a
   backup) and uploads the browser's tree.
 
+- **Backup files.** Web UI > Profiles > Download saves a profile as a
+  JSON file (`format: bookmoor-profile`); Import replaces a profile by such a
+  file (validated first; the old tree becomes the Restore copy).
+
 All server-side tree replacements keep node ids, drop the change log and raise
 the horizon, so every device resyncs (`resync: true`) and then removes what is
 gone and creates what is new.

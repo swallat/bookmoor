@@ -61,6 +61,8 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/profiles/{id}/clear", post(clear_profile))
         .route("/ui/api/profiles/{id}/dedupe", post(dedupe_profile))
         .route("/ui/api/profiles/{id}/restore", post(restore_profile))
+        .route("/ui/api/profiles/{id}/export", get(export_profile))
+        .route("/ui/api/profiles/{id}/import", post(import_profile))
         .route("/ui/api/password", post(change_password))
         .route("/ui/api/users", get(users).post(add_user))
         .route("/ui/api/users/{id}", delete(remove_user))
@@ -563,6 +565,67 @@ async fn dedupe_profile(
         bookmarks_removed: done.bookmarks_removed,
         folders_merged: done.folders_merged,
     }))
+}
+
+/// The file a profile is downloaded as and imported from.
+#[derive(Serialize, Deserialize)]
+struct ProfileFile {
+    format: String,
+    version: u32,
+    exported_at: Option<String>,
+    nodes: Vec<bookmoor_core::wire::WireNode>,
+}
+
+const FILE_FORMAT: &str = "bookmoor-profile";
+
+/// The profile's whole tree as a JSON file.
+async fn export_profile(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let st = s.lock().unwrap();
+    let p = st
+        .profiles
+        .get(&id)
+        .filter(|p| p.user_id == a.user.id)
+        .ok_or(ApiError::Forbidden)?;
+    let nodes = st.engines.get(&id).ok_or(ApiError::Forbidden)?.tree().nodes;
+    let file = ProfileFile {
+        format: FILE_FORMAT.into(),
+        version: 1,
+        exported_at: Some(crate::api::utc_now()),
+        nodes,
+    };
+    let name: String = p
+        .name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let mut resp = Json(file).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"bookmoor-{name}.json\"")
+            .parse()
+            .unwrap(),
+    );
+    Ok(resp)
+}
+
+/// Replaces the profile's tree by a downloaded file; the devices follow.
+async fn import_profile(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+    Json(f): Json<ProfileFile>,
+) -> Result<StatusCode, ApiError> {
+    if f.format != FILE_FORMAT || f.version != 1 {
+        return Err(ApiError::Unprocessable(
+            "this is not a bookmoor profile file".into(),
+        ));
+    }
+    change_tree(&s, &a, &id, |st, id| st.import_profile(id, &f.nodes))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Brings back the tree from before the last clear or tidy-up.
@@ -1390,5 +1453,94 @@ mod tests {
                 .await;
             assert_eq!(r.0, StatusCode::FORBIDDEN, "{what}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_profile_can_be_downloaded_and_imported_again() {
+        let u = ui();
+        let anna = u.setup("anna").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let pid = v[0]["id"].as_str().unwrap().to_string();
+        let (st, file, _) = u
+            .call(
+                "GET",
+                &format!("/ui/api/profiles/{pid}/export"),
+                Some(&anna),
+                None,
+                false,
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(file["format"], "bookmoor-profile");
+        // Add a bookmark to the file and import it.
+        let mut edited = file.clone();
+        edited["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+            "id":"n_1","parent":"toolbar","position":"V","kind":"bookmark",
+            "title":"Rust","url":"https://rust-lang.org"}));
+        let imp = format!("/ui/api/profiles/{pid}/import");
+        assert_eq!(
+            u.post(&imp, Some(&anna), edited).await.0,
+            StatusCode::NO_CONTENT
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        assert_eq!(v[0]["bookmarks"], 1);
+        // Broken or foreign files change nothing.
+        let mut broken = file.clone();
+        broken["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+            "id":"n_2","parent":"nowhere","position":"V","kind":"folder","title":"x"}));
+        assert_eq!(
+            u.post(&imp, Some(&anna), broken).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let mut foreign = file.clone();
+        foreign["format"] = "something".into();
+        assert_eq!(
+            u.post(&imp, Some(&anna), foreign).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        assert_eq!(v[0]["bookmarks"], 1);
+        // The previous (empty) tree is not a backup, but a second import is.
+        assert_eq!(
+            u.post(&imp, Some(&anna), file).await.0,
+            StatusCode::NO_CONTENT
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        assert_eq!(
+            (
+                v[0]["bookmarks"].as_u64(),
+                v[0]["backup"]["bookmarks"].as_u64()
+            ),
+            (Some(0), Some(1))
+        );
+        // Not for other users.
+        let new = serde_json::json!({"name":"bob","password":"another good password"});
+        u.post("/ui/api/users", Some(&anna), new).await;
+        let login = serde_json::json!({"name":"bob","password":"another good password"});
+        let bob = cookie_of(&u.post("/ui/api/login", None, login).await.2.unwrap());
+        let (st, _, _) = u
+            .call(
+                "GET",
+                &format!("/ui/api/profiles/{pid}/export"),
+                Some(&bob),
+                None,
+                false,
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
     }
 }

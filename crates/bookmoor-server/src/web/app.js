@@ -221,6 +221,21 @@ async function devicesView() {
       h("div", { class: "list" }, rows)));
 }
 
+/** "Import": pick a downloaded file; the profile's bookmarks are replaced (Restore brings the old ones back). */
+function importButton(p) {
+  const input = h("input", { type: "file", accept: "application/json,.json", hidden: true, "aria-label": "Bookmark file for " + p.name, onchange: async () => {
+    const file = input.files[0];
+    input.value = "";
+    if (!file) return;
+    if (!confirm("Replace the bookmarks of " + p.name + " with the file " + file.name + "? Its devices follow. You can undo this with Restore.")) return;
+    try {
+      await api("POST", "profiles/" + p.id + "/import", JSON.parse(await file.text()));
+      toast("Imported " + file.name); render();
+    } catch (x) { toast(x instanceof SyntaxError ? "That is not a JSON file" : x.message); }
+  } });
+  return h("span", {}, input, h("button", { class: "btn quiet small", type: "button", text: "Import", onclick: () => input.click() }));
+}
+
 async function profilesView() {
   const list = await api("GET", "profiles");
   const rows = list.map((p) => {
@@ -246,6 +261,16 @@ async function profilesView() {
         p.backup && confirmButton("Restore", "Yes, bring back " + p.backup.bookmarks + " bookmarks from " + p.backup.at.replace("T", " ").replace("Z", " UTC"), async () => {
           await api("POST", "profiles/" + p.id + "/restore"); toast("Restored " + p.name); render();
         }, "quiet"),
+        h("button", { class: "btn quiet small", type: "button", text: "Download", title: "Save this profile's bookmarks as a file", onclick: async () => {
+          try {
+            const res = await fetch("ui/api/profiles/" + p.id + "/export", { credentials: "same-origin", headers: { "X-Bookmoor-UI": "1" } });
+            if (!res.ok) throw new Error("Download failed (" + res.status + ")");
+            const url = URL.createObjectURL(await res.blob());
+            const a = h("a", { href: url, download: "bookmoor-" + p.name.replace(/[^A-Za-z0-9]+/g, "-") + ".json" });
+            document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } catch (x) { toast(x.message); }
+        } }),
+        importButton(p),
         p.bookmarks > 0 && confirmButton("Clear", "Yes, remove all bookmarks", async () => {
           await api("POST", "profiles/" + p.id + "/clear"); toast("Cleared " + p.name); render();
         }),
