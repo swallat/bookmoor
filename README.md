@@ -188,9 +188,34 @@ tab; closing that tab after the login makes the extension sync again. Changes
 made meanwhile stay queued locally. Not tested in a real browser yet (cookie
 handling for extension requests differs between Chrome and Firefox).
 
-NetBird's reverse proxy has no client-certificate authentication yet; use its
-header authentication (`Authorization: Bearer` with a Bookmoor token) or
-NetBird-Only access.
+### NetBird
+
+NetBird's reverse proxy has no client-certificate authentication. Options, best first:
+
+- **NetBird-Only access:** the extension's device is a NetBird peer, so there is
+  no login at all. Needs a self-run proxy cluster (see NetBird's docs).
+- **Header authentication with a custom header:** create a header entry such as
+  `X-Proxy-Key` on the service and add the same name and value under "Extra
+  headers" in the extension. Do not use the `Authorization` presets: the proxy
+  strips the matching header, so the Bookmoor token would never arrive.
+- **SSO:** turn on "Server is behind a login page" (see Pangolin SSO above).
+  NetBird sessions last 24 hours, so expect a sign-in about once a day.
+
+### Cloudflare Tunnel with Cloudflare Access
+
+Put a Cloudflare Access application in front of the tunnel hostname.
+
+- **Service token:** create a service token with a policy of action "Service
+  Auth" and add `CF-Access-Client-Id` and `CF-Access-Client-Secret` under
+  "Extra headers". No browser login, and it works with the extension as it is.
+- **Browser login:** with an Allow policy and your identity provider, turn on
+  "Server is behind a login page". Cloudflare answers with a redirect to its
+  login, which the extension reports as "Sign in again"; the session length is
+  set on the Access application. Not tested in a real browser; Cloudflare's
+  cookie is sent to the app domain, so browsers that block third-party cookies
+  may need an exception.
+
+In both cases the Bookmoor token stays required.
 
 ## Layout
 
