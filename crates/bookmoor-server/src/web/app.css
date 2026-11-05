@@ -161,3 +161,5 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .notice { background: var(--yellow-wash); border: 1px solid var(--yellow); border-radius: var(--radius); padding: 10px 14px; }
 .codes { margin: 8px 0 12px; font-size: 1.0625rem; line-height: 1.7; columns: 2; }
 details > summary { cursor: pointer; font-weight: 600; margin: 4px 0 12px; }
+
+.version { font-size: 0.8rem; text-align: center; margin: 2rem 0 1rem; }

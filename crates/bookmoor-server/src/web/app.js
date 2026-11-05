@@ -935,6 +935,8 @@ async function connectView() {
 async function start() {
   const s = await api("GET", "session").catch(() => ({ state: "login" }));
   sso = s.sso || null;
+  const ver = document.getElementById("version");
+  if (ver && s.version) ver.textContent = "bookmoor " + s.version + (s.commit ? " (" + s.commit + ")" : "");
   if (s.state === "user") { me = s.user; return connectAsk && !me.mfa_setup_needed ? connectView() : render(); }
   me = null;
   return s.state === "setup" ? setupView() : loginView();
