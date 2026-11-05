@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "bookmoor-core"
-version = "0.0.1"
+version = "0.10.0"
 dependencies = [
  "schemars",
  "serde",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "bookmoor-server"
-version = "0.0.1"
+version = "0.10.0"
 dependencies = [
  "argon2",
  "axum",

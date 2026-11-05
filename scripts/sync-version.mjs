@@ -16,6 +16,11 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cargoPath = join(root, "Cargo.toml");
 const SEMVER = /^\d+\.\d+\.\d+$/;
+// Before releases were coordinated, CI signed Firefox builds as 0.<run>.<attempt>
+// (highest: 0.9.1, run 9). Versions only ever go up for stores and Mozilla, so
+// every release must be higher than this.
+const FLOOR = [0, 9, 1];
+const cmp = (a, b) => a.reduce((d, x, i) => d || x - b[i], 0);
 
 // [workspace.package] up to the next table header (a line starting with "["),
 // so values like authors = ["x"] above `version` are fine.
@@ -45,6 +50,9 @@ if (setIdx >= 0) {
 if (!SEMVER.test(version)) {
   // Browsers only accept dotted integers, so no -rc.1 suffixes.
   throw new Error(`release version must be X.Y.Z, got "${version}"`);
+}
+if (cmp(version.split(".").map(Number), FLOOR) <= 0) {
+  throw new Error(`version ${version} must be higher than ${FLOOR.join(".")}, which was already published as a dev build`);
 }
 if (args.includes("--print")) {
   console.log(version);
