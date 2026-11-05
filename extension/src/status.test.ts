@@ -17,3 +17,7 @@ test("describe explains the common failures", () => {
 test("describe tells the user to sign in when the proxy login is in the way", () => {
   assert.match(describe("login", new LoginRequired()), /Sign in again/);
 });
+
+test("describe asks the user to choose on the first sync", () => {
+  assert.match(describe("decide", undefined), /Choose how/);
+});

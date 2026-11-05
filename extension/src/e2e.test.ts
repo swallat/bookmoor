@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { HttpError, last, type Transport } from "./flow.ts";
+import { flush, HttpError, last, type Transport } from "./flow.ts";
 import { type Browser, type Kind, type Server, serverBinary, startServer } from "./testkit.ts";
 
 const bin = serverBinary();
@@ -68,6 +68,32 @@ describe(`end to end (${kind})`, { skip: bin ? false : "bookmoor-server is not b
     same(a, b);
     const titles = [...b.api.nodes.values()].map((n) => n.title);
     assert.ok(titles.includes("Kept") && !titles.includes("Only here"));
+  });
+
+  it("asks before the first sync when both sides have bookmarks, and merges on request", async () => {
+    const a = await server.browser(kind);
+    const b = await server.browser(kind);
+    await add(a, a.api.bar, "On server", "https://server.example/");
+    await sync(a);
+    await add(b, b.api.other, "Only here", "https://here.example/");
+    assert.equal(await flush(b.api, b.store, b.transport, b.identity, true), "decide");
+    // Nothing was changed or synced while the question is open.
+    assert.ok(![...b.api.nodes.values()].some((n) => n.title === "On server"));
+    assert.equal(await b.store.load(), null);
+    assert.equal(await b.startOver("merge"), "ok");
+    await sync(a, b);
+    same(a, b);
+    const titles = [...a.api.nodes.values()].map((n) => n.title);
+    assert.ok(titles.includes("On server") && titles.includes("Only here"));
+  });
+
+  it("does not ask when only one side has bookmarks", async () => {
+    const a = await server.browser(kind);
+    const empty = await server.browser(kind);
+    await add(a, a.api.bar, "Existing", "https://existing.example/");
+    await sync(a);
+    assert.equal(await flush(empty.api, empty.store, empty.transport, empty.identity, true), "ok");
+    assert.ok([...empty.api.nodes.values()].some((n) => n.title === "Existing"));
   });
 
   it("does not empty the browser when the server has nothing to take over", async () => {

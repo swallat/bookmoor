@@ -46,12 +46,14 @@ async function round(restart?: Restart): Promise<void> {
   const identity = `${settings.serverUrl}\n${settings.token}\n${JSON.stringify(settings.query)}`;
   const outcome: Outcome = restart
     ? await startOver(chromeBookmarks, chromeStateStore, httpTransport(settings), identity, restart)
-    : await flush(chromeBookmarks, chromeStateStore, httpTransport(settings), identity);
+    : await flush(chromeBookmarks, chromeStateStore, httpTransport(settings), identity, true);
   await setStatus(outcome, describe(outcome, last.error));
   const stored = await chrome.storage.local.get(FAILURES);
   const failures = outcome === "retry" ? ((stored[FAILURES] as number | undefined) ?? 0) + 1 : 0;
   await chrome.storage.local.set({ [FAILURES]: failures });
-  await chrome.action.setBadgeText({ text: outcome === "auth" || outcome === "login" ? "!" : "" });
+  await chrome.action.setBadgeText({
+    text: outcome === "auth" || outcome === "login" || outcome === "decide" ? "!" : "",
+  });
   if (outcome === "retry") {
     const delay = Math.min(BACKOFF_MAX, BACKOFF_MIN * 2 ** (failures - 1));
     chrome.alarms.create(PUSH, { delayInMinutes: delay });
@@ -106,7 +108,7 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, respond) => {
     void run().then(() => respond({ ok: true }));
     return true;
   }
-  if (m?.type === "bookmoor-start-over" && (m.mode === "adopt" || m.mode === "overwrite")) {
+  if (m?.type === "bookmoor-start-over" && (m.mode === "adopt" || m.mode === "overwrite" || m.mode === "merge")) {
     const mode = m.mode;
     void startOverExclusively(mode).then(respond);
     return true;

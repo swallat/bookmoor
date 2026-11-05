@@ -35,7 +35,16 @@ function showSync(status: SyncStatus | undefined): void {
     : "No sync has run yet. Save the settings and change a bookmark.";
   el.className = status && status.outcome !== "ok" ? "bad" : "";
   $("signin").hidden = status?.outcome !== "login";
+  const dialog = $<HTMLDialogElement>("choice");
+  if (status?.outcome === "decide") {
+    if (!dialog.open && !dismissedChoice) dialog.showModal();
+  } else if (dialog.open) {
+    dialog.close();
+  }
 }
+
+/** The user closed the dialog with "Decide later"; do not reopen it until the next sync. */
+let dismissedChoice = false
 
 /** What is stored, without showing the secret: lets the user see that the token arrived intact. */
 function showToken(token: string): void {
@@ -56,6 +65,7 @@ function showToken(token: string): void {
 async function syncNow(): Promise<void> {
   $("sync").textContent = "Syncing\u2026";
   $("sync").className = "";
+  dismissedChoice = false;
   try {
     await chrome.runtime.sendMessage({ type: "bookmoor-sync-now" });
   } catch (e) {
@@ -111,9 +121,9 @@ async function init(): Promise<void> {
   });
 }
 
-/** Ask for confirmation, then let the background script start over. */
-async function startOver(mode: "adopt" | "overwrite"): Promise<void> {
-  const ok = confirm(
+/** Ask for confirmation (not for a merge), then let the background script start over. */
+async function startOver(mode: "adopt" | "overwrite" | "merge", confirmFirst = true): Promise<void> {
+  const ok = !confirmFirst || confirm(
     mode === "adopt"
       ? "Replace this browser's synced bookmarks with the server's? Links that only exist here are removed from this browser."
       : "Replace the server's bookmarks with this browser's? Links that only exist on the server are removed from the profile and from its other devices (the server keeps a copy).",
@@ -151,6 +161,20 @@ $("signinserver").addEventListener("click", async () => {
 });
 $("syncnow").addEventListener("click", () => void syncNow());
 $("adopt").addEventListener("click", () => void startOver("adopt"));
+// The dialog already spells out the consequences, so it asks only once.
+for (const mode of ["merge", "adopt", "overwrite"] as const) {
+  $(`choice-${mode}`).addEventListener("click", () => {
+    $<HTMLDialogElement>("choice").close();
+    void startOver(mode, false);
+  });
+}
+$("choice").addEventListener("cancel", () => {
+  dismissedChoice = true;
+});
+$("choice-later").addEventListener("click", () => {
+  dismissedChoice = true;
+  $<HTMLDialogElement>("choice").close();
+});
 $("overwrite").addEventListener("click", () => void startOver("overwrite"));
 $("signin").addEventListener("click", () => void chrome.runtime.sendMessage({ type: "bookmoor-sign-in" }));
 
