@@ -16,6 +16,9 @@ Diese Erklärung gilt für die bookmoor-Browser-Erweiterung (Chrome und Firefox)
 Für diese Software und diese Erklärung:
 
 Sebastian Wallat - voidyapp.ing
+c/o Autorenglück #23597
+Albert-Einstein-Str. 47
+02977 Hoyerswerda, Deutschland
 E-Mail: hello@voidyapp.ing
 
 **Verantwortlich für die Daten auf Ihrem bookmoor-Server ist der Betreiber dieses Servers.** Betreiben Sie ihn selbst, sind Sie das. Betreibt ihn jemand anderes für Sie, fragen Sie dort nach dem Umgang mit den Daten.
