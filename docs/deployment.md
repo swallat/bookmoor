@@ -26,7 +26,8 @@ echo 'a long password' | docker compose run --rm -T bookmoor user create --name 
 docker compose start bookmoor
 ```
 
-For the Dynacat adapter, mount a writable directory (uid 10001) and point
+For the Dynacat adapter, mount a writable directory (uid 10001). Set
+`BOOKMOOR_DYNACAT_DIR` to it to manage outputs in the web UI, or point
 `BOOKMOOR_DYNACAT_OUTPUTS` at files in it (one `file=PATH[;profile=NAME][;folder=A/B/C]`, plus optional look settings,
 per line, see [adapters/dynacat.md](adapters/dynacat.md)); mount the same
 directory into Dynacat. The example compose file shows both. Build locally with

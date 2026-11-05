@@ -719,7 +719,16 @@ async function dynacatView() {
           })
         : h("span", { class: "tag", text: "Command line" }))));
 
-  let create = h("p", { class: "muted", text: "Start the server with --dynacat-dir DIRECTORY (the directory Dynacat reads) to create outputs here." });
+  // Without a directory the form cannot work, so say how to switch it on. A
+  // command-line output already shows which directory Dynacat reads.
+  const cli = info.outputs.find((o) => !o.id);
+  const guess = cli ? cli.file.replace(/[\\/][^\\/]*$/, "") || "/" : "/dynacat";
+  let create = h("div", { class: "notice stack-sm", role: "note" },
+    h("p", { text: "Adding and changing outputs here is switched off: the server does not know which directory Dynacat reads." }),
+    h("p", { class: "small" }, "Set ", h("code", { text: "BOOKMOOR_DYNACAT_DIR=" + guess }),
+      " (Docker: under environment; otherwise ", h("code", { text: "--dynacat-dir " + guess }),
+      "), make that directory writable by the server and restart it. ",
+      cli ? "Outputs from the command line, like the one below, stay read-only: change them where the server is started." : ""));
   if (info.dir) {
     const folder = h("select", { id: "dyn-folder", name: "folder" }, h("option", { value: "", text: "Whole tree" }));
     const profile = h("select", { id: "dyn-profile", name: "profile" },
