@@ -80,7 +80,7 @@ p { margin: 0; }
 /* forms */
 .field { display: grid; gap: 4px; min-width: 0; }
 .field label { font-size: .875rem; font-weight: 600; }
-input[type="text"], input[type="url"], input[type="password"], select {
+input[type="text"], input[type="url"], input[type="password"], input[type="number"], select {
   width: 100%; min-height: 44px; padding: 8px 12px;
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid #8697b0; border-radius: var(--radius);
@@ -88,6 +88,10 @@ input[type="text"], input[type="url"], input[type="password"], select {
 input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var(--blue); }
 .form-row { display: grid; gap: 12px; align-items: end; grid-template-columns: 1fr; }
 @media (min-width: 40rem) { .form-row.three { grid-template-columns: 1fr 12rem auto; } .form-row.user { grid-template-columns: 1fr 1fr auto auto; } .form-row.four { grid-template-columns: 1fr 10rem 10rem auto; } .form-row.profile { grid-template-columns: 1fr auto; } }
+.form-row.fields { align-items: start; }
+.form-row.fields + .form-row.fields { margin-top: 16px; }
+.field-check { display: grid; gap: 2px; }
+@media (min-width: 44rem) { .form-row.fields { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .check input { width: 20px; height: 20px; accent-color: var(--blue); }
 .hint { font-size: .875rem; color: var(--muted); }
@@ -161,3 +165,5 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .notice { background: var(--yellow-wash); border: 1px solid var(--yellow); border-radius: var(--radius); padding: 10px 14px; }
 .codes { margin: 8px 0 12px; font-size: 1.0625rem; line-height: 1.7; columns: 2; }
 details > summary { cursor: pointer; font-weight: 600; margin: 4px 0 12px; }
+
+.version { font-size: 0.8rem; text-align: center; margin: 2rem 0 1rem; }
