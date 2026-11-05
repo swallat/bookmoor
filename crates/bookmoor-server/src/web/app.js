@@ -181,7 +181,7 @@ function loginView() {
         await start();
       } catch (x) { toast(passkeyError(x).message); e.currentTarget.disabled = false; }
     } })),
-    (sso || passkeysSupported()) && h("p", { class: "muted", text: "or with a password" }),
+    (sso || passkeysSupported()) && h("p", { class: "muted or", text: "or with a password" }),
     form([
       h("div", { class: "stack-sm" },
         field("name", "User name", { type: "text", autocomplete: "username", required: true, autofocus: true }),
@@ -221,10 +221,10 @@ function mfaLoginView(r) {
     : "Confirm it is you with one of your passkeys.";
   centered(usePasskey && !r.totp ? "Use your passkey" : "Enter your code", text, [
     passkeyBtn && h("p", {}, passkeyBtn),
-    passkeyBtn && codeForm && h("p", { class: "muted", text: "or with a code" }),
+    passkeyBtn && codeForm && h("p", { class: "muted or", text: "or with a code" }),
     codeForm,
     !usePasskey && !r.totp && h("p", { class: "error", role: "alert", text: "This browser cannot use passkeys. Sign in on a device that can, or ask an admin to reset them." }),
-    h("p", {}, h("button", { class: "btn quiet small", type: "button", text: "Start over", onclick: () => start() }))]);
+    h("p", { class: "start-over" }, h("button", { class: "btn quiet small", type: "button", text: "Start over", onclick: () => start() }))]);
 }
 
 function setupView() {
@@ -707,8 +707,8 @@ async function dynacatView() {
   const info = await api("GET", "dynacat");
   const rows = info.outputs.map((o) => h("div", { class: "row" },
     h("div", { class: "main" },
-      h("div", { class: "name mono", text: o.file }),
-      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") + dynStyleText(o.style) }),
+      h("div", { class: "name mono", text: o.path || o.file }),
+      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") + dynStyleText(o.style) + (o.written ? " · file last changed " + new Date(o.written * 1000).toLocaleString() : o.error ? "" : " · not written yet") }),
       o.error && h("div", { class: "error small", role: "alert", text: o.error })),
     h("div", { class: "actions" },
       o.id
@@ -801,7 +801,7 @@ async function dynacatView() {
     h("div", { class: "stack-sm" },
       h("h2", { text: "Dynacat outputs" }),
       h("p", { class: "muted", text: "Each output is a file with a Dynacat bookmarks widget, kept up to date after every sync. Include it in a Dynacat page with $include. Choose a profile and, if you like, one folder of it. Several outputs of the same profile (each with its own folder) make several pages; give each a widget title." }),
-      info.dir && h("p", { class: "hint", text: "Written to " + info.dir }),
+      info.dir && h("p", { class: "hint", text: "Each output is written into " + info.dir + " when you add it and checked after every sync of its profile; it is only rewritten when its content changes." }),
       create),
     h("div", { class: "stack-sm" },
       h("h2", { text: "Outputs" }),
