@@ -28,7 +28,7 @@ pub struct Identity {
 }
 
 /// The provider settings; also what the web UI saves in the state file.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OidcConfig {
     pub issuer: String,
     pub client_id: String,
@@ -56,7 +56,9 @@ impl std::fmt::Debug for OidcConfig {
             .field("client_id", &self.client_id)
             .field("client_secret", &self.client_secret.as_ref().map(|_| "***"))
             .field("public_url", &self.public_url)
-            .finish_non_exhaustive()
+            .field("label", &self.label)
+            .field("create_users", &self.create_users)
+            .finish()
     }
 }
 

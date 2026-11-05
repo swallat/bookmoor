@@ -434,14 +434,18 @@ async function ssoAdminView() {
     } catch (x) { result.className = "error"; result.textContent = x.message; }
     finally { e.target.disabled = false; }
   } });
+  const secret = () => document.getElementById("sso-client_secret");
+  const clearBox = () => document.getElementById("sso-clear_secret");
   const secretHint = c.has_secret ? "A secret is saved. Leave empty to keep it." : "Leave empty for a public client.";
   const f = form([
     h("div", { class: "stack-sm" },
       field("sso-issuer", "Issuer URL", { type: "url", value: c.issuer || "", required: true, autocomplete: "off", placeholder: "https://id.example.com/application/o/bookmoor/" },
         "The provider's address; bookmoor finds the rest at /.well-known/openid-configuration."),
       field("sso-client_id", "Client ID", { type: "text", value: c.client_id || "", required: true, autocomplete: "off" }),
-      field("sso-client_secret", "Client secret", { type: "password", autocomplete: "new-password", placeholder: c.has_secret ? "••••••••" : "" }, secretHint),
-      c.has_secret && h("label", { class: "check" }, h("input", { type: "checkbox", id: "sso-clear_secret" }), "Remove the saved secret"),
+      field("sso-client_secret", "Client secret", { type: "password", autocomplete: "new-password", placeholder: c.has_secret ? "••••••••" : "",
+        oninput: () => { if (clearBox() && secret().value) clearBox().checked = false; } }, secretHint),
+      c.has_secret && h("label", { class: "check" }, h("input", { type: "checkbox", id: "sso-clear_secret",
+        onchange: (e) => { if (e.target.checked) secret().value = ""; } }), "Remove the saved secret"),
       field("sso-public_url", "Public address of bookmoor", { type: "url", value: c.public_url || location.origin, required: true, autocomplete: "off", oninput: showUrl },
         "Where people reach this web UI, as the provider's browser sees it."),
       field("sso-label", "Button text", { type: "text", value: c.label && cur.source === "settings" ? c.label : "", maxlength: "40", autocomplete: "off", placeholder: "single sign-on" },
@@ -478,6 +482,7 @@ async function ssoAdminView() {
         toast("Single sign-on is off");
         render();
       }),
+      cur.broken && h("p", { class: "error", role: "alert", text: "The saved settings are not valid, so single sign-on is off. Fix them below and save (the server log says what is wrong)." }),
       cur.source === "settings" && h("p", { class: "hint", text: "People who only have a linked provider account and no password cannot sign in while it is off." })));
 }
 

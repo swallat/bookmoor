@@ -80,17 +80,27 @@ impl AppState {
     /// to the old settings and end here. A bad stored config switches
     /// single sign-on off (with a message) rather than stopping the server.
     pub fn apply_oidc(&mut self, cfg: Option<crate::oidc::OidcConfig>) {
+        // Unchanged (e.g. a failed save of something else reloads the state):
+        // keep the live provider and the sign-ins in progress.
+        if self.oidc_config == cfg && (self.oidc_env || self.oidc.is_some() == cfg.is_some()) {
+            return;
+        }
         self.oidc_config = cfg;
         if self.oidc_env {
             return;
         }
         self.oidc_flows = Default::default();
-        self.oidc = self.oidc_config.clone().and_then(|c| {
-            crate::oidc::Oidc::new(c)
-                .map(std::sync::Arc::new)
-                .map_err(|e| eprintln!("single sign-on settings ignored: {e}"))
-                .ok()
-        });
+        self.oidc = None;
+        if let Some(c) = self.oidc_config.clone() {
+            match crate::oidc::Oidc::new(c) {
+                Ok(o) => {
+                    // Keep what the provider really uses (trimmed, default label).
+                    self.oidc_config = Some(o.cfg.clone());
+                    self.oidc = Some(std::sync::Arc::new(o));
+                }
+                Err(e) => eprintln!("single sign-on settings ignored: {e}"),
+            }
+        }
     }
 
     /// The profile whose tree the Dynacat file shows: `dynacat_profile`, else

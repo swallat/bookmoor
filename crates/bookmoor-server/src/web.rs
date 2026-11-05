@@ -763,7 +763,7 @@ async fn sso_get(State(s): State<Shared>, _: Admin) -> Json<serde_json::Value> {
 fn sso_view(st: &AppState) -> serde_json::Value {
     let source = if st.oidc_env {
         "environment"
-    } else if st.oidc.is_some() {
+    } else if st.oidc.is_some() || st.oidc_config.is_some() {
         "settings"
     } else {
         "none"
@@ -776,6 +776,8 @@ fn sso_view(st: &AppState) -> serde_json::Value {
     };
     serde_json::json!({
         "source": source,
+        // Saved settings the server could not use, so single sign-on is off.
+        "broken": !st.oidc_env && st.oidc.is_none() && st.oidc_config.is_some(),
         "config": shown,
         "callback_url": shown_callback(st),
         // Saved settings that the environment overrides.
@@ -815,16 +817,15 @@ fn sso_config(st: &AppState, b: SsoBody) -> Result<crate::oidc::OidcConfig, ApiE
     let issuer = b.issuer.trim().to_string();
     let client_id = b.client_id.trim().to_string();
     let typed = b.client_secret.filter(|v| !v.is_empty());
+    // With the environment in charge, the saved settings are not in use.
     let saved = st
         .oidc_config
         .as_ref()
+        .filter(|_| !st.oidc_env)
         .filter(|c| c.issuer == issuer && c.client_id == client_id)
         .and_then(|c| c.client_secret.clone());
-    let client_secret = if b.clear_secret {
-        None
-    } else {
-        typed.or(saved)
-    };
+    // A secret typed in wins over "remove the saved one".
+    let client_secret = typed.or(if b.clear_secret { None } else { saved });
     Ok(crate::oidc::OidcConfig {
         issuer,
         client_id,

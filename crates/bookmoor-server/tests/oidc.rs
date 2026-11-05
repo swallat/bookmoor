@@ -555,11 +555,15 @@ async fn admins_set_up_single_sign_on_without_a_restart() {
     f["client_id"] = "other".into();
     let r = e.send("PUT", "/ui/api/sso", &a, Some(f)).await;
     assert_eq!(r.body["config"]["has_secret"], false);
-    // A secret can also be removed on purpose.
-    let mut f = e.form(Some(SECRET));
+    // A secret can also be removed on purpose, unless a new one comes with it.
+    let mut f = e.form(None);
     f["clear_secret"] = true.into();
     let r = e.send("PUT", "/ui/api/sso", &a, Some(f)).await;
     assert_eq!(r.body["config"]["has_secret"], false);
+    let mut f = e.form(Some(SECRET));
+    f["clear_secret"] = true.into();
+    let r = e.send("PUT", "/ui/api/sso", &a, Some(f)).await;
+    assert_eq!(r.body["config"]["has_secret"], true);
 
     // Switching it off.
     let r = e.send("DELETE", "/ui/api/sso", &a, None).await;
