@@ -174,7 +174,7 @@ function setupView() {
 
 function shell(content) {
   const tabs = me.mfa_setup_needed ? [["account", "Account"]]
-    : [["devices", "Devices"], ["profiles", "Profiles"], ...(me.admin ? [["users", "Users"]] : []), ["account", "Account"]];
+    : [["devices", "Devices"], ["profiles", "Profiles"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -299,7 +299,7 @@ async function profilesView() {
       try { await api("POST", "profiles/" + p.id + "/rename", { name: input.value }); toast("Renamed to " + input.value.trim()); render(); }
       catch (x) { toast(x.message); }
     } }, input, h("button", { class: "btn small", type: "submit", text: "Save" }));
-    return h("div", { class: "row" },
+    return h("div", { class: "row stacked" },
       h("div", { class: "main" },
         h("div", { class: "name", text: p.name }),
         h("div", { class: "muted small", text: p.devices + (p.devices === 1 ? " device" : " devices") + ", " + p.bookmarks + (p.bookmarks === 1 ? " bookmark" : " bookmarks") })),
@@ -429,6 +429,101 @@ async function usersView() {
       h("div", { class: "list" }, rows)));
 }
 
+const callbackFor = (url) => url.trim().replace(/\/+$/, "") + "/ui/api/oidc/callback";
+
+/** Admins: set up the OpenID Connect provider without touching the server's environment. */
+async function ssoAdminView() {
+  const cur = await api("GET", "sso");
+  const c = cur.config || {};
+  if (cur.source === "environment") {
+    return h("div", { class: "stack" },
+      h("div", { class: "stack-sm" },
+        h("h2", { text: "Single sign-on" }),
+        h("p", { class: "muted", text: "Set by the server's environment variables or flags (BOOKMOOR_OIDC_*). Those win over this page, so remove them to manage single sign-on here." }),
+        h("dl", {},
+          h("dt", { text: "Issuer" }), h("dd", { class: "mono", text: c.issuer }),
+          h("dt", { text: "Client ID" }), h("dd", { class: "mono", text: c.client_id }),
+          h("dt", { text: "Button text" }), h("dd", { text: c.label }),
+          h("dt", { text: "Redirect URL" }), h("dd", { class: "mono", text: cur.callback_url }),
+          h("dt", { text: "Create users" }), h("dd", { text: c.create_users ? "Yes" : "No" }))));
+  }
+  const url = h("input", { id: "sso-callback", class: "mono", type: "text", readonly: true, "aria-label": "Redirect URL" });
+  const showUrl = () => {
+    const v = document.getElementById("sso-public_url");
+    url.value = v && v.value.trim() ? callbackFor(v.value) : "";
+  };
+  const read = () => {
+    const v = (id) => document.getElementById("sso-" + id).value;
+    return {
+      issuer: v("issuer").trim(), client_id: v("client_id").trim(), public_url: v("public_url").trim(),
+      label: v("label").trim(), create_users: document.getElementById("sso-create_users").checked,
+      client_secret: v("client_secret") || undefined,
+      clear_secret: Boolean(document.getElementById("sso-clear_secret")?.checked),
+    };
+  };
+  const result = h("p", { class: "hint", role: "status" });
+  const test = h("button", { class: "btn quiet gap-r", type: "button", text: "Test connection", onclick: async (e) => {
+    e.target.disabled = true;
+    result.className = "hint";
+    result.textContent = "Contacting the provider…";
+    try {
+      await api("POST", "sso/test", read());
+      result.textContent = "The provider answered. These settings can reach it.";
+    } catch (x) { result.className = "error"; result.textContent = x.message; }
+    finally { e.target.disabled = false; }
+  } });
+  const secret = () => document.getElementById("sso-client_secret");
+  const clearBox = () => document.getElementById("sso-clear_secret");
+  const secretHint = c.has_secret ? "A secret is saved. Leave empty to keep it." : "Leave empty for a public client.";
+  const f = form([
+    h("div", { class: "stack-sm" },
+      field("sso-issuer", "Issuer URL", { type: "url", value: c.issuer || "", required: true, autocomplete: "off", placeholder: "https://id.example.com/application/o/bookmoor/" },
+        "The provider's address; bookmoor finds the rest at /.well-known/openid-configuration."),
+      field("sso-client_id", "Client ID", { type: "text", value: c.client_id || "", required: true, autocomplete: "off" }),
+      field("sso-client_secret", "Client secret", { type: "password", autocomplete: "new-password", placeholder: c.has_secret ? "••••••••" : "",
+        oninput: () => { if (clearBox() && secret().value) clearBox().checked = false; } }, secretHint),
+      c.has_secret && h("label", { class: "check" }, h("input", { type: "checkbox", id: "sso-clear_secret",
+        onchange: (e) => { if (e.target.checked) secret().value = ""; } }), "Remove the saved secret"),
+      field("sso-public_url", "Public address of bookmoor", { type: "url", value: c.public_url || location.origin, required: true, autocomplete: "off", oninput: showUrl },
+        "Where people reach this web UI, as the provider's browser sees it."),
+      field("sso-label", "Button text", { type: "text", value: c.label && cur.source === "settings" ? c.label : "", maxlength: "40", autocomplete: "off", placeholder: "single sign-on" },
+        "Shown as “Sign in with …”."),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "sso-create_users", checked: Boolean(c.create_users) }),
+        "Create a user when someone new signs in"),
+      h("p", { class: "hint", text: "Anyone who can sign in at the provider then gets a user. Restrict the application there." })),
+  ], cur.source === "settings" ? "Save changes" : "Turn on single sign-on", async () => {
+    await api("PUT", "sso", read());
+    sso = (await api("GET", "session")).sso || null;
+    toast("Single sign-on saved");
+    render();
+  });
+  f.querySelector("button[type=submit]").before(test);
+  f.append(result);
+  setTimeout(showUrl);
+  return h("div", { class: "stack" },
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Single sign-on" }),
+      h("p", { class: "muted", text: cur.source === "settings"
+        ? "On. Changes apply at once, no restart needed."
+        : "Let people sign in with an OpenID Connect provider (Authentik, Keycloak, Authelia, Pocket ID, Google, …). Takes effect at once." }),
+      h("div", { class: "field" },
+        h("label", { for: "sso-callback", text: "Redirect URL to register with the provider" }),
+        h("div", { class: "copy-row" }, url,
+          h("button", { class: "btn quiet small", type: "button", text: "Copy", onclick: async (e) => {
+            try { await navigator.clipboard.writeText(url.value); e.target.textContent = "Copied"; setTimeout(() => (e.target.textContent = "Copy"), 2000); }
+            catch { url.select(); }
+          } }))),
+      f,
+      cur.source === "settings" && confirmButton("Turn off single sign-on", "Yes, turn off", async () => {
+        await api("DELETE", "sso");
+        sso = null;
+        toast("Single sign-on is off");
+        render();
+      }),
+      cur.broken && h("p", { class: "error", role: "alert", text: "The saved settings are not valid, so single sign-on is off. Fix them below and save (the server log says what is wrong)." }),
+      cur.source === "settings" && h("p", { class: "hint", text: "People who only have a linked provider account and no password cannot sign in while it is off." })));
+}
+
 function ssoSection() {
   if (!sso) return null;
   return h("div", { class: "stack-sm" },
@@ -537,10 +632,10 @@ async function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, profiles: profilesView, users: usersView, account: accountView };
-  if (tab === "users" && !me.admin) tab = "devices";
+  const views = { devices: devicesView, profiles: profilesView, users: usersView, sso: ssoAdminView, account: accountView };
+  if ((tab === "users" || tab === "sso") && !me.admin) tab = "devices";
   if (me.mfa_setup_needed) tab = "account"; // nothing else works until it is set up
-  document.title = { devices: "Devices", profiles: "Profiles", users: "Users", account: "Account" }[tab] + " · bookmoor";
+  document.title = { devices: "Devices", profiles: "Profiles", users: "Users", sso: "Single sign-on", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }

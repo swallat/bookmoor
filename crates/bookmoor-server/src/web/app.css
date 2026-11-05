@@ -62,12 +62,14 @@ p { margin: 0; }
 .brand { font-weight: 700; font-size: 1.125rem; letter-spacing: .01em; }
 .bar .who { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 32px; overflow-x: auto; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 32px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
 .tab {
   appearance: none; background: none; border: 0; cursor: pointer;
   padding: 10px 14px; font: inherit; color: var(--muted);
   border-bottom: 3px solid transparent; margin-bottom: -1px;
 }
+@media (max-width: 30rem) { .tab { padding: 10px 10px; } }
 .tab:hover { color: var(--ink); }
 .tab[aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--yellow); }
 
@@ -78,7 +80,7 @@ p { margin: 0; }
 /* forms */
 .field { display: grid; gap: 4px; min-width: 0; }
 .field label { font-size: .875rem; font-weight: 600; }
-input[type="text"], input[type="password"], select {
+input[type="text"], input[type="url"], input[type="password"], select {
   width: 100%; min-height: 44px; padding: 8px 12px;
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid #8697b0; border-radius: var(--radius);
@@ -115,6 +117,7 @@ input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var
 .row .main { min-width: 0; }
 .row .name { font-weight: 600; overflow-wrap: anywhere; }
 .row .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row.stacked { flex-direction: column; align-items: flex-start; justify-content: flex-start; }
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); font-size: .8125rem; color: var(--muted); }
 .tag.warn { border-color: var(--yellow); color: var(--ink); background: var(--yellow-wash); }
@@ -151,6 +154,9 @@ input.inline-pw { min-height: 36px; width: 11rem; }
 
 a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 
+.copy-row { display: flex; gap: 8px; align-items: center; }
+.copy-row input { flex: 1; min-width: 0; }
+.btn.gap-r { margin-right: 8px; margin-bottom: 8px; }
 .row.off .name { text-decoration: line-through; color: var(--muted); }
 .notice { background: var(--yellow-wash); border: 1px solid var(--yellow); border-radius: var(--radius); padding: 10px 14px; }
 .codes { margin: 8px 0 12px; font-size: 1.0625rem; line-height: 1.7; columns: 2; }
