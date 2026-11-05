@@ -55,6 +55,7 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/logout", post(logout))
         .route("/ui/api/devices", get(devices).post(add_device))
         .route("/ui/api/devices/{id}", delete(remove_device))
+        .route("/ui/api/connect", post(connect))
         .route("/ui/api/profiles", get(profiles).post(add_profile))
         .route("/ui/api/profiles/{id}", delete(remove_profile))
         .route("/ui/api/profiles/{id}/rename", post(rename_profile))
@@ -446,6 +447,78 @@ async fn remove_device(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Where the browser extension's sign-in may send a new token: the fixed
+/// redirect URLs the browsers give an extension (`<id>.chromiumapp.org` in
+/// Chrome, `<uuid>.extensions.allizom.org` in Firefox), nothing else. A page
+/// that asks for another target never gets a token.
+fn extension_redirect_ok(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    if url.len() > 512 || url.chars().any(|c| c.is_control() || c == ' ' || c == '#') {
+        return false;
+    }
+    let host = rest.split(['/', '?']).next().unwrap_or("");
+    ["chromiumapp.org", "extensions.allizom.org"]
+        .iter()
+        .any(|suffix| {
+            host.strip_suffix(suffix)
+                .and_then(|h| h.strip_suffix('.'))
+                .is_some_and(|label| {
+                    !label.is_empty()
+                        && label
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                })
+        })
+}
+
+#[derive(Deserialize)]
+struct Connect {
+    redirect: String,
+    state: String,
+    name: String,
+    profile: Option<String>,
+}
+
+/// The extension's "sign in": after the user confirmed on the page, issue a
+/// new `sync` token for this device and hand it back in the URL fragment of
+/// the extension's redirect, so it reaches no server or proxy log.
+async fn connect(
+    State(s): State<Shared>,
+    a: Authed,
+    Json(b): Json<Connect>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !extension_redirect_ok(&b.redirect) {
+        return Err(ApiError::Unprocessable(
+            "that redirect address does not belong to a browser extension".into(),
+        ));
+    }
+    if b.state.is_empty()
+        || b.state.len() > 128
+        || !b
+            .state
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(ApiError::Unprocessable("invalid state".into()));
+    }
+    let mut st = s.lock().unwrap();
+    if st.tokens.count_for_user(&a.user.id) >= MAX_DEVICES {
+        return Err(ApiError::Unprocessable(format!(
+            "at most {MAX_DEVICES} devices"
+        )));
+    }
+    let (token, rec) = st
+        .issue_token(Some(&a.user.id), b.profile.as_deref(), &b.name, Scope::Sync)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok(Json(serde_json::json!({
+        "url": format!("{}#token={token}&state={}", b.redirect, b.state),
+        "device": Device::from(rec),
+    })))
+}
+
 #[derive(Serialize)]
 struct ProfileRow {
     id: String,
@@ -810,6 +883,7 @@ async fn set_admin(
 
 #[cfg(test)]
 mod tests {
+    use super::extension_redirect_ok;
     use crate::api::{router, AppState, Shared};
     use crate::auth::Scope;
     use axum::body::Body;
@@ -1542,5 +1616,90 @@ mod tests {
             )
             .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+    #[test]
+    fn only_extension_redirects_are_allowed() {
+        for ok in [
+            "https://abcdefghijklmnop.chromiumapp.org/",
+            "https://abcdefghijklmnop.chromiumapp.org/cb?x=1",
+            "https://0123abcd-45ef.extensions.allizom.org/",
+        ] {
+            assert!(extension_redirect_ok(ok), "{ok}");
+        }
+        for bad in [
+            "http://abc.chromiumapp.org/",
+            "https://chromiumapp.org/",
+            "https://evil.example/",
+            "https://abc.chromiumapp.org.evil.example/",
+            "https://evil.example/.chromiumapp.org/",
+            "https://evil.example?.chromiumapp.org",
+            "https://user@abc.chromiumapp.org/",
+            "https://abc.chromiumapp.org:8443/",
+            "https://a.b.chromiumapp.org/",
+            "https://abc.chromiumapp.org/#frag",
+            "https://ABC.chromiumapp.org/",
+            "javascript:alert(1)",
+        ] {
+            assert!(!extension_redirect_ok(bad), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_extension_signs_in_and_gets_a_fresh_sync_token() {
+        let u = ui();
+        let cookie = u.setup("anna").await;
+        let body = |redirect: &str, state: &str| serde_json::json!({"redirect": redirect, "state": state, "name": "Chrome on Linux"});
+        let good = "https://abcdefghijklmnop.chromiumapp.org/";
+
+        // Needs a session and the request header.
+        let (st, _, _) = u.post("/ui/api/connect", None, body(good, "s1")).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        let (st, _, _) = u
+            .call(
+                "POST",
+                "/ui/api/connect",
+                Some(&cookie),
+                Some(body(good, "s1")),
+                false,
+            )
+            .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+
+        // A foreign redirect or a bad state gets no token.
+        let (st, _, _) = u
+            .post(
+                "/ui/api/connect",
+                Some(&cookie),
+                body("https://evil.example/", "s1"),
+            )
+            .await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        let (st, _, _) = u
+            .post("/ui/api/connect", Some(&cookie), body(good, "a b"))
+            .await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Every sign-in issues a new device token, handed back in the fragment.
+        let mut tokens = Vec::new();
+        for _ in 0..2 {
+            let (st, v, _) = u
+                .post("/ui/api/connect", Some(&cookie), body(good, "s1"))
+                .await;
+            assert_eq!(st, StatusCode::OK);
+            let url = v["url"].as_str().unwrap();
+            let (base, frag) = url.split_once('#').unwrap();
+            assert_eq!(base, good);
+            let token = frag
+                .strip_prefix("token=")
+                .and_then(|t| t.strip_suffix("&state=s1"))
+                .unwrap();
+            assert_eq!(v["device"]["scope"], "sync");
+            tokens.push(token.to_string());
+        }
+        assert_ne!(tokens[0], tokens[1]);
+        let (_, devices, _) = u
+            .call("GET", "/ui/api/devices", Some(&cookie), None, false)
+            .await;
+        assert_eq!(devices.as_array().unwrap().len(), 2);
     }
 }

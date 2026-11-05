@@ -6,7 +6,8 @@
   "permissions": [
     "bookmarks",
     "storage",
-    "alarms"
+    "alarms",
+    "identity"
   ],
   "optional_host_permissions": [
     "https://*/*",

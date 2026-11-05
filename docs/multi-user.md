@@ -80,3 +80,14 @@ the first admin a password, or the legacy `owner`). Signing in, setup and
 password changes share the per-address failed-auth bucket, one token per
 attempt. Password hashing runs off the async runtime and outside the state
 lock. Admins cannot remove or demote themselves.
+
+## Extension sign-in
+
+`POST /ui/api/connect` (session cookie and `X-Bookmoor-UI`) takes
+`{redirect, state, name, profile?}`, issues a new `sync` token for the session's
+user (same limit as devices) and returns `{url, device}` where `url` is
+`redirect#token=...&state=...`. `redirect` must be `https://<label>.chromiumapp.org/...`
+or `https://<label>.extensions.allizom.org/...` (one lowercase label, no port,
+userinfo or fragment), so a foreign page cannot obtain a token. The web UI shows
+a confirmation page for `/?connect=...&state=...&name=...` after sign-in; the
+extension runs this with `identity.launchWebAuthFlow` and checks `state`.
