@@ -15,6 +15,8 @@ export interface LocalNode {
   unmodifiable?: string;
   /** Set by Firefox; separators have no counterpart on the server. */
   type?: string;
+  /** A folder that only exists in the sync view (menu.ts): its place among siblings is not synced. */
+  virtual?: boolean;
 }
 
 export interface BookmarkApi {

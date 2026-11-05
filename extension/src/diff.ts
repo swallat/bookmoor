@@ -96,6 +96,7 @@ export function computeOps(state: SyncState, tree: LocalNode[]): Op[] {
   const seen = new Map<string, Seen>(); // sid -> info
   const order: string[] = []; // preorder of sids, excluding roots
   const kids = new Map<string, string[]>(); // parent sid -> children sids in order
+  const virtual = new Set<string>(); // folders that have no place among their siblings (menu.ts)
 
   const walk = (n: LocalNode, parentSid: string) => {
     for (const c of n.children ?? []) {
@@ -107,9 +108,12 @@ export function computeOps(state: SyncState, tree: LocalNode[]): Op[] {
       }
       seen.set(sid, { parent: parentSid, node: c });
       order.push(sid);
-      const list = kids.get(parentSid) ?? [];
-      list.push(sid);
-      kids.set(parentSid, list);
+      if (c.virtual) virtual.add(sid);
+      else {
+        const list = kids.get(parentSid) ?? [];
+        list.push(sid);
+        kids.set(parentSid, list);
+      }
       if (c.children) walk(c, sid);
     }
   };
@@ -156,7 +160,12 @@ export function computeOps(state: SyncState, tree: LocalNode[]): Op[] {
   for (const sid of order) {
     const s = seen.get(sid)!;
     const b = state.base[sid];
-    const position = pos.get(sid)!;
+    let position = pos.get(sid);
+    if (position === undefined) {
+      // A virtual folder keeps its place; a new one goes after its siblings.
+      const list = kids.get(s.parent) ?? [];
+      position = b ? b.position : between(list.length ? (pos.get(list[list.length - 1]!) ?? null) : null, null);
+    }
     const title = s.node.title;
     const url = s.node.url ?? null;
     if (!b) {

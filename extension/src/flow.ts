@@ -231,7 +231,10 @@ async function browserHasBookmarks(api: BookmarkApi): Promise<boolean> {
   mapRoots(scratch, tree);
   const roles = new Set<string>(ROLES);
   return (tree[0]?.children ?? []).some(
-    (root) => roles.has(scratch.map[root.id] ?? "") && (root.children ?? []).some((c) => !c.unmodifiable),
+    (root) =>
+      roles.has(scratch.map[root.id] ?? "") &&
+      // Firefox's menu folder (menu.ts) is always there, so only its content counts.
+      (root.children ?? []).some((c) => !c.unmodifiable && !(c.virtual && !(c.children ?? []).length)),
   );
 }
 

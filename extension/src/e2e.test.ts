@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { flush, HttpError, last, type Transport } from "./flow.ts";
+import { withMenu } from "./menu.ts";
 import { type Browser, type Kind, type Server, serverBinary, startServer } from "./testkit.ts";
 
 const bin = serverBinary();
@@ -265,7 +266,7 @@ describe(`end to end (${kind})`, { skip: bin ? false : "bookmoor-server is not b
 
 async function randomEdit(b: Browser, rnd: (n: number) => number): Promise<void> {
   const all = [...b.api.nodes.values()];
-  const synced = all.filter((n) => !b.api.isLocal(n.id));
+  const synced = all;
   const folders = synced.filter((n) => n.kids);
   const movable = synced.filter((n) => n.parentId && !b.api.isRoot(n.id));
   const pick = <T>(xs: T[]) => xs[rnd(xs.length)]!;
@@ -332,6 +333,39 @@ describe("end to end (chrome and firefox together)", { skip: bin ? false : "book
     // Firefox's menu travels as a folder in Other, even when it is empty.
     assert.deepEqual(titles(ch, ch.api.other).sort(), ["Bookmarks Menu", "CH other", "FF other"]);
     assert.deepEqual(titles(ff, ff.api.other).sort(), ["CH other", "FF other"]);
+  });
+
+  it("does not ask what to do just because Firefox's menu folder is there", async () => {
+    const ch = await server.browser("chrome");
+    await ch.api.create({ parentId: ch.api.bar, title: "Already here", url: "https://here.example/" });
+    await sync(ch);
+    const ff = await server.browser("firefox");
+    assert.equal(await flush(withMenu(ff.api), ff.store, ff.transport, ff.identity, true), "ok");
+    // With real content in the menu, it does ask.
+    const ff2 = await server.browser("firefox");
+    await ff2.api.create({ parentId: "menu________", title: "Mine", url: "https://mine.example/" });
+    assert.equal(await flush(withMenu(ff2.api), ff2.store, ff2.transport, ff2.identity, true), "decide");
+  });
+
+  it("settles when a folder lands after the menu among Other's items", async () => {
+    const ff = await server.browser("firefox");
+    const ch = await server.browser("chrome");
+    await ff.api.create({ parentId: ff.api.other, title: "A", url: "https://a.example/" });
+    await sync(ff, ch);
+    const folder = ch.api.nodes.get(ch.api.other)!.kids!.map((k) => ch.api.nodes.get(k)!).find((n) => n.title === "Bookmarks Menu")!;
+    assert.ok(folder);
+    await ch.api.create({ parentId: ch.api.other, title: "B", url: "https://b.example/" });
+    await ch.api.create({ parentId: ch.api.other, title: "C", url: "https://c.example/" });
+    await sync(ch, ff);
+    const mine = ["A", "B", "C"];
+    const titles = ff.api.nodes.get(ff.api.other)!.kids!.map((k) => ff.api.nodes.get(k)!.title).filter((t) => mine.includes(t));
+    assert.deepEqual(titles, mine);
+    // Nothing keeps bouncing between the browsers.
+    const rev = ff.store.state!.rev;
+    await sync(ff, ch);
+    await sync(ch, ff);
+    assert.equal(ff.store.state!.rev, rev);
+    assert.equal(ch.store.state!.rev, rev);
   });
 
   it("shows the Firefox bookmarks menu as a folder in Chrome's other bookmarks, both ways", async () => {

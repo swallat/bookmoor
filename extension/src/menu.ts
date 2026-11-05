@@ -1,12 +1,18 @@
 // Firefox has a fourth root, the bookmarks menu, which the server's fixed
 // roles (toolbar, other, mobile) have no place for. This wrapper shows it to
-// the sync code as an ordinary folder "Bookmarks Menu" inside the "unfiled"
-// root (which syncs as "other", Chrome's "Other bookmarks"). Everything inside
+// the diff as an ordinary folder "Bookmarks Menu" inside the "unfiled" root
+// (which syncs as "other", Chrome's "Other bookmarks"). Everything inside
 // then syncs like any folder, and Chrome simply sees a folder of that name.
+//
+// Only `getTree` (what the diff reads) shows the folder in "unfiled". Every
+// other call sees Firefox's real layout, so indexes the applier computes for
+// "unfiled" stay correct. The folder is marked `virtual`: the diff does not
+// try to order it among its siblings.
 //
 // The folder itself cannot be renamed, moved or deleted in Firefox, so such
 // changes arriving from the server are dropped here (a delete empties it);
 // the next diff then sends the real state back, and the browsers converge.
+// An edit of the folder on another browser is therefore reverted from Firefox.
 
 import type { BookmarkApi, LocalNode } from "./local.ts";
 
@@ -25,37 +31,20 @@ function virtualise(root: LocalNode): void {
   menu.title = MENU_TITLE;
   menu.parentId = UNFILED;
   menu.index = unfiled.children.length;
+  menu.virtual = true;
   unfiled.children.push(menu);
 }
 
-function walk(n: LocalNode, f: (n: LocalNode) => void): void {
-  f(n);
-  n.children?.forEach((c) => walk(c, f));
-}
-
 export function withMenu(api: BookmarkApi): BookmarkApi {
-  const view = async (nodes: LocalNode[]): Promise<LocalNode[]> => {
-    for (const n of nodes) {
-      if (n.id === MENU) n.title = MENU_TITLE;
-      // Only the whole tree has the roots side by side.
-      if (n.parentId === undefined && n.children?.some((c) => c.id === MENU)) virtualise(n);
-    }
-    return nodes;
-  };
   return {
-    getTree: async () => view(await api.getTree()),
+    getTree: async () => {
+      const tree = await api.getTree();
+      for (const root of tree) virtualise(root);
+      return tree;
+    },
     getSubTree: async (id) => {
       const out = await api.getSubTree(id);
-      if (id === UNFILED && out[0]) {
-        const [menu] = await api.getSubTree(MENU).catch(() => []);
-        if (menu) {
-          menu.title = MENU_TITLE;
-          menu.parentId = UNFILED;
-          menu.index = out[0].children?.length ?? 0;
-          out[0].children = [...(out[0].children ?? []), menu];
-        }
-      }
-      for (const n of out) walk(n, (x) => x.id === MENU && (x.title = MENU_TITLE));
+      if (id === MENU && out[0]) out[0].title = MENU_TITLE;
       return out;
     },
     create: (a) => api.create(a),
@@ -65,8 +54,6 @@ export function withMenu(api: BookmarkApi): BookmarkApi {
     },
     move: async (id, d) => {
       if (id === MENU) return;
-      // The menu folder counts as the last child of "unfiled" here; the real
-      // folder has no such child, so an index past the others means the end.
       return api.move(id, d);
     },
     remove: async (id) => {
