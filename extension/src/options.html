@@ -10,6 +10,8 @@
     header { margin-bottom: 20px; }
     .tag { color: var(--muted); margin: 2px 0 0; }
     section + section { margin-top: 16px; }
+    details { margin-top: 14px; }
+    summary { cursor: pointer; color: var(--muted); }
     #sync { word-break: break-word; }
   </style>
 </head>
@@ -28,23 +30,27 @@
       <label for="url">Server URL</label>
       <input id="url" type="url" placeholder="https://bookmoor.example.com" />
       <button id="signinserver" type="button">Sign in with bookmoor</button>
-      <div class="hint">Opens the server's page, signs in and creates a device token for you. Or paste a token below.</div>
-      <label for="token">API token</label>
-      <input id="token" name="bookmoor-api-token" type="password" spellcheck="false" />
+      <div class="hint">Opens the server's page, signs in (also past a login in front of the server, such as Pangolin SSO) and creates a device token for you.</div>
       <div id="tokeninfo" class="hint"></div>
 
-      <label class="check"><input id="sso" type="checkbox" /> Server is behind a login page (Pangolin SSO, OIDC proxy)</label>
-      <div class="hint">Sign in to the server URL once in a browser tab; the extension then sends that session. The API token is still required.</div>
+      <details id="advanced">
+        <summary>Advanced</summary>
+        <div class="hint">Only needed when signing in does not work, for example behind a reverse proxy that wants a header.</div>
 
-      <label>Extra headers</label>
-      <div class="hint">For example reverse-proxy header auth.</div>
-      <div id="headers"></div>
-      <button id="add" class="add" type="button">Add header</button>
+        <label for="token">API token</label>
+        <input id="token" name="bookmoor-api-token" type="password" spellcheck="false" />
+        <div class="hint">Paste a token created in the server's web UI instead of signing in.</div>
 
-      <label>Extra query parameters</label>
-      <div class="hint">For example a share-link token.</div>
-      <div id="query"></div>
-      <button id="addq" class="add" type="button">Add parameter</button>
+        <label>Extra headers</label>
+        <div class="hint">For example reverse-proxy header auth.</div>
+        <div id="headers"></div>
+        <button id="add" class="add" type="button">Add header</button>
+
+        <label>Extra query parameters</label>
+        <div class="hint">For example a share-link token.</div>
+        <div id="query"></div>
+        <button id="addq" class="add" type="button">Add parameter</button>
+      </details>
 
       <div class="actions">
         <button id="save" class="primary" type="button">Save</button>

@@ -5,6 +5,8 @@ import type { SyncRequest, SyncResponse, TreeResponse } from "./wire.ts";
 /** A redirect or a non-JSON page where the API answers JSON: the proxy's login. */
 export function isLoginPage(res: Pick<Response, "type" | "status" | "headers">): boolean {
   if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) return true;
+  // An HTML error page from a broken proxy (502, 404) is a plain error, not a login.
+  if (res.status >= 400 && res.status !== 401 && res.status !== 403) return false;
   const type = res.headers.get("content-type") ?? "";
   return /text\/html/i.test(type);
 }
@@ -16,12 +18,14 @@ export function httpTransport(settings: Settings, fetchImpl: typeof fetch = fetc
     const res = await fetchImpl(url(path), {
       method,
       headers: buildHeaders(settings),
-      // Behind an SSO proxy the session cookie is the outer login. A redirect
-      // to the login page must not be followed (it is cross-origin HTML).
-      ...(settings.sso ? { credentials: "include" as const, redirect: "manual" as const } : {}),
+      // Always send the browser's cookies: behind an SSO proxy the session
+      // cookie is the outer login, and without one they are simply unused.
+      // A redirect to a login page must not be followed (it is cross-origin HTML).
+      credentials: "include",
+      redirect: "manual",
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (settings.sso && isLoginPage(res)) throw new LoginRequired();
+    if (isLoginPage(res)) throw new LoginRequired();
     if (!res.ok) {
       const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
       throw new HttpError(res.status, typeof body?.error === "string" ? body.error : undefined);
