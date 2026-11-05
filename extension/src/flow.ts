@@ -281,9 +281,9 @@ export async function flush(
 }
 
 /**
- * `adopt`: make this browser's bookmarks the server's (what the browser has
- * but the server has not is removed). `overwrite`: make the server's
- * bookmarks this browser's (what the server has but the browser has not is
+ * `adopt`: make the server's bookmarks this browser's (what the browser has
+ * but the server has not is removed here). `overwrite`: make this browser's
+ * bookmarks the server's (what the server has but the browser has not is
  * dropped, on every device). Anything else is a normal merge, which is what
  * the first sync does anyway.
  */
@@ -303,6 +303,11 @@ export async function startOver(
     if (mode === "overwrite") {
       await transport.reset();
     } else {
+      // Make sure there is something to take over before removing anything.
+      const theirs = await transport.tree();
+      if (theirs.nodes.every((n) => n.id === ROOT || (ROLES as readonly string[]).includes(n.id))) {
+        throw new Error("The server has no bookmarks in this profile, so there is nothing to take over.");
+      }
       const tree = await api.getTree();
       const scratch = emptyState("");
       mapRoots(scratch, tree);

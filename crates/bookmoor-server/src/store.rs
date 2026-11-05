@@ -656,6 +656,8 @@ mod tests {
             })
             .unwrap();
         st.clear_profile(&work).unwrap();
+        // Clearing an empty profile again keeps the copy of the real tree.
+        st.clear_profile(&work).unwrap();
         assert_eq!(st.engines[&work].tree().nodes.len(), 4);
         st.store = Some(Store::new(&path));
         st.persist().unwrap();

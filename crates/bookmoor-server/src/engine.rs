@@ -342,6 +342,14 @@ impl Engine {
         }
     }
 
+    /// How many bookmarks (not folders) are alive.
+    pub fn bookmark_count(&self) -> usize {
+        self.nodes
+            .values()
+            .filter(|r| r.alive() && r.kind == Kind::Bookmark)
+            .count()
+    }
+
     /// Replace the whole tree by `nodes` (parent-first or not, as
     /// [`tree`](Self::tree) returns them). Node ids are kept, so devices that
     /// resync keep their pairings. The change log is dropped and the horizon
@@ -399,11 +407,15 @@ impl Engine {
         {
             return Err("a node has an unknown parent".into());
         }
-        if recs.iter().any(|r| {
-            r.parent
-                .as_deref()
-                .is_some_and(|p| recs.iter().any(|x| x.id == p && x.kind != Kind::Folder))
-        }) {
+        let folders: HashSet<&str> = recs
+            .iter()
+            .filter(|r| r.kind == Kind::Folder)
+            .map(|r| r.id.as_str())
+            .collect();
+        if recs
+            .iter()
+            .any(|r| r.parent.as_deref().is_some_and(|p| !folders.contains(p)))
+        {
             return Err("a bookmark has children".into());
         }
         let mut endpoints: Vec<String> = self.endpoints.iter().cloned().collect();

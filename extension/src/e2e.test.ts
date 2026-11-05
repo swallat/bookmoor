@@ -70,6 +70,16 @@ describe(`end to end (${kind})`, { skip: bin ? false : "bookmoor-server is not b
     assert.ok(titles.includes("Kept") && !titles.includes("Only here"));
   });
 
+  it("does not empty the browser when the server has nothing to take over", async () => {
+    const fresh = await server.browser(kind);
+    // A new token of the shared test profile sees what other tests left, so
+    // use a throwaway server tree: clear it first.
+    await fresh.transport.reset();
+    await add(fresh, fresh.api.bar, "Mine", "https://mine.example/");
+    assert.notEqual(await fresh.startOver("adopt"), "ok");
+    assert.ok([...fresh.api.nodes.values()].some((n) => n.title === "Mine"));
+  });
+
   it("can overwrite the server and the other devices with one browser", async () => {
     const a = await server.browser(kind);
     const b = await server.browser(kind);

@@ -177,15 +177,20 @@ impl AppState {
     /// backup. Devices of the profile resync and then follow the new tree.
     fn replace_tree(&mut self, profile: &str, nodes: &[WireNode]) -> Result<(), String> {
         let engine = self.engines.get_mut(profile).ok_or("no such profile")?;
+        let had_content = engine.bookmark_count() > 0;
         let before = engine.tree().nodes;
         engine.replace_tree(nodes)?;
-        self.backups.insert(
-            profile.to_string(),
-            Backup {
-                at: utc_now(),
-                nodes: before,
-            },
-        );
+        // An empty tree is no backup: a repeated clear must not push out the
+        // copy that was taken before the first one.
+        if had_content {
+            self.backups.insert(
+                profile.to_string(),
+                Backup {
+                    at: utc_now(),
+                    nodes: before,
+                },
+            );
+        }
         Ok(())
     }
 

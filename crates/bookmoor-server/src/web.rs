@@ -471,13 +471,7 @@ async fn profiles(State(s): State<Shared>, a: Authed) -> Json<Vec<ProfileRow>> {
                 id: p.id.clone(),
                 name: p.name.clone(),
                 devices: counts.get(p.id.as_str()).copied().unwrap_or(0),
-                bookmarks: st.engines.get(&p.id).map_or(0, |e| {
-                    e.tree()
-                        .nodes
-                        .iter()
-                        .filter(|n| n.kind == bookmoor_core::model::Kind::Bookmark)
-                        .count()
-                }),
+                bookmarks: st.engines.get(&p.id).map_or(0, |e| e.bookmark_count()),
                 backup: st.backups.get(&p.id).map(|b| BackupInfo {
                     at: b.at.clone(),
                     bookmarks: b.bookmarks(),

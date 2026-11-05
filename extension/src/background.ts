@@ -67,6 +67,16 @@ function run(restart?: Restart): Promise<void> {
   return running;
 }
 
+/** Start over once no other round runs, and say how it went. */
+async function startOverExclusively(mode: Restart): Promise<{ ok: boolean; message: string }> {
+  // A round in progress must not see the work half done, and another one must
+  // not take this one's place: check and take the slot in one step.
+  while (running) await running;
+  await run(mode);
+  const status = (await chrome.storage.local.get(STATUS_KEY))[STATUS_KEY] as SyncStatus | undefined;
+  return { ok: status?.outcome === "ok", message: status?.message ?? "" };
+}
+
 chrome.bookmarks.onCreated.addListener(schedulePush);
 chrome.bookmarks.onChanged.addListener(schedulePush);
 chrome.bookmarks.onMoved.addListener(schedulePush);
@@ -93,9 +103,8 @@ chrome.runtime.onMessage.addListener((msg: unknown, _sender, respond) => {
     return true;
   }
   if (m?.type === "bookmoor-start-over" && (m.mode === "adopt" || m.mode === "overwrite")) {
-    // Wait for a round in progress: it must not see the work half done.
     const mode = m.mode;
-    void (running ?? Promise.resolve()).then(() => run(mode)).then(() => respond({ ok: true }));
+    void startOverExclusively(mode).then(respond);
     return true;
   }
   return false;

@@ -19,8 +19,8 @@ impl Tidied {
     }
 }
 
-/// Within one folder, bookmarks with the same URL are one bookmark (the first
-/// stays, whatever its title) and sub-folders with the same title are one
+/// Within one folder, bookmarks with the same URL are one bookmark (the one
+/// that comes first in the folder's order stays, whatever its title) and sub-folders with the same title are one
 /// folder (their contents are merged, then checked again). The top-level
 /// folders (toolbar, other, mobile) are never merged with each other.
 pub fn dedupe(nodes: &[WireNode]) -> (Vec<WireNode>, Tidied) {

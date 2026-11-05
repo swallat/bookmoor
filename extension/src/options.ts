@@ -117,8 +117,11 @@ async function startOver(mode: "adopt" | "overwrite"): Promise<void> {
   if (!ok) return;
   $("startover").textContent = "Working\u2026";
   try {
-    await chrome.runtime.sendMessage({ type: "bookmoor-start-over", mode });
-    $("startover").textContent = "Done. See the sync status above.";
+    const r = (await chrome.runtime.sendMessage({ type: "bookmoor-start-over", mode })) as
+      | { ok: boolean; message: string }
+      | undefined;
+    $("startover").textContent = r?.ok ? "Done." : `Not done: ${r?.message || "no answer from the background script"}`;
+    $("startover").className = r?.ok ? "" : "bad";
   } catch (e) {
     $("startover").textContent = `Could not reach the background script: ${e instanceof Error ? e.message : String(e)}`;
   }
