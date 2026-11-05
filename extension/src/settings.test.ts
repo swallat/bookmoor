@@ -35,7 +35,7 @@ describe("endpointUrl", () => {
 
 describe("buildHeaders", () => {
   it("strips whitespace around a pasted token", () => {
-    const h = buildHeaders({ serverUrl: "http://h", token: "  bkm_a_b\n", headers: [], query: [], sso: false });
+    const h = buildHeaders({ serverUrl: "http://h", token: "  bkm_a_b\n", headers: [], query: [] });
     assert.equal(h.get("Authorization"), "Bearer bkm_a_b");
   });
 });

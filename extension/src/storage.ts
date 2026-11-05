@@ -1,6 +1,7 @@
 import type { SyncState } from "./local.ts";
 import type { BookmarkApi, LocalNode } from "./local.ts";
 import type { StateStore } from "./flow.ts";
+import { withMenu } from "./menu.ts";
 
 const KEY = "sync-state";
 
@@ -15,7 +16,8 @@ export const chromeStateStore: StateStore = {
   },
 };
 
-export const chromeBookmarks: BookmarkApi = {
+/** Firefox's bookmarks menu shows up as a folder in "other" (see menu.ts); Chrome is unaffected. */
+export const chromeBookmarks: BookmarkApi = withMenu({
   getTree: () => chrome.bookmarks.getTree() as Promise<LocalNode[]>,
   getSubTree: (id) => chrome.bookmarks.getSubTree(id) as Promise<LocalNode[]>,
   create: (a) => chrome.bookmarks.create(a) as Promise<LocalNode>,
@@ -23,4 +25,4 @@ export const chromeBookmarks: BookmarkApi = {
   move: (id, d) => chrome.bookmarks.move(id, d),
   remove: (id) => chrome.bookmarks.remove(id),
   removeTree: (id) => chrome.bookmarks.removeTree(id),
-};
+});
