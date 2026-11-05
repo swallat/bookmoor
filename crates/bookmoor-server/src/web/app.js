@@ -652,15 +652,27 @@ async function dynacatView() {
         for (const p of paths) folder.append(h("option", { value: p, text: p }));
       } catch (e) { toast(e.message); }
     };
-    profile.addEventListener("change", load);
+    // The widget title starts as the profile's name until the admin types
+    // something of their own.
+    const titleField = field("dyn-title", "Widget title", { type: "text", placeholder: "e.g. Work", maxlength: "80" }, "Shown above the bookmarks. Starts as the profile name so profiles can be told apart; change or clear it.");
+    const titleInput = titleField.querySelector("input");
+    let titleEdited = false;
+    titleInput.addEventListener("input", () => { titleEdited = true; });
+    const prefill = () => {
+      if (titleEdited) return;
+      const p = info.profiles.find((x) => x.id === profile.value);
+      titleInput.value = p ? p.name.slice(0, 80) : "";
+    };
+    profile.addEventListener("change", () => { load(); prefill(); });
     load();
+    prefill();
     create = form([
       h("div", { class: "form-row three" },
         field("dyn-file", "File name", { type: "text", placeholder: "dev.yml", required: true, maxlength: "64", autocapitalize: "off" }),
         h("div", { class: "field" }, h("label", { for: "dyn-profile", text: "Profile" }), profile),
         h("div", { class: "field" }, h("label", { for: "dyn-folder", text: "Folder" }), folder)),
       h("div", { class: "form-row three" },
-        field("dyn-title", "Widget title", { type: "text", placeholder: "e.g. Work", maxlength: "80" }, "Shown above the bookmarks. Name it after the profile to tell pages apart."),
+        titleField,
         h("div", { class: "field" }, h("label", { for: "dyn-names", text: "Group titles" }),
           h("select", { id: "dyn-names", name: "names" },
             h("option", { value: "path", text: "Full path (toolbar / Dev)" }),
