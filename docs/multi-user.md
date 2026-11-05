@@ -142,3 +142,33 @@ and the saved config stays unused.
   authenticator and recovery codes go and their sessions end.
 - **Single sign-on** logins skip all this; the identity provider is the second
   factor. Device tokens are unaffected (they are long random secrets).
+
+## Passkeys (WebAuthn)
+
+- **Two uses.** A passkey signs in without a password ("Sign in with a
+  passkey" on the login page, discoverable credentials, user verification
+  required), and it works as the second step after a password, next to or
+  instead of an authenticator app. A passkey already proves presence and
+  identity (PIN, fingerprint, face), so the passwordless login asks for no
+  further factor, even when an admin requires two-factor authentication. A
+  passkey satisfies that requirement.
+- **Account tab:** add (needs the password, if the user has one), rename,
+  delete (needs the password; the last one cannot go when it is the user's
+  only way in, or when an admin requires a second factor and there is no
+  authenticator app). Up to 10 per user. Admins can **reset** all passkeys of
+  another user in the Users tab; their sessions end.
+- **No configuration.** The relying party id is the host name of the `Origin`
+  header the browser sends, so it works behind any reverse proxy. Passkeys
+  need https (or `localhost`) and a host name, not an IP address, and only
+  work on the host they were made for: moving the server to another host name
+  means adding them again. Each passkey stores that host and is checked against it.
+- **Verification** is built in (no extra service): ES256 only (what platform
+  authenticators and security keys use), attestation `none`, the challenge is
+  random, single-use and lives 5 minutes, origin and relying party hash are
+  checked, the signature counter must advance when the authenticator has one.
+  The state file keeps the credential id, public key, name and counter; there
+  is no secret in it.
+- **API** (all under `/ui/api`): `GET passkeys`, `POST passkeys/begin` and
+  `passkeys/finish`, `POST passkeys/{id}/rename`, `DELETE passkeys/{id}`,
+  `POST login/passkey/begin` and `finish`, `POST login/mfa/passkey/begin` and
+  `finish` (with the login ticket), `POST users/{id}/passkeys/reset` (admin).
