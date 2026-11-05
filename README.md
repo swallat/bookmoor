@@ -172,6 +172,22 @@ appears for background requests, select the certificate automatically (Chrome:
 the `AutoSelectCertificateForUrls` policy; Firefox: "Select one automatically"
 under Settings > Privacy & Security > Certificates). Not tested in a real browser.
 
+### Pangolin SSO (browser login)
+
+Instead of a certificate you can keep Pangolin's normal login (Platform SSO or
+your OIDC provider) in front of Bookmoor, without shareable links. In the
+extension settings, turn on "Server is behind a login page". Sign in once to
+the Bookmoor URL in a browser tab; Pangolin sets its resource-session cookie
+(30 days by default), and the extension sends it with every request. The
+Bookmoor token stays required.
+
+When the session ends (expiry, logout, revocation by the identity provider),
+the sync stops with "Sign in again", the toolbar icon shows a `!`, and the
+popup and settings offer a **Sign in** button. It opens the server URL in a new
+tab; closing that tab after the login makes the extension sync again. Changes
+made meanwhile stay queued locally. Not tested in a real browser yet (cookie
+handling for extension requests differs between Chrome and Firefox).
+
 NetBird's reverse proxy has no client-certificate authentication yet; use its
 header authentication (`Authorization: Bearer` with a Bookmoor token) or
 NetBird-Only access.

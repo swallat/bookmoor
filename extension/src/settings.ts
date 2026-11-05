@@ -11,10 +11,16 @@ export interface Settings {
   headers: HeaderEntry[];
   /** Extra query parameters sent with every request, e.g. a share-link token. */
   query: HeaderEntry[];
+  /**
+   * The server is behind a login page (Pangolin SSO, OIDC proxy): send the
+   * browser's session cookie and report a redirect to the login as "sign in
+   * needed" instead of a network error.
+   */
+  sso: boolean;
 }
 
 const KEY = "settings";
-const EMPTY: Settings = { serverUrl: "", token: "", headers: [], query: [] };
+const EMPTY: Settings = { serverUrl: "", token: "", headers: [], query: [], sso: false };
 
 // Secrets stay in storage.local on purpose: storage.sync would copy them to
 // every device signed into the browser profile.
