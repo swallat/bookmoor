@@ -65,6 +65,9 @@ pub struct AppState {
     pub dynacat_profile: Option<String>,
     /// Require the reverse proxy's client-certificate verdict (see `mtls`).
     pub client_cert: Option<crate::mtls::ClientCertCheck>,
+    /// Single sign-on for the web UI (none = off).
+    pub oidc: Option<std::sync::Arc<crate::oidc::Oidc>>,
+    pub oidc_flows: crate::oidc::Flows,
 }
 
 impl AppState {

@@ -134,6 +134,41 @@ so it reaches no log. The server only redirects to extension addresses
 (`*.chromiumapp.org`, `*.extensions.allizom.org`). The extension needs the
 `identity` permission for this; pasting a token still works.
 
+## Single sign-on (OIDC)
+
+The web UI can sign users in through any OpenID Connect provider (Authentik,
+Keycloak, Authelia, Pocket ID, Google, ...), with the authorization code flow
+and PKCE. Register the redirect URL `<public URL>/ui/api/oidc/callback` with
+the provider, then start the server with:
+
+```bash
+BOOKMOOR_PUBLIC_URL=https://bookmoor.example.com   # where users reach the web UI
+BOOKMOOR_OIDC_ISSUER=https://id.example.com/application/o/bookmoor/
+BOOKMOOR_OIDC_CLIENT_ID=bookmoor
+BOOKMOOR_OIDC_CLIENT_SECRET=...                    # optional for public clients
+BOOKMOOR_OIDC_LABEL="Authentik"                    # button text (default "single sign-on")
+BOOKMOOR_OIDC_CREATE_USERS=1                       # optional, see below
+```
+
+(or `--public-url`, `--oidc-issuer`, `--oidc-client-id`, `--oidc-label`,
+`--oidc-create-users`; the secret is only read from the environment.) The
+provider is contacted on first use, so the server starts while it is down.
+Provider certificates are checked against the built-in public roots.
+
+- **Linking:** a user signs in with the password once and presses "Link ..."
+  under Account. From then on the provider's stable user id (`sub`) signs them in,
+  never the name. Unlinking needs a password, so nobody locks themselves out.
+- **Creating users:** with `--oidc-create-users` an unknown identity gets a new
+  non-admin user on first sign-in (name from `preferred_username` or the email
+  prefix, made unique). Without it, an unlinked identity is refused. Anyone who
+  can sign in at the provider can create a user, so restrict the application
+  there.
+- **First admin:** unchanged, the setup form with the admin token; link single
+  sign-on to that admin afterwards.
+- With the same provider in front of the web UI (Pangolin, NetBird and
+  Cloudflare Access can use OIDC providers) the second sign-in runs without
+  typing anything. The extension's "Sign in with bookmoor" works with it too.
+
 ## Client certificates (mTLS)
 
 Optionally the server can require a client certificate in addition to the

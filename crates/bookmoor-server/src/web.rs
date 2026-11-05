@@ -56,6 +56,9 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/devices", get(devices).post(add_device))
         .route("/ui/api/devices/{id}", delete(remove_device))
         .route("/ui/api/connect", post(connect))
+        .route("/ui/api/oidc/start", get(oidc_start))
+        .route("/ui/api/oidc/callback", get(oidc_callback))
+        .route("/ui/api/oidc/unlink", post(oidc_unlink))
         .route("/ui/api/profiles", get(profiles).post(add_profile))
         .route("/ui/api/profiles/{id}", delete(remove_profile))
         .route("/ui/api/profiles/{id}/rename", post(rename_profile))
@@ -119,16 +122,16 @@ impl<S: Send + Sync> FromRequestParts<S> for Peer {
 }
 
 fn cookie_value(headers: &HeaderMap) -> Option<String> {
+    cookie_named(headers, COOKIE)
+}
+
+fn cookie_named(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
-        .find_map(|c| {
-            c.trim()
-                .strip_prefix(&format!("{COOKIE}="))
-                .map(String::from)
-        })
+        .find_map(|c| c.trim().strip_prefix(&format!("{name}=")).map(String::from))
 }
 
 /// A signed-in user, from the session cookie.
@@ -185,6 +188,8 @@ struct Me {
     id: String,
     name: String,
     admin: bool,
+    /// Linked to a single sign-on account.
+    oidc: bool,
 }
 
 impl From<&User> for Me {
@@ -193,6 +198,7 @@ impl From<&User> for Me {
             id: u.id.clone(),
             name: u.name.clone(),
             admin: u.admin,
+            oidc: u.oidc.is_some(),
         }
     }
 }
@@ -258,11 +264,15 @@ async fn session(State(s): State<Shared>, headers: HeaderMap) -> Json<serde_json
     let user = cookie_value(&headers)
         .and_then(|c| st.sessions.user_for(&c, Instant::now()).map(String::from))
         .and_then(|id| st.users.get(&id));
-    Json(match user {
+    let mut out = match user {
         Some(u) => serde_json::json!({ "state": "user", "user": Me::from(u) }),
-        None if !st.users.any_password() => serde_json::json!({ "state": "setup" }),
+        None if !st.users.any_login() => serde_json::json!({ "state": "setup" }),
         None => serde_json::json!({ "state": "login" }),
-    })
+    };
+    if let Some(o) = &st.oidc {
+        out["sso"] = serde_json::json!({ "label": o.cfg.label });
+    }
+    Json(out)
 }
 
 #[derive(Deserialize)]
@@ -517,6 +527,203 @@ async fn connect(
         "url": format!("{}#token={token}&state={}", b.redirect, b.state),
         "device": Device::from(rec),
     })))
+}
+
+// ---- single sign-on (OIDC) --------------------------------------------------
+
+const OIDC_COOKIE: &str = "bookmoor_oidc";
+
+/// Where the sign-in leads back to: the UI root (two levels above the
+/// callback, so it works below a proxy path prefix), plus the query string
+/// the sign-in began with.
+fn back_to(ret: &str, error: Option<&str>) -> Response {
+    let query = match error {
+        Some(e) => format!("?sso_error={e}"),
+        None => ret.to_string(),
+    };
+    let mut resp = StatusCode::SEE_OTHER.into_response();
+    resp.headers_mut().insert(
+        header::LOCATION,
+        HeaderValue::from_str(&format!("../../{query}")).expect("ascii"),
+    );
+    resp
+}
+
+fn oidc_cookie(value: &str, max_age: u64, secure: bool) -> HeaderValue {
+    let secure = if secure { "; Secure" } else { "" };
+    // Lax: the browser comes back from the identity provider with a top-level GET.
+    HeaderValue::from_str(&format!(
+        "{OIDC_COOKIE}={value}; HttpOnly; SameSite=Lax; Path=/ui/api/oidc; Max-Age={max_age}{secure}"
+    ))
+    .expect("cookie is ascii")
+}
+
+#[derive(Deserialize)]
+struct OidcStart {
+    /// `1`: link the signed-in user's account instead of signing in.
+    link: Option<String>,
+    #[serde(rename = "return", default)]
+    ret: String,
+}
+
+async fn oidc_start(
+    State(s): State<Shared>,
+    Peer(peer): Peer,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<OidcStart>,
+) -> Response {
+    let (oidc, link_user, secure) = {
+        let mut st = s.lock().unwrap();
+        // Each start costs memory and a request to the provider, so it costs a token too.
+        if throttle(&mut st, peer).is_err() {
+            return back_to("", Some("rate"));
+        }
+        let link_user = if q.link.is_some() {
+            let uid = cookie_value(&headers)
+                .and_then(|c| st.sessions.user_for(&c, Instant::now()).map(String::from));
+            if uid.is_none() {
+                return back_to("", Some("session"));
+            }
+            uid
+        } else {
+            None
+        };
+        (st.oidc.clone(), link_user, st.secure_cookies)
+    };
+    let Some(oidc) = oidc else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !crate::oidc::return_ok(&q.ret) {
+        return back_to("", Some("request"));
+    }
+    match oidc.start(link_user, q.ret).await {
+        Ok(started) => {
+            s.lock()
+                .unwrap()
+                .oidc_flows
+                .insert(started.state, started.flow, Instant::now());
+            let mut resp = StatusCode::SEE_OTHER.into_response();
+            resp.headers_mut().insert(
+                header::LOCATION,
+                HeaderValue::from_str(&started.url).expect("url is ascii"),
+            );
+            resp.headers_mut().insert(
+                header::SET_COOKIE,
+                oidc_cookie(&started.cookie, 600, secure),
+            );
+            resp
+        }
+        Err(e) => {
+            eprintln!("single sign-on: {e}");
+            back_to("", Some("provider"))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct OidcCallback {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+async fn oidc_callback(
+    State(s): State<Shared>,
+    Peer(peer): Peer,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<OidcCallback>,
+) -> Response {
+    let (oidc, flow, secure) = {
+        let mut st = s.lock().unwrap();
+        if throttle(&mut st, peer).is_err() {
+            return back_to("", Some("rate"));
+        }
+        let flow = match (&q.state, cookie_named(&headers, OIDC_COOKIE)) {
+            (Some(state), Some(cookie)) => st.oidc_flows.take(state, &cookie, Instant::now()),
+            _ => None,
+        };
+        (st.oidc.clone(), flow, st.secure_cookies)
+    };
+    let mut resp = match (oidc, flow) {
+        (Some(oidc), Some(flow)) if q.error.is_none() && q.code.is_some() => {
+            let ret = flow.ret.clone();
+            let link_user = flow.link_user.clone();
+            match oidc.finish(flow, q.code.unwrap_or_default()).await {
+                Ok(v) => finish_sso(&s, &oidc, v, link_user, &ret),
+                Err(e) => {
+                    eprintln!("single sign-on: {e}");
+                    back_to("", Some("provider"))
+                }
+            }
+        }
+        (Some(_), Some(_)) => back_to("", Some("denied")),
+        _ => back_to("", Some("expired")),
+    };
+    resp.headers_mut()
+        .append(header::SET_COOKIE, oidc_cookie("", 0, secure));
+    resp
+}
+
+/// Turn a verified identity into a session (or link it to the signed-in user).
+fn finish_sso(
+    s: &Shared,
+    oidc: &crate::oidc::Oidc,
+    v: crate::oidc::Verified,
+    link_user: Option<String>,
+    ret: &str,
+) -> Response {
+    let mut st = s.lock().unwrap();
+    if let Some(uid) = link_user {
+        return match st.users.set_oidc(&uid, Some(v.identity)) {
+            Ok(()) if save(&mut st).is_ok() => back_to("", Some("linked")),
+            Ok(()) => back_to("", Some("save")),
+            Err(_) => back_to("", Some("taken")),
+        };
+    }
+    let user = match st.users.by_identity(&v.identity).cloned() {
+        Some(u) => u,
+        None if oidc.cfg.create_users => {
+            let name = crate::oidc::user_name_from(v.username.as_deref(), |n| {
+                st.users.by_name(n).is_some()
+            });
+            let created = st
+                .users
+                .create_hashed(&name, false, None)
+                .and_then(|u| st.users.set_oidc(&u.id, Some(v.identity)).map(|()| u.id));
+            match created.map(|id| st.users.get(&id).cloned()) {
+                Ok(Some(u)) if save(&mut st).is_ok() => u,
+                _ => return back_to("", Some("create")),
+            }
+        }
+        None => return back_to("", Some("unlinked")),
+    };
+    let mut resp = back_to(ret, None);
+    let token = st.sessions.create(&user.id, Instant::now());
+    resp.headers_mut().append(
+        header::SET_COOKIE,
+        set_cookie(
+            &token,
+            crate::sessions::SESSION_TTL.as_secs(),
+            st.secure_cookies,
+        ),
+    );
+    resp
+}
+
+/// Remove the link to the single sign-on account; only while a password
+/// remains, so nobody locks themselves out.
+async fn oidc_unlink(State(s): State<Shared>, a: Authed) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    if a.user.password_hash.is_none() {
+        return Err(ApiError::Unprocessable(
+            "set a password first, or you could not sign in any more".into(),
+        ));
+    }
+    st.users
+        .set_oidc(&a.user.id, None)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]

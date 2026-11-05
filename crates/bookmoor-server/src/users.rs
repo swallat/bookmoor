@@ -22,6 +22,9 @@ pub struct User {
     pub admin: bool,
     /// `None`: the user cannot sign in to the web UI (tokens still work).
     pub password_hash: Option<String>,
+    /// Who the OIDC identity provider says this user is (single sign-on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<crate::oidc::Identity>,
 }
 
 #[derive(Debug, Default)]
@@ -175,6 +178,7 @@ impl Users {
             name: name.to_string(),
             admin,
             password_hash,
+            oidc: None,
         };
         self.by_id.insert(user.id.clone(), user.clone());
         Ok(user)
@@ -207,6 +211,34 @@ impl Users {
 
     pub fn any_password(&self) -> bool {
         self.by_id.values().any(|u| u.password_hash.is_some())
+    }
+
+    /// Somebody can sign in to the web UI (by password or single sign-on).
+    pub fn any_login(&self) -> bool {
+        self.by_id
+            .values()
+            .any(|u| u.password_hash.is_some() || u.oidc.is_some())
+    }
+
+    pub fn by_identity(&self, id: &crate::oidc::Identity) -> Option<&User> {
+        self.by_id.values().find(|u| u.oidc.as_ref() == Some(id))
+    }
+
+    /// Link (or with `None`, unlink) a single sign-on identity. One identity
+    /// belongs to one user.
+    pub fn set_oidc(
+        &mut self,
+        user_id: &str,
+        identity: Option<crate::oidc::Identity>,
+    ) -> Result<(), String> {
+        if let Some(i) = &identity {
+            if self.by_identity(i).is_some_and(|u| u.id != user_id) {
+                return Err("that single sign-on account is linked to another user".into());
+            }
+        }
+        let u = self.by_id.get_mut(user_id).ok_or("no such user")?;
+        u.oidc = identity;
+        Ok(())
     }
 
     pub fn remove(&mut self, id: &str) -> bool {

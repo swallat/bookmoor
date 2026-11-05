@@ -157,6 +157,19 @@ async fn main() {
     let mut client_cert = std::env::var("BOOKMOOR_CLIENT_CERT_HEADER")
         .ok()
         .filter(|v| !v.trim().is_empty());
+    let env_flag =
+        |name: &str| std::env::var(name).is_ok_and(|v| matches!(v.trim(), "1" | "true" | "yes"));
+    let mut oidc_issuer = std::env::var("BOOKMOOR_OIDC_ISSUER")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let mut oidc_client_id = std::env::var("BOOKMOOR_OIDC_CLIENT_ID").ok();
+    // The secret is only read from the environment: a flag would show in a process list.
+    let oidc_client_secret = std::env::var("BOOKMOOR_OIDC_CLIENT_SECRET")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let mut public_url = std::env::var("BOOKMOOR_PUBLIC_URL").ok();
+    let mut oidc_label = std::env::var("BOOKMOOR_OIDC_LABEL").ok();
+    let mut oidc_create_users = env_flag("BOOKMOOR_OIDC_CREATE_USERS");
     // `BOOKMOOR_DYNACAT_FILE` is a plain path; `BOOKMOOR_DYNACAT_OUTPUTS` holds
     // one spec per line (see `Output::parse`).
     let mut dynacat_outputs: Vec<bookmoor_server::dynacat::Output> = Vec::new();
@@ -191,6 +204,31 @@ async fn main() {
                         .into(),
                 );
             }
+            "--oidc-issuer" => {
+                oidc_issuer = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--oidc-issuer needs a URL")),
+                );
+            }
+            "--oidc-client-id" => {
+                oidc_client_id = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--oidc-client-id needs a value")),
+                );
+            }
+            "--public-url" => {
+                public_url = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--public-url needs a URL")),
+                );
+            }
+            "--oidc-label" => {
+                oidc_label = Some(
+                    args.next()
+                        .unwrap_or_else(|| fail("--oidc-label needs a text")),
+                );
+            }
+            "--oidc-create-users" => oidc_create_users = true,
             "--client-cert-header" => {
                 client_cert = Some(
                     args.next()
@@ -227,7 +265,7 @@ async fn main() {
                 );
             }
             "--help" | "-h" => {
-                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]... [--dynacat-user USER] [--dynacat-profile PROFILE] [--client-cert-header NAME[=VALUE|=*]]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
+                println!("usage: bookmoor-server [--bind ADDR] [--insecure-http] [--state FILE] [--dynacat-output SPEC]... [--dynacat-user USER] [--dynacat-profile PROFILE] [--client-cert-header NAME[=VALUE|=*]] [--public-url URL --oidc-issuer URL --oidc-client-id ID [--oidc-label TEXT] [--oidc-create-users]]\n       bookmoor-server token create --help\n       bookmoor-server user create --help");
                 return;
             }
             other => fail(&format!("unknown argument {other}")),
@@ -286,6 +324,30 @@ async fn main() {
         bookmoor_server::mtls::ClientCertCheck::parse(&spec)
             .unwrap_or_else(|e| fail(&format!("--client-cert-header: {e}")))
     });
+    if let Some(issuer) = oidc_issuer {
+        let client_id = oidc_client_id
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| fail("single sign-on needs --oidc-client-id"));
+        let public_url = public_url
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| {
+                fail("single sign-on needs --public-url (the address users reach the web UI at)")
+            });
+        let oidc = bookmoor_server::oidc::Oidc::new(bookmoor_server::oidc::OidcConfig {
+            issuer,
+            client_id,
+            client_secret: oidc_client_secret,
+            public_url,
+            label: oidc_label.unwrap_or_else(|| "single sign-on".into()),
+            create_users: oidc_create_users,
+        })
+        .unwrap_or_else(|e| fail(&e));
+        println!(
+            "single sign-on: redirect URL {}",
+            bookmoor_server::oidc::callback_url(&oidc.cfg.public_url)
+        );
+        state.oidc = Some(Arc::new(oidc));
+    }
     state.dynacat_outputs = dynacat_outputs;
     state.dynacat_user = dynacat_user;
     state.dynacat_profile = dynacat_profile;
