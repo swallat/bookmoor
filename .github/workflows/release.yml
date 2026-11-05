@@ -37,19 +37,33 @@ jobs:
         run: |
           node scripts/sync-version.mjs --check
           VERSION=$(node scripts/sync-version.mjs --print)
+          CREATE=true
           if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
-            echo "::error::Tag v$VERSION already exists. Raise the version first: node scripts/sync-version.mjs --set X.Y.Z"
-            exit 1
+            # Resume: a previous run made the tag but a build failed. Only allowed
+            # for the same commit, so a tag never moves or gets reused.
+            TAGGED=$(git ls-remote origin "refs/tags/v$VERSION^{}" "refs/tags/v$VERSION" | tail -1 | cut -f1)
+            if [ "$TAGGED" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag v$VERSION already exists on another commit. Raise the version first: node scripts/sync-version.mjs --set X.Y.Z"
+              exit 1
+            fi
+            echo "::notice::Tag v$VERSION already exists on this commit; skipping creation and starting the builds again."
+            CREATE=false
           fi
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "create=$CREATE" >> "$GITHUB_OUTPUT"
       - name: CI must be green on this commit
+        if: steps.v.outputs.create == 'true'
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --paginate \
-            --jq '.check_runs[] | select(.name | test("^(Rust|Extension|E2E)")) | .conclusion' | sort | uniq -c
-          BAD=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --paginate \
-            --jq '[.check_runs[] | select(.name | test("^(Rust|Extension|E2E)")) | select(.conclusion != "success")] | length')
-          [ "$BAD" = "0" ] || { echo "::error::CI is not green on $GITHUB_SHA"; exit 1; }
+          RUNS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --paginate --jq '.check_runs[] | [.name, .conclusion] | @tsv')
+          echo "$RUNS"
+          for family in Rust Extension E2E; do
+            echo "$RUNS" | grep -q "^$family" || { echo "::error::No $family check run found for $GITHUB_SHA"; exit 1; }
+          done
+          if echo "$RUNS" | grep -E "^(Rust|Extension|E2E)" | grep -qv "success$"; then
+            echo "::error::CI is not green on $GITHUB_SHA"; exit 1
+          fi
       - name: Create the tag and the release
+        if: steps.v.outputs.create == 'true'
         run: |
           FLAGS=""
           [ "${{ inputs.prerelease }}" = "true" ] && FLAGS="--prerelease"
@@ -58,4 +72,4 @@ jobs:
       - name: Build, sign and publish from the tag
         run: |
           gh workflow run extension-package.yml --ref "${{ steps.v.outputs.tag }}" -f release=true
-          gh workflow run docker.yml --ref "${{ steps.v.outputs.tag }}"
+          gh workflow run docker.yml --ref "${{ steps.v.outputs.tag }}" -f prerelease=${{ inputs.prerelease }}

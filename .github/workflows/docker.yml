@@ -13,6 +13,11 @@ on:
       - crates/**
       - .github/workflows/docker.yml
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Release is a pre-release: do not move the latest tag (set by the Release workflow)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,7 +45,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           tags: |
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && inputs.prerelease != true }}
             type=edge,branch=main
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
