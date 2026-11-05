@@ -109,3 +109,12 @@ requires a session and attaches the identity to that user. Errors come back as
 extension's `/?connect=...` request across the round trip. `POST
 /ui/api/oidc/unlink` needs a password on the account. Unknown identities are
 refused unless `--oidc-create-users` is set.
+
+Admins can also set the provider up in the UI: `GET/PUT/DELETE /ui/api/sso` and
+`POST /ui/api/sso/test` (discovery only, nothing saved) take `issuer`,
+`client_id`, `client_secret`, `public_url`, `label`, `create_users`. The
+config is saved as `oidc` in the state file (the secret in clear text, file
+mode 0600; the API never returns it, an empty one keeps it, and it carries
+over only to the same issuer and client ID) and applied live; flows in
+progress end. Environment/flags win: `oidc_env` makes PUT/DELETE answer 422
+and the saved config stays unused.

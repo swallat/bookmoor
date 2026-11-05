@@ -27,17 +27,39 @@ pub struct Identity {
     pub subject: String,
 }
 
-#[derive(Debug, Clone)]
+/// The provider settings; also what the web UI saves in the state file.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OidcConfig {
     pub issuer: String,
     pub client_id: String,
+    #[serde(default)]
     pub client_secret: Option<String>,
     /// Public address of the UI, no trailing slash (the callback is below it).
     pub public_url: String,
     /// Text on the sign-in button.
+    #[serde(default = "default_label")]
     pub label: String,
     /// Create a user on the first sign-in of someone not linked yet.
+    #[serde(default)]
     pub create_users: bool,
+}
+
+pub fn default_label() -> String {
+    "single sign-on".into()
+}
+
+/// Never prints the secret.
+impl std::fmt::Debug for OidcConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OidcConfig")
+            .field("issuer", &self.issuer)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &self.client_secret.as_ref().map(|_| "***"))
+            .field("public_url", &self.public_url)
+            .field("label", &self.label)
+            .field("create_users", &self.create_users)
+            .finish()
+    }
 }
 
 pub struct Oidc {
@@ -118,7 +140,29 @@ pub struct Started {
 }
 
 impl Oidc {
-    pub fn new(cfg: OidcConfig) -> Result<Self, String> {
+    pub fn new(mut cfg: OidcConfig) -> Result<Self, String> {
+        cfg.public_url = cfg.public_url.trim().trim_end_matches('/').to_string();
+        cfg.issuer = cfg.issuer.trim().to_string();
+        cfg.client_id = cfg.client_id.trim().to_string();
+        cfg.label = cfg.label.trim().to_string();
+        if cfg.label.is_empty() {
+            cfg.label = default_label();
+        }
+        if cfg.label.chars().count() > 40 {
+            return Err("the button text is longer than 40 characters".into());
+        }
+        if cfg.client_id.is_empty() {
+            return Err("the client ID is empty".into());
+        }
+        for (what, url) in [("issuer", &cfg.issuer), ("public URL", &cfg.public_url)] {
+            let ok = url
+                .strip_prefix("https://")
+                .or_else(|| url.strip_prefix("http://"))
+                .is_some_and(|rest| !rest.is_empty());
+            if !ok {
+                return Err(format!("the {what} must start with https:// or http://"));
+            }
+        }
         IssuerUrl::new(cfg.issuer.clone()).map_err(|e| format!("invalid OIDC issuer: {e}"))?;
         RedirectUrl::new(callback_url(&cfg.public_url))
             .map_err(|e| format!("invalid public URL: {e}"))?;
@@ -166,6 +210,16 @@ impl Oidc {
         .set_redirect_uri(
             RedirectUrl::new(callback_url(&self.cfg.public_url)).map_err(|e| e.to_string())?,
         ))
+    }
+
+    /// Ask the provider for its discovery document (never cached), to see
+    /// whether these settings reach it. Returns its authorization endpoint.
+    pub async fn check(&self) -> Result<String, String> {
+        let issuer = IssuerUrl::new(self.cfg.issuer.clone()).map_err(|e| e.to_string())?;
+        let meta = CoreProviderMetadata::discover_async(issuer, &self.http)
+            .await
+            .map_err(|e| format!("cannot reach the identity provider: {e}"))?;
+        Ok(meta.authorization_endpoint().to_string())
     }
 
     /// Begin a sign-in: the IdP address to send the browser to.

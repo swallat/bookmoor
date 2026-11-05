@@ -155,6 +155,15 @@ BOOKMOOR_OIDC_CREATE_USERS=1                       # optional, see below
 provider is contacted on first use, so the server starts while it is down.
 Provider certificates are checked against the built-in public roots.
 
+**Or in the web UI:** admins can set the same things up on the "Single sign-on"
+tab (issuer, client ID and secret, public address, button text, whether to
+create users), test the connection, and copy the redirect URL for the
+provider. Changes apply at once, no restart. The client secret is saved in the
+state file (readable by the server's user only) and never shown again; leave
+the field empty to keep it. If the environment variables or flags above are
+set, they win: the tab then shows them read-only, and settings saved earlier
+are kept but unused until the variables are removed.
+
 - **Linking:** a user signs in with the password once and presses "Link ..."
   under Account. From then on the provider's stable user id (`sub`) signs them in,
   never the name. Unlinking needs a password, so nobody locks themselves out.
