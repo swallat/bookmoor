@@ -440,3 +440,186 @@ async fn without_single_sign_on_there_is_no_endpoint() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+// ---- settings in the web UI ------------------------------------------------
+
+impl Env {
+    /// A session of a (non-)admin user.
+    async fn session_of(&self, name: &str, admin: bool) -> String {
+        let mut st = self.state.lock().unwrap();
+        let id = st.users.create_hashed(name, admin, None).unwrap().id;
+        st.sessions.create(&id, std::time::Instant::now())
+    }
+
+    fn form(&self, secret: Option<&str>) -> serde_json::Value {
+        let mut f = json!({
+            "issuer": self.idp.lock().unwrap().base,
+            "client_id": "bookmoor",
+            "public_url": "https://bookmoor.example/",
+            "label": "Office login",
+            "create_users": true,
+        });
+        if let Some(s) = secret {
+            f["client_secret"] = s.into();
+        }
+        f
+    }
+}
+
+/// An environment without single sign-on, as before an admin sets it up.
+async fn env_without_sso() -> Env {
+    let e = env(false).await;
+    e.state.lock().unwrap().oidc = None;
+    e
+}
+
+#[tokio::test]
+async fn admins_set_up_single_sign_on_without_a_restart() {
+    let e = env_without_sso().await;
+    let user = e.session_of("anna", false).await;
+    let admin = e.session_of("root", true).await;
+    let (u, a) = (
+        [("bookmoor_session", &user[..])],
+        [("bookmoor_session", &admin[..])],
+    );
+
+    // Only admins see or change the settings.
+    assert_eq!(e.get("/ui/api/sso", &u).await.status, StatusCode::FORBIDDEN);
+    let r = e
+        .send("PUT", "/ui/api/sso", &u, Some(e.form(Some(SECRET))))
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        e.get("/ui/api/sso", &[]).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let r = e.get("/ui/api/sso", &a).await;
+    assert_eq!(r.body["source"], "none");
+
+    // Testing contacts the provider and saves nothing.
+    let r = e
+        .send("POST", "/ui/api/sso/test", &a, Some(e.form(Some(SECRET))))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        r.body["callback_url"],
+        "https://bookmoor.example/ui/api/oidc/callback"
+    );
+    assert!(e.state.lock().unwrap().oidc_config.is_none());
+    let mut bad = e.form(None);
+    bad["issuer"] = "http://127.0.0.1:1".into();
+    let r = e.send("POST", "/ui/api/sso/test", &a, Some(bad)).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let mut bad = e.form(None);
+    bad["issuer"] = "ftp://id.example".into();
+    let r = e.send("PUT", "/ui/api/sso", &a, Some(bad)).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Saving takes effect at once, and the secret is never sent back.
+    let r = e
+        .send("PUT", "/ui/api/sso", &a, Some(e.form(Some(SECRET))))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["source"], "settings");
+    assert_eq!(r.body["config"]["has_secret"], true);
+    assert_eq!(
+        r.body["callback_url"],
+        "https://bookmoor.example/ui/api/oidc/callback"
+    );
+    assert!(!r.body.to_string().contains(SECRET));
+    assert!(!e
+        .get("/ui/api/sso", &a)
+        .await
+        .body
+        .to_string()
+        .contains(SECRET));
+    let s = e.get("/ui/api/session", &[]).await;
+    assert_eq!(s.body["sso"]["label"], "Office login");
+
+    // The saved secret is in use: the fake provider signs tokens with it.
+    let r = e
+        .sso("/ui/api/oidc/start", "sub-7", Some("carla"), &[])
+        .await;
+    assert_eq!(r.location.as_deref(), Some("../../"));
+    assert!(r.cookie("bookmoor_session").is_some());
+
+    // Saving again without a secret keeps it; another client ID drops it.
+    let mut f = e.form(None);
+    f["label"] = "Renamed".into();
+    let r = e.send("PUT", "/ui/api/sso", &a, Some(f)).await;
+    assert_eq!(r.body["config"]["has_secret"], true);
+    let r = e.sso("/ui/api/oidc/start", "sub-7", None, &[]).await;
+    assert!(r.cookie("bookmoor_session").is_some());
+    let mut f = e.form(None);
+    f["client_id"] = "other".into();
+    let r = e.send("PUT", "/ui/api/sso", &a, Some(f)).await;
+    assert_eq!(r.body["config"]["has_secret"], false);
+    // A secret can also be removed on purpose.
+    let mut f = e.form(Some(SECRET));
+    f["clear_secret"] = true.into();
+    let r = e.send("PUT", "/ui/api/sso", &a, Some(f)).await;
+    assert_eq!(r.body["config"]["has_secret"], false);
+
+    // Switching it off.
+    let r = e.send("DELETE", "/ui/api/sso", &a, None).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert!(e
+        .get("/ui/api/session", &[])
+        .await
+        .body
+        .get("sso")
+        .is_none());
+    assert_eq!(
+        e.get("/ui/api/oidc/start", &[]).await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn the_environment_wins_over_the_web_ui() {
+    let e = env(false).await; // configured like by variables
+    e.state.lock().unwrap().oidc_env = true;
+    let admin = e.session_of("root", true).await;
+    let a = [("bookmoor_session", &admin[..])];
+    let r = e.get("/ui/api/sso", &a).await;
+    assert_eq!(r.body["source"], "environment");
+    assert_eq!(r.body["config"]["label"], "Test IdP");
+    assert!(!r.body.to_string().contains(SECRET));
+    let r = e
+        .send("PUT", "/ui/api/sso", &a, Some(e.form(Some(SECRET))))
+        .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let r = e.send("DELETE", "/ui/api/sso", &a, None).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        e.get("/ui/api/session", &[]).await.body["sso"]["label"],
+        "Test IdP"
+    );
+}
+
+#[test]
+fn saved_settings_survive_a_restart() {
+    let path = std::env::temp_dir().join(format!("bookmoor-sso-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let cfg = OidcConfig {
+        issuer: "https://id.example".into(),
+        client_id: "bookmoor".into(),
+        client_secret: Some(SECRET.into()),
+        public_url: "https://bookmoor.example".into(),
+        label: "Office".into(),
+        create_users: true,
+    };
+    let mut st = AppState::open(bookmoor_server::store::Store::new(&path)).unwrap();
+    st.apply_oidc(Some(cfg));
+    st.persist().unwrap();
+    let again = AppState::open(bookmoor_server::store::Store::new(&path)).unwrap();
+    let saved = again.oidc_config.as_ref().expect("settings are saved");
+    assert_eq!(saved.client_secret.as_deref(), Some(SECRET));
+    assert_eq!(saved.label, "Office");
+    assert!(
+        !format!("{saved:?}").contains(SECRET),
+        "Debug hides the secret"
+    );
+    let _ = std::fs::remove_file(&path);
+}

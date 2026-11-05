@@ -68,9 +68,31 @@ pub struct AppState {
     /// Single sign-on for the web UI (none = off).
     pub oidc: Option<std::sync::Arc<crate::oidc::Oidc>>,
     pub oidc_flows: crate::oidc::Flows,
+    /// Single sign-on as an admin set it up in the web UI (saved with the state).
+    pub oidc_config: Option<crate::oidc::OidcConfig>,
+    /// Single sign-on comes from the environment or flags, which win over `oidc_config`.
+    pub oidc_env: bool,
 }
 
 impl AppState {
+    /// Make `cfg` the web-UI single sign-on settings and, unless the
+    /// environment configures it, the live provider. Flows in progress belong
+    /// to the old settings and end here. A bad stored config switches
+    /// single sign-on off (with a message) rather than stopping the server.
+    pub fn apply_oidc(&mut self, cfg: Option<crate::oidc::OidcConfig>) {
+        self.oidc_config = cfg;
+        if self.oidc_env {
+            return;
+        }
+        self.oidc_flows = Default::default();
+        self.oidc = self.oidc_config.clone().and_then(|c| {
+            crate::oidc::Oidc::new(c)
+                .map(std::sync::Arc::new)
+                .map_err(|e| eprintln!("single sign-on settings ignored: {e}"))
+                .ok()
+        });
+    }
+
     /// The profile whose tree the Dynacat file shows: `dynacat_profile`, else
     /// the user's only profile, else (several) their `Default` one.
     fn dynacat_target(&self, profile: Option<&str>) -> Result<String, String> {

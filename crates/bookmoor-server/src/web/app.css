@@ -80,7 +80,7 @@ p { margin: 0; }
 /* forms */
 .field { display: grid; gap: 4px; min-width: 0; }
 .field label { font-size: .875rem; font-weight: 600; }
-input[type="text"], input[type="password"], select {
+input[type="text"], input[type="url"], input[type="password"], select {
   width: 100%; min-height: 44px; padding: 8px 12px;
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid #8697b0; border-radius: var(--radius);
@@ -153,3 +153,7 @@ input.inline-pw { min-height: 36px; width: 11rem; }
 [hidden] { display: none !important; }
 
 a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+
+.copy-row { display: flex; gap: 8px; align-items: center; }
+.copy-row input { flex: 1; min-width: 0; }
+.btn.gap-r { margin-right: 8px; margin-bottom: 8px; }
