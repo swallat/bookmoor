@@ -7,6 +7,25 @@ let bmProfile = null; // profile id being shown
 let bmQuery = "";
 const bmClosed = new Set(); // folder ids the user collapsed
 
+// Site icons are off until the user turns them on: each one is fetched by the
+// browser from the bookmarked site itself (/favicon.ico), which tells that
+// site you have the link. Remembered per browser.
+function bmIcons() {
+  try { return localStorage.getItem("bookmoor.icons") === "1"; } catch { return false; }
+}
+function bmSetIcons(on) {
+  try { localStorage.setItem("bookmoor.icons", on ? "1" : "0"); } catch { /* not remembered */ }
+}
+
+function bmIcon(url) {
+  let origin;
+  try { const u = new URL(url); if (u.protocol !== "https:") return null; origin = u.origin; } catch { return null; }
+  const img = h("img", { class: "bm-icon", src: origin + "/favicon.ico", alt: "", width: "20", height: "20",
+    loading: "lazy", referrerpolicy: "no-referrer", decoding: "async" });
+  img.addEventListener("error", () => img.classList.add("missing"));
+  return img;
+}
+
 const ROLE_LABELS = { toolbar: "Bookmarks bar", other: "Other bookmarks", mobile: "Mobile bookmarks" };
 
 function bmIndex(nodes) {
@@ -75,6 +94,11 @@ async function bookmarksView() {
         onchange: (e) => { bmProfile = e.target.value; bmQuery = ""; bmClosed.clear(); render(); } },
         profiles.map((p) => h("option", { value: p.id, text: p.name, selected: p.id === bmProfile })))),
     h("p", { class: "muted", text: "This is what the server has saved for the profile. Changes here reach every browser of the profile on its next sync. Deleting a folder that holds bookmarks saves the tree as the copy for Restore under Profiles, replacing an older copy, and Restore replaces everything." }),
+    h("label", { class: "check" },
+      h("input", { type: "checkbox", checked: bmIcons(),
+        onchange: (e) => { bmSetIcons(e.target.checked); fill(); } }),
+      h("span", { text: "Show site icons" }),
+      h("span", { class: "hint", text: " Your browser then asks each site for its icon, so those sites see your IP address. Off by default." })),
     h("div", { class: "bm-tools" }, search,
       h("button", { class: "btn small", type: "button", text: "Add bookmark",
         onclick: () => bmDialog(ix, { kind: "bookmark", parent: "toolbar" }) }),
@@ -128,6 +152,7 @@ function bmRow(ix, n, depth, searching, siblings, i) {
   } else {
     const href = bmSafeHref(n.url);
     main = h("div", { class: "main" },
+      bmIcons() && bmIcon(n.url),
       href
         ? h("a", { class: "name", href, target: "_blank", rel: "noopener noreferrer", text: bmTitle(n) })
         : h("span", { class: "name", text: bmTitle(n) }),
