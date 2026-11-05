@@ -29,8 +29,23 @@ pub const TICKET_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_TICKETS: usize = 1_000;
 const MAX_TRIES: u8 = 5;
 
+/// A passkey ceremony in flight: the challenge the browser has to sign.
+#[derive(Debug)]
+struct Ceremony {
+    challenge: String,
+    origin: String,
+    /// Set when the user is already known (second factor, registration).
+    user_id: Option<String>,
+    expires: Instant,
+}
+
+const MAX_CEREMONIES: usize = 10_000;
+
 #[derive(Default)]
 pub struct Sessions {
+    /// Passkey sign-ins and registrations, by (hashed) ceremony id. Each
+    /// is good for one answer.
+    ceremonies: HashMap<[u8; 32], Ceremony>,
     by_hash: HashMap<[u8; 32], Session>,
     tickets: HashMap<[u8; 32], Ticket>,
     /// Authenticator secrets being set up, by user id (not yet confirmed).
@@ -48,6 +63,7 @@ impl std::fmt::Debug for Sessions {
             .field("sessions", &self.by_hash.len())
             .field("tickets", &self.tickets.len())
             .field("setups", &self.setups.len())
+            .field("ceremonies", &self.ceremonies.len())
             .finish()
     }
 }
@@ -83,6 +99,13 @@ impl Sessions {
             },
         );
         token
+    }
+
+    /// How long ago the session was started.
+    pub fn age(&self, token: &str, now: Instant) -> Option<Duration> {
+        self.by_hash
+            .get(&key(token))
+            .map(|s| now.saturating_duration_since(s.expires - SESSION_TTL))
     }
 
     pub fn is_sso(&self, token: &str) -> bool {
@@ -129,6 +152,60 @@ impl Sessions {
         Some(t.user_id.clone())
     }
 
+    /// The user a ticket belongs to, without counting a try (the passkey
+    /// ceremony counts when it ends).
+    pub fn ticket_user(&self, token: &str, now: Instant) -> Option<String> {
+        self.tickets
+            .get(&key(token))
+            .filter(|t| t.expires > now && t.tries < MAX_TRIES)
+            .map(|t| t.user_id.clone())
+    }
+
+    /// Start a passkey ceremony; returns its id.
+    pub fn start_ceremony(
+        &mut self,
+        user_id: Option<&str>,
+        challenge: &str,
+        origin: &str,
+        now: Instant,
+    ) -> String {
+        self.ceremonies.retain(|_, c| c.expires > now);
+        if self.ceremonies.len() >= MAX_CEREMONIES {
+            if let Some(k) = self
+                .ceremonies
+                .iter()
+                .min_by_key(|(_, c)| c.expires)
+                .map(|(k, _)| *k)
+            {
+                self.ceremonies.remove(&k);
+            }
+        }
+        let mut raw = [0u8; 32];
+        getrandom::fill(&mut raw).expect("system randomness");
+        let id = hex::encode(raw);
+        self.ceremonies.insert(
+            key(&id),
+            Ceremony {
+                challenge: challenge.to_string(),
+                origin: origin.to_string(),
+                user_id: user_id.map(String::from),
+                expires: now + TICKET_TTL,
+            },
+        );
+        id
+    }
+
+    /// Take a ceremony (it cannot be answered twice): challenge, origin and
+    /// the user it was started for.
+    pub fn take_ceremony(
+        &mut self,
+        id: &str,
+        now: Instant,
+    ) -> Option<(String, String, Option<String>)> {
+        let c = self.ceremonies.remove(&key(id))?;
+        (c.expires > now).then_some((c.challenge, c.origin, c.user_id))
+    }
+
     pub fn end_ticket(&mut self, token: &str) {
         self.tickets.remove(&key(token));
     }
@@ -160,6 +237,8 @@ impl Sessions {
     pub fn end_user(&mut self, user_id: &str) {
         self.by_hash.retain(|_, s| s.user_id != user_id);
         self.tickets.retain(|_, t| t.user_id != user_id);
+        self.ceremonies
+            .retain(|_, c| c.user_id.as_deref() != Some(user_id));
     }
 }
 
@@ -180,6 +259,30 @@ mod tests {
         assert_eq!(s.user_for(&a, t0), None);
         s.end_user("u_1");
         assert_eq!(s.user_for(&b, t0), None);
+    }
+
+    #[test]
+    fn sessions_know_their_age() {
+        let mut s = Sessions::default();
+        let t0 = Instant::now();
+        let a = s.create("u_1", t0);
+        assert_eq!(s.age(&a, t0), Some(Duration::ZERO));
+        let later = t0 + Duration::from_secs(90);
+        assert_eq!(s.age(&a, later), Some(Duration::from_secs(90)));
+        assert_eq!(s.age("nope", t0), None);
+    }
+
+    #[test]
+    fn passkey_ceremonies_work_once() {
+        let mut s = Sessions::default();
+        let t0 = Instant::now();
+        let id = s.start_ceremony(Some("u_1"), "chal", "https://x.example", t0);
+        let got = s.take_ceremony(&id, t0).unwrap();
+        assert_eq!(got.0, "chal");
+        assert_eq!(got.2.as_deref(), Some("u_1"));
+        assert!(s.take_ceremony(&id, t0).is_none());
+        let id = s.start_ceremony(None, "c", "o", t0);
+        assert!(s.take_ceremony(&id, t0 + TICKET_TTL).is_none());
     }
 
     #[test]

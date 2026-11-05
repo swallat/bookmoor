@@ -15,3 +15,4 @@ pub mod store;
 pub mod tidy;
 pub mod users;
 pub mod web;
+pub mod webauthn;

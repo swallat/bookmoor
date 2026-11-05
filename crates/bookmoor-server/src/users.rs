@@ -37,9 +37,18 @@ pub struct User {
     /// SHA-256 hashes of the unused recovery codes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recovery: Vec<String>,
+    /// Passkeys (WebAuthn): sign in without a password, or as the second
+    /// factor after it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub passkeys: Vec<crate::webauthn::Passkey>,
 }
 
 impl User {
+    /// A second factor is set up (authenticator app or a passkey).
+    pub fn has_second_factor(&self) -> bool {
+        self.totp.is_some() || !self.passkeys.is_empty()
+    }
+
     /// Defaults for the fields a caller usually does not care about.
     pub fn blank() -> User {
         User {
@@ -52,6 +61,7 @@ impl User {
             mfa_required: false,
             totp: None,
             recovery: Vec::new(),
+            passkeys: Vec::new(),
         }
     }
 }
@@ -262,6 +272,13 @@ impl Users {
         self.by_id
             .values()
             .any(|u| u.password_hash.is_some() || u.oidc.is_some())
+    }
+
+    /// Whoever owns the passkey with this credential id.
+    pub fn by_passkey(&self, id: &str) -> Option<&User> {
+        self.by_id
+            .values()
+            .find(|u| u.passkeys.iter().any(|p| p.id == id))
     }
 
     pub fn by_identity(&self, id: &crate::oidc::Identity) -> Option<&User> {

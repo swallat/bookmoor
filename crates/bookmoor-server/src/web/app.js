@@ -38,6 +38,7 @@ async function api(method, path, body) {
       res.status === 429 ? "Too many attempts. Wait a moment and try again."
         : res.status === 401 && wasSignedIn ? "Your session ended. Sign in again."
         : res.status === 401 ? (path === "setup" ? "That admin token is not valid."
+            : path.startsWith("login/passkey") || path.startsWith("login/mfa/passkey") ? "That passkey did not work. Try again or use your password."
             : path === "login/mfa" ? "That code is not right, or the sign-in took too long. Try again or start over."
             : "Name or password is wrong.")
         : (data && data.error) || "Something went wrong (" + res.status + ").");
@@ -119,36 +120,110 @@ function ssoHref(link) {
   return "ui/api/oidc/start" + (q.toString() ? "?" + q : "");
 }
 
+// ---- passkeys -------------------------------------------------------------
+
+const b64u = {
+  dec: (t) => Uint8Array.from(atob(t.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)),
+  enc: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+};
+
+function passkeysSupported() {
+  return Boolean(window.PublicKeyCredential && navigator.credentials);
+}
+
+/** Ask the browser for a passkey; turns the server's JSON options into what the browser wants. */
+async function passkeyGet(options) {
+  const cred = await navigator.credentials.get({ publicKey: {
+    ...options,
+    challenge: b64u.dec(options.challenge),
+    allowCredentials: (options.allowCredentials || []).map((c) => ({ ...c, id: b64u.dec(c.id) })),
+  } });
+  if (!cred) throw new Error("No passkey was chosen.");
+  return {
+    id: b64u.enc(cred.rawId),
+    client_data_json: b64u.enc(cred.response.clientDataJSON),
+    authenticator_data: b64u.enc(cred.response.authenticatorData),
+    signature: b64u.enc(cred.response.signature),
+  };
+}
+
+async function passkeyCreate(options) {
+  const cred = await navigator.credentials.create({ publicKey: {
+    ...options,
+    challenge: b64u.dec(options.challenge),
+    user: { ...options.user, id: b64u.dec(options.user.id) },
+    excludeCredentials: (options.excludeCredentials || []).map((c) => ({ ...c, id: b64u.dec(c.id) })),
+  } });
+  if (!cred) throw new Error("No passkey was created.");
+  return {
+    client_data_json: b64u.enc(cred.response.clientDataJSON),
+    attestation_object: b64u.enc(cred.response.attestationObject),
+  };
+}
+
+/** Browser errors are cryptic; a cancelled prompt is not a failure worth shouting about. */
+function passkeyError(e) {
+  if (e && e.name === "NotAllowedError") return new Error("The passkey prompt was cancelled or timed out.");
+  if (e && e.name === "InvalidStateError") return new Error("That passkey is already registered.");
+  return e;
+}
+
 function loginView() {
   document.title = "Sign in · bookmoor";
   centered("Sign in to bookmoor", null, [
     sso && h("p", {}, h("a", { class: "btn", href: ssoHref(false), text: "Sign in with " + sso.label })),
-    sso && h("p", { class: "muted", text: "or with a password" }),
+    passkeysSupported() && h("p", {}, h("button", { class: "btn", type: "button", text: "Sign in with a passkey", onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        const begin = await api("POST", "login/passkey/begin");
+        const answer = await passkeyGet(begin.options);
+        me = (await api("POST", "login/passkey/finish", { ceremony: begin.ceremony, ...answer })).user;
+        await start();
+      } catch (x) { toast(passkeyError(x).message); e.currentTarget.disabled = false; }
+    } })),
+    (sso || passkeysSupported()) && h("p", { class: "muted", text: "or with a password" }),
     form([
       h("div", { class: "stack-sm" },
         field("name", "User name", { type: "text", autocomplete: "username", required: true, autofocus: true }),
         field("password", "Password", { type: "password", autocomplete: "current-password", required: true })),
     ], "Sign in", async (fd) => {
       const r = await api("POST", "login", { name: fd.get("name"), password: fd.get("password") });
-      if (r.state === "mfa") return mfaLoginView(r.ticket);
+      if (r.state === "mfa") return mfaLoginView(r);
       me = r.user;
       await start();
     }),
   ]);
 }
 
-/** Second step of a password login: a code from the authenticator app, or a recovery code. */
-function mfaLoginView(ticket) {
-  document.title = "Two-factor code · bookmoor";
-  centered("Enter your code",
-    "Open your authenticator app and type the 6-digit code for bookmoor. Lost your phone? Use one of your recovery codes.",
-    [form([
-      h("div", { class: "stack-sm" },
-        field("code", "Code", { type: "text", inputmode: "text", autocomplete: "one-time-code", required: true, autofocus: true, maxlength: "16", spellcheck: "false" })),
-    ], "Sign in", async (fd) => {
-      me = (await api("POST", "login/mfa", { ticket, code: fd.get("code") })).user;
+/** Second step of a password login: a passkey, or a code from the authenticator app (or a recovery code). */
+function mfaLoginView(r) {
+  const ticket = r.ticket;
+  const usePasskey = r.passkey && passkeysSupported();
+  document.title = "Second step · bookmoor";
+  const passkeyBtn = usePasskey && h("button", { class: "btn", type: "button", text: "Use a passkey", onclick: async (e) => {
+    e.currentTarget.disabled = true;
+    try {
+      const begin = await api("POST", "login/mfa/passkey/begin", { ticket });
+      const answer = await passkeyGet(begin.options);
+      me = (await api("POST", "login/mfa/passkey/finish", { ticket, ceremony: begin.ceremony, ...answer })).user;
       await start();
-    }),
+    } catch (x) { toast(passkeyError(x).message); e.currentTarget.disabled = false; }
+  } });
+  const codeForm = r.totp && form([
+    h("div", { class: "stack-sm" },
+      field("code", "Code", { type: "text", inputmode: "text", autocomplete: "one-time-code", required: true, autofocus: !usePasskey, maxlength: "16", spellcheck: "false" })),
+  ], "Sign in", async (fd) => {
+    me = (await api("POST", "login/mfa", { ticket, code: fd.get("code") })).user;
+    await start();
+  });
+  const text = r.totp
+    ? "Open your authenticator app and type the 6-digit code for bookmoor. Lost your phone? Use one of your recovery codes." + (usePasskey ? " Or use a passkey." : "")
+    : "Confirm it is you with one of your passkeys.";
+  centered(usePasskey && !r.totp ? "Use your passkey" : "Enter your code", text, [
+    passkeyBtn && h("p", {}, passkeyBtn),
+    passkeyBtn && codeForm && h("p", { class: "muted", text: "or with a code" }),
+    codeForm,
+    !usePasskey && !r.totp && h("p", { class: "error", role: "alert", text: "This browser cannot use passkeys. Sign in on a device that can, or ask an admin to reset them." }),
     h("p", {}, h("button", { class: "btn quiet small", type: "button", text: "Start over", onclick: () => start() }))]);
 }
 
@@ -392,7 +467,8 @@ async function usersView() {
           u.disabled && h("span", { class: "tag warn", text: "Disabled" }), u.disabled && " ",
           !u.has_password && !u.oidc && h("span", { class: "tag warn", text: "No password, cannot sign in" }), !u.has_password && !u.oidc && " ",
           u.mfa && h("span", { class: "tag", text: "Two-factor on" }), u.mfa && " ",
-          u.mfa_required && !u.mfa && h("span", { class: "tag warn", text: "Two-factor required, not set up" }), u.mfa_required && !u.mfa && " ",
+          u.passkeys > 0 && h("span", { class: "tag", text: u.passkeys + (u.passkeys === 1 ? " passkey" : " passkeys") }), u.passkeys > 0 && " ",
+          u.mfa_required && !u.mfa && !u.passkeys && h("span", { class: "tag warn", text: "Two-factor required, not set up" }), u.mfa_required && !u.mfa && !u.passkeys && " ",
           h("span", { class: "muted", text: u.devices + (u.devices === 1 ? " device" : " devices") }))),
       h("div", { class: "actions" },
         reset, rename,
@@ -402,6 +478,9 @@ async function usersView() {
           api("POST", "users/" + u.id + "/mfa", { required: !u.mfa_required })),
         u.mfa && !self && confirmButton("Reset two-factor", "Yes, switch it off for " + u.name, async () => {
           await api("POST", "users/" + u.id + "/mfa/reset"); toast("Two-factor reset for " + u.name); render();
+        }, "quiet"),
+        u.passkeys > 0 && !self && confirmButton("Reset passkeys", "Yes, delete passkeys of " + u.name, async () => {
+          await api("POST", "users/" + u.id + "/passkeys/reset"); toast("Passkeys reset for " + u.name); render();
         }, "quiet"),
         !self && q(u.admin ? "Remove admin" : "Make admin", () => api("POST", "users/" + u.id + "/admin", { admin: !u.admin })),
         !self && q(u.disabled ? "Enable" : "Disable", () => api("POST", "users/" + u.id + "/edit", { disabled: !u.disabled })),
@@ -558,14 +637,14 @@ async function mfaSection() {
   const m = await api("GET", "mfa");
   me.mfa = m.enabled;
   const intro = m.required && !m.enabled
-    ? h("p", { class: "notice", role: "status", text: "An admin requires two-factor authentication for your account. Set it up to continue." })
+    ? h("p", { class: "notice", role: "status", text: "An admin requires two-factor authentication for your account. Add a passkey or set up an authenticator app to continue." })
     : null;
   if (!m.enabled) {
     if (!mfaSetup) {
       return h("div", { class: "stack-sm" },
         h("h2", { text: "Two-factor authentication" }), intro,
         h("p", { class: "muted", text: "Add a second step to the password login with an authenticator app. Signing in with single sign-on is not affected." }),
-        me.has_password !== false && h("div", { class: "stack-sm narrow" }, field("mfa-start-pw", "Your password", { type: "password", autocomplete: "current-password" }, "To make sure it is you.")),
+        me.has_password && h("div", { class: "stack-sm narrow" }, field("mfa-start-pw", "Your password", { type: "password", autocomplete: "current-password" }, "To make sure it is you.")),
         h("button", { class: "btn", type: "button", text: "Set up", onclick: async () => {
           try { mfaSetup = await api("POST", "mfa/begin", { password: (document.getElementById("mfa-start-pw") || {}).value || "" }); render(); } catch (e) { toast(e.message); }
         } }));
@@ -719,11 +798,71 @@ async function dynacatView() {
 }
 
 
+let passkeyList = null; // fetched on every visit to the Account tab
+
+function when(secs) {
+  return secs ? new Date(secs * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "never";
+}
+
+async function passkeysSection() {
+  passkeyList = await api("GET", "passkeys");
+  me.passkeys = passkeyList.length;
+  const refresh = async (list) => {
+    passkeyList = list; me.passkeys = list.length;
+    // Having a passkey can satisfy a required second factor.
+    me = (await api("GET", "session")).user;
+    render();
+  };
+  const rows = passkeyList.map((p) => {
+    const rename = h("form", { class: "actions", hidden: true, onsubmit: async (e) => {
+      e.preventDefault();
+      try { await refresh(await api("POST", "passkeys/" + p.id + "/rename", { name: nm.value })); toast("Renamed"); }
+      catch (x) { toast(x.message); }
+    } });
+    const nm = h("input", { type: "text", value: p.name, maxlength: "40", "aria-label": "Passkey name", class: "inline-pw" });
+    rename.append(nm, h("button", { class: "btn small", type: "submit", text: "Save" }));
+    return h("div", { class: "row" },
+      h("div", { class: "main" },
+        h("div", { class: "name", text: p.name }),
+        h("div", { class: "muted small", text: "Added " + when(p.created) + " · last used " + when(p.last_used) })),
+      h("div", { class: "actions" },
+        rename,
+        h("button", { class: "btn quiet small", type: "button", text: "Rename", onclick: () => { rename.hidden = !rename.hidden; if (!rename.hidden) nm.select(); } }),
+        confirmButton("Delete", "Yes, delete it", async () => {
+          await refresh(await api("DELETE", "passkeys/" + p.id));
+          toast("Passkey deleted");
+        })));
+  });
+  const supported = passkeysSupported();
+  return h("div", { class: "stack-sm" },
+    h("h2", { text: "Passkeys" }),
+    h("p", { class: "muted", text: "Sign in with your fingerprint, face, PIN or a security key instead of a password. A passkey also works as the second step after a password. Single sign-on is not affected." }),
+    h("div", { class: "list" }, rows.length ? rows : [h("p", { class: "empty", text: "No passkeys yet." })]),
+    !supported && h("p", { class: "hint", text: "This browser cannot create passkeys." }),
+    supported && form([
+      h("div", { class: "stack-sm narrow" },
+        field("pk-name", "Name", { type: "text", maxlength: "40", placeholder: "Laptop, phone, security key" }, "So you can tell them apart."),
+        me.has_password && field("pk-pw", "Your password", { type: "password", autocomplete: "current-password" }, "To make sure it is you.")),
+    ], "Add a passkey", async (fd, f) => {
+      let list;
+      try {
+        const begin = await api("POST", "passkeys/begin", { password: fd.get("pk-pw") || "" });
+        const answer = await passkeyCreate(begin.options);
+        list = await api("POST", "passkeys/finish", { ceremony: begin.ceremony, name: fd.get("pk-name") || "", ...answer });
+      } catch (x) { throw passkeyError(x); }
+      f.reset();
+      toast("Passkey added");
+      await refresh(list);
+    }));
+}
+
 async function accountView() {
   const mfaPart = await mfaSection();
-  if (me.mfa_setup_needed) return h("div", { class: "stack" }, mfaPart);
+  const passkeyPart = await passkeysSection();
+  if (me.mfa_setup_needed) return h("div", { class: "stack" }, mfaPart, passkeyPart);
   return h("div", { class: "stack" },
     ssoSection(),
+    passkeyPart,
     mfaPart,
     h("div", { class: "stack-sm" },
       h("h2", { text: "Change password" }),

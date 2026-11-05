@@ -20,10 +20,14 @@ pub fn routes() -> Router<Shared> {
 
 /// What a session that must still set up its second factor may call.
 pub fn allowed_before_setup(path: &str) -> bool {
-    path == "/ui/api/mfa" || path.starts_with("/ui/api/mfa/") || path == "/ui/api/logout"
+    path == "/ui/api/mfa"
+        || path.starts_with("/ui/api/mfa/")
+        || path == "/ui/api/passkeys"
+        || path.starts_with("/ui/api/passkeys/")
+        || path == "/ui/api/logout"
 }
 
-fn now_secs() -> u64 {
+pub(super) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -80,9 +84,9 @@ async fn status(State(s): State<Shared>, a: Authed) -> Json<serde_json::Value> {
 }
 
 #[derive(Deserialize)]
-struct Begin {
+pub(super) struct Begin {
     #[serde(default)]
-    password: String,
+    pub(super) password: String,
 }
 
 /// Start setting up an authenticator: a fresh secret to put into the app.
@@ -300,7 +304,7 @@ async fn reset_mfa(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use crate::api::{router, AppState, Shared};
     use crate::auth::Scope;
     use crate::mfa;
@@ -311,17 +315,17 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 
-    const ANNA: &str = "correct horse battery";
-    const BOB: &str = "another good password";
+    pub const ANNA: &str = "correct horse battery";
+    pub const BOB: &str = "another good password";
 
-    struct Ui {
-        app: axum::Router,
-        state: Shared,
-        admin: String,
+    pub(in crate::web) struct Ui {
+        pub app: axum::Router,
+        pub state: Shared,
+        pub admin: String,
     }
 
     impl Ui {
-        fn new() -> Ui {
+        pub fn new() -> Ui {
             let mut st = AppState::default();
             let (admin, _) = st.tokens.create("admin", Scope::Admin, None, None, None);
             let state = Arc::new(Mutex::new(st));
@@ -332,7 +336,7 @@ mod tests {
             }
         }
 
-        async fn send(
+        pub async fn send(
             &self,
             method: &str,
             uri: &str,
@@ -342,7 +346,8 @@ mod tests {
             let mut b = Request::builder()
                 .method(method)
                 .uri(uri)
-                .header("x-bookmoor-ui", "1");
+                .header("x-bookmoor-ui", "1")
+                .header("origin", "https://bookmoor.example");
             if let Some(c) = cookie {
                 b = b.header("cookie", format!("bookmoor_session={c}"));
             }
@@ -369,7 +374,7 @@ mod tests {
             )
         }
 
-        async fn post(
+        pub async fn post(
             &self,
             uri: &str,
             c: Option<&str>,
@@ -378,7 +383,7 @@ mod tests {
             self.send("POST", uri, c, Some(body)).await
         }
 
-        async fn setup(&self, name: &str) -> String {
+        pub async fn setup(&self, name: &str) -> String {
             let (st, _, set) = self
                 .post(
                     "/ui/api/setup",
@@ -391,7 +396,7 @@ mod tests {
         }
 
         /// A user with a password; returns their id.
-        async fn add_user(&self, admin: &str, name: &str) -> String {
+        pub async fn add_user(&self, admin: &str, name: &str) -> String {
             let (st, ..) = self
                 .post(
                     "/ui/api/users",
@@ -423,7 +428,7 @@ mod tests {
             .0
         }
 
-        async fn login(&self, name: &str) -> (StatusCode, Value, Option<String>) {
+        pub async fn login(&self, name: &str) -> (StatusCode, Value, Option<String>) {
             self.post(
                 "/ui/api/login",
                 None,

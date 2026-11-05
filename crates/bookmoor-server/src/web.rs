@@ -22,6 +22,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 mod mfa;
+mod passkeys;
 
 const INDEX: &str = include_str!("web/index.html");
 const APP_JS: &str = include_str!("web/app.js");
@@ -92,6 +93,7 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/users/{id}/password", post(reset_password))
         .route("/ui/api/users/{id}/admin", post(set_admin))
         .merge(mfa::routes())
+        .merge(passkeys::routes())
         .layer(middleware::from_fn(page_headers))
 }
 
@@ -186,7 +188,7 @@ impl FromRequestParts<Shared> for Authed {
         // An admin can require a second factor: until it is set up, the
         // session may only do what the setup needs.
         if user.mfa_required
-            && user.totp.is_none()
+            && !user.has_second_factor()
             && !st.sessions.is_sso(&session)
             && !mfa::allowed_before_setup(parts.uri.path())
         {
@@ -228,6 +230,10 @@ struct Me {
     oidc: bool,
     /// Has an authenticator app for the password login.
     mfa: bool,
+    /// Number of passkeys.
+    passkeys: usize,
+    /// Has a local password (single sign-on and passkey-only users may not).
+    has_password: bool,
     /// An admin requires one.
     mfa_required: bool,
     /// Required but not set up yet: the UI offers nothing else.
@@ -242,8 +248,10 @@ impl From<&User> for Me {
             admin: u.admin,
             oidc: u.oidc.is_some(),
             mfa: u.totp.is_some(),
+            passkeys: u.passkeys.len(),
+            has_password: u.password_hash.is_some(),
             mfa_required: u.mfa_required,
-            mfa_setup_needed: u.mfa_required && u.totp.is_none(),
+            mfa_setup_needed: u.mfa_required && !u.has_second_factor(),
         }
     }
 }
@@ -353,9 +361,15 @@ async fn login(
     match found {
         Some((id, _)) if ok => match st.users.get(&id).cloned() {
             // The password was right; the second factor comes next.
-            Some(user) if user.totp.is_some() && !user.disabled => {
+            Some(user) if user.has_second_factor() && !user.disabled => {
                 let ticket = st.sessions.start_ticket(&user.id, Instant::now());
-                Ok(Json(serde_json::json!({ "state": "mfa", "ticket": ticket })).into_response())
+                Ok(Json(serde_json::json!({
+                    "state": "mfa",
+                    "ticket": ticket,
+                    "totp": user.totp.is_some(),
+                    "passkey": !user.passkeys.is_empty(),
+                }))
+                .into_response())
             }
             Some(user) if !user.disabled => Ok(signed_in(&mut st, &user)),
             _ => Err(ApiError::Unauthorized),
@@ -1403,6 +1417,8 @@ struct UserRow {
     disabled: bool,
     /// Has an authenticator app.
     mfa: bool,
+    /// Number of passkeys.
+    passkeys: usize,
     mfa_required: bool,
     /// Linked to a single sign-on account.
     oidc: bool,
@@ -1422,6 +1438,7 @@ async fn users(State(s): State<Shared>, _: Admin) -> Json<Vec<UserRow>> {
                 devices: counts.get(u.id.as_str()).copied().unwrap_or(0),
                 disabled: u.disabled,
                 mfa: u.totp.is_some(),
+                passkeys: u.passkeys.len(),
                 mfa_required: u.mfa_required,
                 oidc: u.oidc.is_some(),
             })
