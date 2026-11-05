@@ -148,3 +148,5 @@ input:focus-visible, select:focus-visible { outline-offset: 0; border-color: var
 .narrow { max-width: 22rem; }
 input.inline-pw { min-height: 36px; width: 11rem; }
 [hidden] { display: none !important; }
+
+a.btn { display: inline-flex; align-items: center; text-decoration: none; }

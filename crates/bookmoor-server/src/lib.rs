@@ -6,6 +6,7 @@ pub mod cli;
 pub mod dynacat;
 pub mod engine;
 pub mod mtls;
+pub mod oidc;
 pub mod profiles;
 pub mod ratelimit;
 pub mod sessions;

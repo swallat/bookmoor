@@ -4,6 +4,7 @@
 
 const app = document.getElementById("app");
 let me = null;
+let sso = null; // { label } while the server offers single sign-on
 let tab = "devices";
 let lastToken = null; // shown once, dropped when the page changes
 
@@ -86,9 +87,40 @@ function centered(title, lead, body) {
     body));
 }
 
+const SSO_ERRORS = {
+  unlinked: "That account is not linked to a bookmoor user. Sign in with your password and link it under Account.",
+  taken: "That account is already linked to another user.",
+  denied: "The identity provider refused the sign-in.",
+  expired: "The sign-in took too long or was started in another browser. Try again.",
+  provider: "Could not reach the identity provider or its answer was not valid.",
+  rate: "Too many attempts. Wait a moment and try again.",
+  create: "Could not create your user.",
+  session: "Your session ended. Sign in again.",
+};
+
+/** Shown once after coming back from the identity provider. */
+function ssoNotice() {
+  const q = new URLSearchParams(location.search);
+  const code = q.get("sso_error");
+  if (!code) return;
+  q.delete("sso_error");
+  history.replaceState(null, "", location.pathname + (q.toString() ? "?" + q : ""));
+  toast(code === "linked" ? "Single sign-on account linked." : SSO_ERRORS[code] || "Single sign-on failed.");
+}
+
+/** Link to the identity provider; keeps the extension's sign-in request alive across it. */
+function ssoHref(link) {
+  const q = new URLSearchParams();
+  if (link) q.set("link", "1");
+  if (location.search.includes("connect=")) q.set("return", location.search);
+  return "ui/api/oidc/start" + (q.toString() ? "?" + q : "");
+}
+
 function loginView() {
   document.title = "Sign in · bookmoor";
-  centered("Sign in to bookmoor", null,
+  centered("Sign in to bookmoor", null, [
+    sso && h("p", {}, h("a", { class: "btn", href: ssoHref(false), text: "Sign in with " + sso.label })),
+    sso && h("p", { class: "muted", text: "or with a password" }),
     form([
       h("div", { class: "stack-sm" },
         field("name", "User name", { type: "text", autocomplete: "username", required: true, autofocus: true }),
@@ -96,7 +128,8 @@ function loginView() {
     ], "Sign in", async (fd) => {
       me = (await api("POST", "login", { name: fd.get("name"), password: fd.get("password") })).user;
       await start();
-    }));
+    }),
+  ]);
 }
 
 function setupView() {
@@ -358,8 +391,24 @@ async function usersView() {
       h("div", { class: "list" }, rows)));
 }
 
+function ssoSection() {
+  if (!sso) return null;
+  return h("div", { class: "stack-sm" },
+    h("h2", { text: "Single sign-on" }),
+    me.oidc
+      ? [h("p", { class: "muted", text: "Your account is linked to " + sso.label + ". You can sign in with it." }),
+         h("button", { class: "btn quiet", type: "button", text: "Unlink",
+           onclick: async () => {
+             try { await api("POST", "oidc/unlink"); me.oidc = false; toast("Unlinked"); render(); }
+             catch (e) { toast(e.message); }
+           } })]
+      : [h("p", { class: "muted", text: "Link " + sso.label + " to sign in without a password." }),
+         h("a", { class: "btn", href: ssoHref(true), text: "Link " + sso.label })]);
+}
+
 function accountView() {
   return h("div", { class: "stack" },
+    ssoSection(),
     h("div", { class: "stack-sm" },
       h("h2", { text: "Change password" }),
       h("p", { class: "muted", text: "Other browsers you are signed in on will be signed out." }),
@@ -419,9 +468,10 @@ async function connectView() {
 
 async function start() {
   const s = await api("GET", "session").catch(() => ({ state: "login" }));
+  sso = s.sso || null;
   if (s.state === "user") { me = s.user; return connectAsk ? connectView() : render(); }
   me = null;
   return s.state === "setup" ? setupView() : loginView();
 }
 
-start();
+start().then(ssoNotice);

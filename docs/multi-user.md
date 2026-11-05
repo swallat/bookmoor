@@ -21,7 +21,7 @@ Status: accepted and implemented (model in #35, web UI after it).
 - **Persistence stays one JSON file**, now `{ users, engines: {user_id: ...},
   tokens }`. SQLite was weighed and rejected again: the whole state is rewritten
   atomically, and up to 100 users with personal bookmark sets stay small.
-- **Login: local password first, OIDC later.** Passwords are Argon2id hashes in
+- **Login: local password, plus OIDC (single sign-on).** Passwords are Argon2id hashes in
   PHC format (`users.password_hash`). The web UI uses a session cookie
   (`HttpOnly`, `SameSite=Strict`, `Secure` unless `--insecure-http`), sessions
   live in memory (a restart signs everyone out). Everything behind login goes
@@ -91,3 +91,21 @@ or `https://<label>.extensions.allizom.org/...` (one lowercase label, no port,
 userinfo or fragment), so a foreign page cannot obtain a token. The web UI shows
 a confirmation page for `/?connect=...&state=...&name=...` after sign-in; the
 extension runs this with `identity.launchWebAuthFlow` and checks `state`.
+
+## Single sign-on
+
+`src/oidc.rs`, endpoints under `/ui/api/oidc`. Configured by
+`--public-url/--oidc-issuer/--oidc-client-id` (env `BOOKMOOR_*`; the client
+secret only from `BOOKMOOR_OIDC_CLIENT_SECRET`). A user may carry
+`oidc: {issuer, subject}`; sign-in finds the user by that pair only. Flow:
+`GET /ui/api/oidc/start[?link=1][&return=?query]` stores state, nonce and PKCE
+verifier in memory (10 minutes, one use, bound to the browser by an `HttpOnly`
+`SameSite=Lax` cookie scoped to `/ui/api/oidc`) and redirects to the provider;
+`GET /ui/api/oidc/callback` checks all of that and the ID token (signature,
+issuer, audience, expiry, nonce), then sets the normal session cookie and
+redirects to `../../<return>` (relative, so a proxy path prefix works). `link=1`
+requires a session and attaches the identity to that user. Errors come back as
+`?sso_error=<code>`. `return` may only be a bare query string, which carries the
+extension's `/?connect=...` request across the round trip. `POST
+/ui/api/oidc/unlink` needs a password on the account. Unknown identities are
+refused unless `--oidc-create-users` is set.
