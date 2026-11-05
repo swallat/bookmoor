@@ -333,6 +333,8 @@ async fn session(State(s): State<Shared>, headers: HeaderMap) -> Json<serde_json
     if let Some(o) = &st.oidc {
         out["sso"] = serde_json::json!({ "label": o.cfg.label });
     }
+    out["version"] = env!("CARGO_PKG_VERSION").into();
+    out["commit"] = env!("BOOKMOOR_GIT_COMMIT").into();
     Json(out)
 }
 

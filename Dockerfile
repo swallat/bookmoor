@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 FROM rust:1-bookworm AS build
 WORKDIR /src
+ARG BOOKMOOR_COMMIT=
+ENV BOOKMOOR_COMMIT=$BOOKMOOR_COMMIT
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
