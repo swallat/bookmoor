@@ -5,6 +5,7 @@ pub mod auth;
 pub mod cli;
 pub mod dynacat;
 pub mod engine;
+pub mod linkwarden;
 pub mod mfa;
 pub mod mtls;
 pub mod oidc;

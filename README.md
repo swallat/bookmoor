@@ -54,6 +54,12 @@ SyncMarks, also on that list, is the closest in purpose (browser bookmark sync).
   every sync. Group titles, depth, icons and link flags are configurable, in
   the web UI or on the command line. See [docs/adapters/dynacat.md](docs/adapters/dynacat.md).
   A Dashy adapter is planned but **does not exist yet**.
+- **Two-way sync with Linkwarden.** A profile (or one folder of it) is kept in
+  step with a Linkwarden collection: folders become collections, bookmarks
+  become links, and changes made on either side reach the other and every
+  browser. Linkwarden's tags, notes and archives are left alone. Set up in the
+  web UI. See [docs/adapters/linkwarden.md](docs/adapters/linkwarden.md).
+  Not yet tested against a live Linkwarden.
 - **Native, two-way browser sync.** A Chrome and a Firefox extension (MV3)
   sync the real bookmark tree. Firefox' bookmarks menu appears as a folder.
 - **Several profiles per user.** Separate bookmark trees, for example Work and
@@ -121,6 +127,7 @@ come from the *Extension package* workflow and from releases; load Chrome's
 |---|---|
 | Docker, sign-in, OIDC, mTLS, Pangolin, NetBird, Cloudflare, users, tokens, web UI | [docs/deployment.md](docs/deployment.md) |
 | Dynacat output | [docs/adapters/dynacat.md](docs/adapters/dynacat.md) |
+| Linkwarden sync | [docs/adapters/linkwarden.md](docs/adapters/linkwarden.md) |
 | Building, Firefox signing, releases, Chrome Web Store | [docs/development.md](docs/development.md) |
 | Sync design and conflict resolution | [docs/sync-architecture.md](docs/sync-architecture.md) |
 | Multi-user model | [docs/multi-user.md](docs/multi-user.md) |
@@ -138,6 +145,8 @@ come from the *Extension package* workflow and from releases; load Chrome's
 ## Open items
 
 - Dynacat output is not yet tested against a long-running live Dynacat.
+- Linkwarden sync is tested against a fake Linkwarden built from its API
+  source, not yet against a real instance.
 - Firefox sync is covered by CI, with little manual use so far.
 - Dashy adapter and reading edits back from dashboards are planned.
 - Not planned: end-to-end encryption, real-time push, reading list.

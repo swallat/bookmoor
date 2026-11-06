@@ -75,6 +75,12 @@ pub struct AppState {
     pub dynacat_user: Option<String>,
     /// Default profile of an output that names none; the only one if unset.
     pub dynacat_profile: Option<String>,
+    /// Linkwarden connections set up in the web UI, persisted in the state file.
+    pub linkwarden: Vec<crate::linkwarden::Linkwarden>,
+    /// How the last run of each connection went (memory only).
+    pub linkwarden_status: BTreeMap<String, crate::linkwarden::Status>,
+    /// Woken when a tree changes, so Linkwarden connections can run soon.
+    pub linkwarden_wake: Arc<tokio::sync::Notify>,
     /// Require the reverse proxy's client-certificate verdict (see `mtls`).
     pub client_cert: Option<crate::mtls::ClientCertCheck>,
     /// Single sign-on for the web UI (none = off).
@@ -138,6 +144,8 @@ impl AppState {
     /// leave the file alone. A failure is logged and never fails the sync:
     /// the dashboard is a view, the canonical tree is saved.
     pub fn publish_dynacat(&mut self, changed: Option<&str>) -> std::io::Result<()> {
+        // Every change of a tree passes here: tell the Linkwarden runner too.
+        self.linkwarden_wake.notify_one();
         if self.users.is_empty() {
             return Ok(());
         }
@@ -307,6 +315,49 @@ impl AppState {
         }
     }
 
+    /// Whether a Linkwarden connection fits: its profile exists, its folder is
+    /// there (checked when the connection is made) and no other connection
+    /// already syncs the same place.
+    pub fn check_linkwarden(&self, l: &crate::linkwarden::Linkwarden) -> Result<(), String> {
+        if self.profiles.get(&l.profile_id).is_none() {
+            return Err("no such profile".into());
+        }
+        if self.linkwarden.iter().filter(|x| x.id != l.id).count() >= crate::linkwarden::MAX_LINKS {
+            return Err(format!(
+                "at most {} connections",
+                crate::linkwarden::MAX_LINKS
+            ));
+        }
+        let engine = self.engines.get(&l.profile_id).ok_or("no such profile")?;
+        let nodes = engine.tree().nodes;
+        let mut cur = nodes
+            .iter()
+            .find(|n| n.parent.is_none())
+            .map(|n| n.id.clone())
+            .ok_or("the profile has no tree")?;
+        for t in &l.folder {
+            cur = nodes
+                .iter()
+                .find(|n| {
+                    n.kind == bookmoor_core::model::Kind::Folder
+                        && n.parent.as_deref() == Some(cur.as_str())
+                        && n.title == *t
+                })
+                .map(|n| n.id.clone())
+                .ok_or_else(|| format!("the folder \"{}\" does not exist", l.folder.join("/")))?;
+        }
+        // Two connections on the same collection of the same Linkwarden would
+        // fight over it.
+        if self
+            .linkwarden
+            .iter()
+            .any(|x| x.id != l.id && x.url == l.url && x.collection == l.collection)
+        {
+            return Err("another connection already uses this collection".into());
+        }
+        Ok(())
+    }
+
     /// Drop web-UI outputs whose profile is gone.
     fn prune_dynacat(&mut self) {
         let profiles = &self.profiles;
@@ -317,6 +368,9 @@ impl AppState {
         for o in gone {
             self.dynacat_errors.remove(&self.dynacat_key(&o.file));
         }
+        let profiles = &self.profiles;
+        self.linkwarden
+            .retain(|l| profiles.get(&l.profile_id).is_some());
     }
 
     /// Check the settings of a web-UI output (`exclude`: the id being edited)

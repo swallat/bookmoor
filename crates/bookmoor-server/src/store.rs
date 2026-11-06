@@ -6,6 +6,7 @@ use crate::api::{AppState, Backup};
 use crate::auth::{Scope, TokenRecord, Tokens};
 use crate::dynacat::{UiOutput, UiPage};
 use crate::engine::{Engine, Snapshot};
+use crate::linkwarden::Linkwarden;
 use crate::profiles::{default_id_for, Profile, Profiles, DEFAULT_NAME};
 use crate::users::{User, Users};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,9 @@ struct SaveFile<'a> {
     dynacat: &'a [UiOutput],
     #[serde(skip_serializing_if = "Option::is_none")]
     dynacat_page: Option<&'a UiPage>,
+    /// Linkwarden connections (hold access tokens).
+    #[serde(skip_serializing_if = "<[Linkwarden]>::is_empty")]
+    linkwarden: &'a [Linkwarden],
     /// Single sign-on set up in the web UI (holds the client secret).
     #[serde(skip_serializing_if = "Option::is_none")]
     oidc: Option<&'a crate::oidc::OidcConfig>,
@@ -48,6 +52,8 @@ struct LoadFile {
     dynacat: Vec<UiOutput>,
     #[serde(default)]
     dynacat_page: Option<UiPage>,
+    #[serde(default)]
+    linkwarden: Vec<Linkwarden>,
     oidc: Option<crate::oidc::OidcConfig>,
 }
 
@@ -61,6 +67,7 @@ pub struct Loaded {
     pub backups: BTreeMap<String, Backup>,
     pub dynacat: Vec<UiOutput>,
     pub dynacat_page: Option<UiPage>,
+    pub linkwarden: Vec<Linkwarden>,
     pub oidc: Option<crate::oidc::OidcConfig>,
 }
 
@@ -206,6 +213,11 @@ impl Store {
             .into_iter()
             .filter(|o| profiles.get(&o.profile_id).is_some())
             .collect();
+        let linkwarden: Vec<Linkwarden> = f
+            .linkwarden
+            .into_iter()
+            .filter(|l| profiles.get(&l.profile_id).is_some())
+            .collect();
         Ok(Some(Loaded {
             users,
             profiles,
@@ -214,6 +226,7 @@ impl Store {
             backups,
             dynacat,
             dynacat_page: f.dynacat_page,
+            linkwarden,
             oidc: f.oidc,
         }))
     }
@@ -228,6 +241,7 @@ impl Store {
         backups: &BTreeMap<String, Backup>,
         dynacat: &[UiOutput],
         dynacat_page: Option<&UiPage>,
+        linkwarden: &[Linkwarden],
         oidc: Option<&crate::oidc::OidcConfig>,
     ) -> io::Result<()> {
         let records = tokens.records();
@@ -244,6 +258,7 @@ impl Store {
             backups,
             dynacat,
             dynacat_page,
+            linkwarden,
             oidc,
         })
         .map_err(io::Error::other)?;
@@ -299,6 +314,7 @@ impl AppState {
             backups: l.backups,
             dynacat_ui: l.dynacat,
             dynacat_page_ui: l.dynacat_page,
+            linkwarden: l.linkwarden,
             oidc_config: l.oidc,
             store: Some(store),
             ..AppState::default()
@@ -316,6 +332,7 @@ impl AppState {
                 &self.backups,
                 &self.dynacat_ui,
                 self.dynacat_page_ui.as_ref(),
+                &self.linkwarden,
                 self.oidc_config.as_ref(),
             ),
             None => Ok(()),
@@ -341,6 +358,7 @@ impl AppState {
                     self.backups = l.backups;
                     self.dynacat_ui = l.dynacat;
                     self.dynacat_page_ui = l.dynacat_page;
+                    self.linkwarden = l.linkwarden;
                     self.apply_oidc(l.oidc);
                 }
                 _ => {
@@ -729,6 +747,7 @@ mod tests {
                 &st.backups,
                 &st.dynacat_ui,
                 st.dynacat_page_ui.as_ref(),
+                &st.linkwarden,
                 None,
             )
             .unwrap();
@@ -748,6 +767,7 @@ mod tests {
                 &st.backups,
                 &st.dynacat_ui,
                 st.dynacat_page_ui.as_ref(),
+                &st.linkwarden,
                 None,
             )
             .unwrap();

@@ -426,7 +426,9 @@ async fn main() {
         eprintln!("warning: the state holds Dynacat outputs made in the web UI, but --dynacat-dir is not set: they are not written");
     }
 
-    let app = router(Arc::new(Mutex::new(state)));
+    let shared = Arc::new(Mutex::new(state));
+    bookmoor_server::linkwarden::spawn(shared.clone());
+    let app = router(shared);
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .unwrap_or_else(|e| fail(&format!("cannot bind {bind}: {e}")));
