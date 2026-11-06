@@ -36,11 +36,28 @@ const CSRF_HEADER: &str = "x-bookmoor-ui";
 /// Devices (read and sync tokens) one user may have.
 const MAX_DEVICES: usize = 50;
 
+/// The page with a build stamp on its scripts and styles, so a browser or
+/// reverse proxy that kept an older `app.js` fetches the one of this build.
+fn versioned_index() -> String {
+    let stamp = concat!(env!("CARGO_PKG_VERSION"), "-", env!("BOOKMOOR_GIT_COMMIT"));
+    let mut page = INDEX.to_string();
+    for file in ["app.js", "app.css", "bookmarks.js", "bookmarks.css"] {
+        page = page.replace(&format!("ui/{file}\""), &format!("ui/{file}?v={stamp}\""));
+    }
+    page
+}
+
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route(
             "/",
-            get(|| async { asset("text/html; charset=utf-8", INDEX) }),
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    versioned_index(),
+                )
+                    .into_response()
+            }),
         )
         .route(
             "/ui/app.js",
@@ -2082,6 +2099,15 @@ mod tests {
             .call("GET", "/ui/api/session", Some(&cookie), None, false)
             .await;
         assert_eq!(v["user"]["name"], "owner");
+    }
+
+    #[test]
+    fn assets_carry_the_build_stamp() {
+        let page = crate::web::versioned_index();
+        for file in ["app.js", "app.css", "bookmarks.js", "bookmarks.css"] {
+            assert!(page.contains(&format!("ui/{file}?v=")), "{file}");
+            assert!(!page.contains(&format!("ui/{file}\"")), "{file}");
+        }
     }
 
     #[tokio::test]
