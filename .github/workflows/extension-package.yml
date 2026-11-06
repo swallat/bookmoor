@@ -1,9 +1,9 @@
 name: Extension package
 
 # Builds the installable extension when its code changes on main (or by hand):
-# a Chrome zip, an unsigned Firefox zip and, if Mozilla credentials are set as
-# repository secrets, a signed Firefox .xpi. Download them from the run's
-# "Artifacts" section. Nothing is signed at Mozilla or sent to the Chrome Web
+# a Chrome zip and an unsigned Firefox zip. A release run (a pushed tag vX.Y.Z)
+# also signs a Firefox .xpi if Mozilla credentials are set as repository
+# secrets. Download them from the run's "Artifacts" section. Nothing is signed at Mozilla or sent to the Chrome Web
 # Store except for a release (a pushed tag vX.Y.Z), and only if the secrets are
 # set (see docs/development.md). Builds from main and manual runs only produce
 # unsigned artifacts. Pull requests do not run this: they have no secrets and
@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   package:
-    name: Package (Chrome zip, Firefox xpi)
+    name: Package (Chrome zip, Firefox zip/xpi)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
