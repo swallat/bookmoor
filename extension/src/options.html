@@ -10,8 +10,21 @@
     header { margin-bottom: 20px; }
     .tag { color: var(--muted); margin: 2px 0 0; }
     section + section { margin-top: 16px; }
-    details { margin-top: 14px; }
-    summary { cursor: pointer; color: var(--muted); }
+    #signinserver { margin-top: 12px; }
+    #signinserver + .hint { margin-top: 12px; }
+    #tokeninfo { margin-top: 8px; }
+    #tokeninfo:empty { display: none; }
+    details { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
+    summary { cursor: pointer; color: var(--muted); padding: 2px 0; }
+    details[open] summary { margin-bottom: 10px; }
+    details .hint { margin-top: 6px; }
+    #headers, #query { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    #headers .row, #query .row { margin-top: 0; }
+    .card > .actions + .hint, .card > .hint + .actions { margin-top: 14px; }
+    #sync { margin-bottom: 4px; }
+    #signin { margin-top: 12px; }
+    #startover:empty { display: none; }
+    #startover { margin-top: 12px; }
     #sync { word-break: break-word; }
     dialog { max-width: 520px; width: calc(100% - 32px); color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
     dialog::backdrop { background: rgba(0, 0, 0, 0.55); }

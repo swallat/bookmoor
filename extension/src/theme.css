@@ -38,9 +38,9 @@ body {
 .brand img { width: 40px; height: 40px; border-radius: 8px; }
 .brand h1 { margin: 0; font-size: 22px; letter-spacing: 0.2px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
-h2 { font-size: 15px; margin: 0 0 8px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
 label { display: block; margin-top: 16px; margin-bottom: 4px; font-weight: 600; }
-.hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
 input {
   width: 100%;
   padding: 8px 10px;
@@ -53,8 +53,8 @@ input {
 input::placeholder { color: var(--muted); }
 :focus-visible { outline: 3px solid var(--yellow); outline-offset: 1px; }
 input:focus-visible { border-color: var(--blue); }
-.row { display: flex; gap: 8px; margin-top: 6px; }
-.row input { flex: 1; width: auto; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.row input { flex: 1 1 140px; width: auto; min-width: 0; }
 button {
   padding: 8px 14px;
   border-radius: 8px;
@@ -68,7 +68,7 @@ button {
 button:hover { border-color: var(--blue); }
 button.primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
 button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
-.actions { display: flex; gap: 8px; margin-top: 20px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 .add { margin-top: 8px; }
 #status { margin-top: 12px; min-height: 1.4em; }
 .bad { color: var(--bad); font-weight: 600; }
