@@ -713,12 +713,20 @@ function outputForm(info, init, label, save) {
   const folder = h("select", { id: k + "folder", name: "folder" }, h("option", { value: "", text: "Whole tree" }));
   const profile = h("select", { id: k + "profile", name: "profile" },
     info.profiles.map((p) => h("option", { value: p.id, text: p.label })));
-  if (v.profile_id) profile.value = v.profile_id;
+  if (v.profile_id) {
+    // A removed profile must not silently turn into the first one.
+    if (!info.profiles.some((p) => p.id === v.profile_id)) {
+      profile.prepend(h("option", { value: "", text: "(profile removed: choose another)" }));
+    }
+    profile.value = info.profiles.some((p) => p.id === v.profile_id) ? v.profile_id : "";
+  }
   const load = async (want) => {
     folder.replaceChildren(h("option", { value: "", text: "Whole tree" }));
+    if (!profile.value) return;
     try {
       const paths = await api("GET", "dynacat/folders?profile=" + encodeURIComponent(profile.value));
       for (const p of paths) folder.append(h("option", { value: p, text: p }));
+      if (want && !paths.includes(want)) folder.append(h("option", { value: want, text: want + " (not found)" }));
       if (want) folder.value = want;
     } catch (e) { toast(e.message); }
   };

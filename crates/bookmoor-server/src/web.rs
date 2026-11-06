@@ -1220,6 +1220,14 @@ async fn change_dynacat(
     save(&mut st)?;
     if let Err(e) = st.publish_dynacat(None) {
         eprintln!("warning: cannot write the Dynacat file: {e}");
+        // Saved, but the collecting page could not follow: say so.
+        if let Some(page) = st.effective_page() {
+            if let Some(m) = st.dynacat_errors.get(&page.file.display().to_string()) {
+                return Err(ApiError::Unprocessable(format!(
+                    "Saved, but the collecting page could not be written: {m}"
+                )));
+            }
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1235,6 +1243,13 @@ async fn set_dynacat_page(
     save(&mut st)?;
     if let Err(e) = st.publish_dynacat(None) {
         eprintln!("warning: cannot write the Dynacat file: {e}");
+        if let Some(page) = st.effective_page() {
+            if let Some(m) = st.dynacat_errors.get(&page.file.display().to_string()) {
+                return Err(ApiError::Unprocessable(format!(
+                    "Saved, but the page could not be written: {m}"
+                )));
+            }
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1245,6 +1260,11 @@ async fn remove_dynacat_page(
 ) -> Result<StatusCode, ApiError> {
     let mut st = s.lock().unwrap();
     still_admin(&st, &a)?;
+    if st.dynacat_page.is_some() {
+        return Err(ApiError::Unprocessable(
+            "the page is set on the command line; change it there".into(),
+        ));
+    }
     if let (Some(p), Some(d)) = (st.dynacat_page_ui.take(), st.dynacat_dir.clone()) {
         st.dynacat_errors
             .remove(&d.join(&p.file).display().to_string());

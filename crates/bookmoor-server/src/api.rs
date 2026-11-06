@@ -292,7 +292,10 @@ impl AppState {
     pub fn effective_page(&self) -> Option<crate::dynacat::PageSpec> {
         self.dynacat_page.clone().or_else(|| {
             let dir = self.dynacat_dir.as_ref()?;
-            Some(self.dynacat_page_ui.as_ref()?.spec(dir))
+            // A hand-edited state file is not trusted.
+            let mut ui = self.dynacat_page_ui.clone()?;
+            ui.check().ok()?;
+            Some(ui.spec(dir))
         })
     }
 
@@ -441,12 +444,8 @@ impl AppState {
         {
             return Err(format!("{} is already used by an output", page.file));
         }
-        // Surface a foreign file or a read-only directory now.
-        crate::dynacat::write_if_changed(
-            &path,
-            &bookmoor_core::dynacat::render_page(&page.name, page.columns, &[]),
-        )
-        .map_err(|e| format!("{}: {e}", page.file))?;
+        // Surface a foreign file now; the page itself is written right after.
+        crate::dynacat::check_writable(&path).map_err(|e| format!("{}: {e}", page.file))?;
         if let Some(old) = &self.dynacat_page_ui {
             self.dynacat_errors
                 .remove(&dir.join(&old.file).display().to_string());

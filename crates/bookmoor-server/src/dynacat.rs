@@ -260,6 +260,17 @@ pub fn publish(
     write_if_changed(path, &render(tree, folder, style)?)
 }
 
+/// Fail if `path` holds something bookmoor did not write (it is never
+/// overwritten); a missing or empty file is fine.
+pub fn check_writable(path: &Path) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(old) if !old.trim().is_empty() && !old.starts_with(HEADER) => Err(io::Error::other(
+            "the file exists and was not written by bookmoor; not overwriting it",
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Replace `path` with `yaml` atomically, unless it already holds exactly
 /// that. Never overwrites a file that does not start with [`HEADER`].
 pub fn write_if_changed(path: &Path, yaml: &str) -> io::Result<bool> {
