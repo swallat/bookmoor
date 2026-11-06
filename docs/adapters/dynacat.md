@@ -140,6 +140,49 @@ The page file starts with the dash itself (`- name: ...`), so here the
   the others, and the error shows on that output's row. A problem writing
   the page shows on its own row in the tab.
 
+### A page per profile
+
+`source=profiles` makes the file hold **one page per profile** of the Dynacat
+user (`--dynacat-user`, see docs/multi-user.md) instead of one page with a
+widget per output. The outputs are not used then, and the page name is the
+profile's name (`name=` is ignored). A new or renamed profile shows up at the next
+write (startup, sync, adding or removing an output).
+
+```
+--dynacat-page "file=/dynacat/profiles.yml;source=profiles;columns=2;icons=known"
+```
+
+Include it once under `pages:`; the file is a list, so it may add several pages:
+
+```yaml
+pages:
+  - $include: bookmoor/profiles.yml
+```
+
+The layout follows a hand-made page with groups of bookmarks widgets:
+
+- Every folder directly under `toolbar`, `other` or `mobile` is a section.
+  Bookmarks lying loose in one of those get a section titled like the
+  folder (`toolbar`).
+- A folder with subfolders is a **`group` widget** (tabs): first its own
+  bookmarks, then one `bookmarks` widget per subfolder, titled with the path,
+  `Netcetera › Gitlab › Deep`. A folder without subfolders is a single
+  `bookmarks` widget. Empty folders are left out.
+- Sections are spread over the columns by the number of links (the next one
+  goes to the lightest column), so a long section does not sit beside empty
+  space. The order inside a column follows the folder order.
+- `icons=` (default `known`):
+
+  | Value | Link icons |
+  |---|---|
+  | `none` | none |
+  | `known` | `di:` icons for well-known services (Jira, Confluence, GitLab, GitHub, YouTube, SharePoint, OneDrive, Outlook, Artifactory, Checkmk, UPS); no request to other sites |
+  | `google` | like `known`, otherwise `google.com/s2/favicons`: Google learns the site names |
+  | `site` | like `known`, otherwise `https://HOST/favicon.ico`: the viewer's browser contacts every site |
+
+  A widget gets a `title-icon` (tab and heading mark) when at least half of its
+  links share one `di:` icon.
+
 ## Mapping
 
 Dynacat groups are flat (a title, optional color, a list of links).
@@ -187,6 +230,9 @@ written, so `config:validate` has **not** been run.
 - Included files are watched, so a change to a file triggers a reload.
 
 ## Still to verify (run a local instance)
+0. The profile pages (`source=profiles`) were checked only as YAML and against the
+   same source rules (`group` nested in a column, `title-icon`, `di:`
+   icons exist); not rendered by Dynacat.
 1. `docker exec dynacat /app/dynacat -config /app/config/dynacat.yml config:validate`
    with the page include above, and the page rendering in the browser
    (several inline bookmarks widgets, empty column, `links: []`).
