@@ -103,7 +103,14 @@ impl PageSpec {
             match (key, value) {
                 ("file", v) if !v.is_empty() => p.file = v.into(),
                 ("name", v) if !v.is_empty() => p.name = v.into(),
-                ("columns", v) => p.columns = v.parse().map_err(|_| bad(part))?,
+                ("columns", v) => {
+                    p.columns = v.parse().map_err(|_| {
+                        format!(
+                            "Dynacat page \"{spec}\": columns: 1 to {}",
+                            bookmoor_core::dynacat::MAX_PAGE_COLUMNS
+                        )
+                    })?
+                }
                 _ => return Err(bad(part)),
             }
         }

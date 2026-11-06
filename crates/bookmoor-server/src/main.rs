@@ -343,7 +343,10 @@ async fn main() {
         }
     }
     if let Some(p) = &dynacat_page {
-        if dynacat_outputs.iter().any(|o| o.file == p.file) {
+        if dynacat_outputs.iter().any(|o| {
+            o.file.display().to_string().to_lowercase()
+                == p.file.display().to_string().to_lowercase()
+        }) {
             fail(&format!(
                 "the Dynacat page {} is also a Dynacat output; give each its own file",
                 p.file.display()

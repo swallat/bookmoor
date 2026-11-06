@@ -168,29 +168,56 @@ impl AppState {
         let mut errors = Vec::new();
         // (file name, path, widget) of every output that renders, for the page.
         let mut page_widgets: Vec<(String, String, String)> = Vec::new();
+        let page_path = self
+            .dynacat_page
+            .as_ref()
+            .map(|p| p.file.display().to_string().to_lowercase());
         for (file, target, folder, style) in jobs {
             let key = file.display().to_string();
+            // The page owns its file: an output must never write the same one.
+            if page_path.as_deref() == Some(key.to_lowercase().as_str()) {
+                let e = "this file is the collecting page; give the output its own file";
+                self.dynacat_errors.insert(key, e.into());
+                errors.push(format!("{}: {e}", file.display()));
+                continue;
+            }
             let res = target.map_err(std::io::Error::other).and_then(|pid| {
                 let engine = self
                     .engines
                     .get(&pid)
                     .ok_or_else(|| std::io::Error::other("the profile no longer exists"))?;
                 let tree = engine.tree();
+                let skip = changed.is_some_and(|c| c != pid);
                 // The page needs titles that tell its widgets apart.
                 let mut titled = style.clone();
-                if titled.title.as_deref().is_none_or(|t| t.trim().is_empty()) {
+                let untitled = titled.title.as_deref().is_none_or(|t| t.trim().is_empty());
+                if untitled {
                     titled.title = file.file_stem().map(|s| s.to_string_lossy().into_owned());
                 }
-                let widget = crate::dynacat::render(&tree, &folder, &titled)?;
+                let widget = match crate::dynacat::render(&tree, &folder, &titled) {
+                    Ok(w) => w,
+                    // A profile this sync did not touch keeps its old
+                    // result; it is only missing from the page.
+                    Err(_) if skip => return Ok(None),
+                    Err(e) => return Err(e),
+                };
                 let name = file
                     .file_name()
                     .map(|n| n.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
-                page_widgets.push((name, key.clone(), widget));
-                if changed.is_some_and(|c| c != pid) {
+                // Written even if the output's own file cannot be, so the
+                // page stays complete; only an unrenderable output is left out.
+                page_widgets.push((name, key.clone(), widget.clone()));
+                if skip {
                     return Ok(None);
                 }
-                crate::dynacat::publish(&file, &tree, &folder, &style).map(Some)
+                // Without a title of its own the file gets the plain widget.
+                let own = if untitled {
+                    crate::dynacat::render(&tree, &folder, &style)?
+                } else {
+                    widget
+                };
+                crate::dynacat::write_if_changed(&file, &own).map(Some)
             });
             match res {
                 Ok(Some(_)) => {
@@ -208,7 +235,6 @@ impl AppState {
         // is left out and reported on its own row.
         if let Some(page) = &self.dynacat_page {
             let own = page.file.display().to_string();
-            page_widgets.retain(|(_, path, _)| *path != own);
             page_widgets.sort();
             let widgets: Vec<String> = page_widgets.into_iter().map(|(_, _, w)| w).collect();
             let yaml = bookmoor_core::dynacat::render_page(&page.name, page.columns, &widgets);
