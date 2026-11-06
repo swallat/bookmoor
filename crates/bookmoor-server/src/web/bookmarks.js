@@ -113,7 +113,10 @@ async function bookmarksView() {
       h("button", { class: "btn small", type: "button", text: "Add bookmark",
         onclick: () => bmDialog(ix, { kind: "bookmark", parent: bmSel }) }),
       h("button", { class: "btn quiet small", type: "button", text: "Add folder",
-        onclick: () => bmDialog(ix, { kind: "folder", parent: bmSel }) })),
+        onclick: () => bmDialog(ix, { kind: "folder", parent: bmSel }) }),
+      count > 1 && h("button", { class: "btn quiet small", type: "button", text: "Find duplicates",
+        title: "Review links that are saved more than once, then remove the copies you pick",
+        onclick: () => bmDuplicates() })),
     h("div", { class: "bm-split" }, side, h("div", { class: "bm-main" }, crumbs, list)));
 }
 
@@ -302,5 +305,69 @@ function bmDialog(ix, init) {
   dlg.append(f);
   dlg.addEventListener("cancel", () => dlg.remove());
   document.body.append(dlg);
+  dlg.showModal();
+}
+
+/** Review links saved more than once; only the copies the user ticks are removed. */
+async function bmDuplicates() {
+  const profile = bmProfile; // the select can change it while the dialog is open
+  let groups;
+  try { groups = await api("GET", "profiles/" + profile + "/duplicates"); }
+  catch (e) { toast(e.message); return; }
+  if (!groups.length) { toast("No duplicates found"); return; }
+  const dlg = h("dialog", { class: "bm-dialog bm-dups", "aria-label": "Duplicate bookmarks" });
+  const close = () => { dlg.close(); dlg.remove(); };
+  const boxes = []; // [{ id, group, box }]
+  const summary = h("p", { class: "muted", role: "status" });
+  const go = h("button", { class: "btn", type: "button" });
+  const update = () => {
+    const picked = boxes.filter((b) => b.box.checked);
+    let blocked = 0;
+    groups.forEach((g, gi) => {
+      const mine = boxes.filter((b) => b.group === gi);
+      const all = mine.every((b) => b.box.checked);
+      mine.forEach((b) => b.row.classList.toggle("conflict", all));
+      if (all) blocked++;
+    });
+    summary.textContent = picked.length + " of " + boxes.length + " copies will be removed"
+      + (blocked ? ". Keep at least one copy of every link (" + blocked + (blocked === 1 ? " group has" : " groups have") + " none left)." : ".");
+    go.textContent = picked.length ? "Remove " + picked.length + (picked.length === 1 ? " bookmark" : " bookmarks") : "Nothing selected";
+    go.disabled = !picked.length || blocked > 0;
+  };
+  const body = groups.map((g, gi) => h("fieldset", { class: "bm-dup" },
+    h("legend", { class: "mono small", text: g.url }),
+    ...g.items.map((it) => {
+      const box = h("input", { type: "checkbox", checked: it.id !== g.keep, onchange: update,
+        "aria-label": "Remove " + (it.title || it.url) + (it.path.length ? " in " + it.path.join(" / ") : "") });
+      const row = h("label", { class: "bm-dup-row" }, box,
+        h("span", { class: "main" },
+          h("span", { class: "name", text: it.title || "(no title)" }),
+          it.id === g.keep && h("span", { class: "tag", text: "suggested to keep" }),
+          h("span", { class: "muted small", text: " in " + (it.path.join(" / ") || "top level") }),
+          it.url !== g.url && h("span", { class: "mono muted small bm-dup-url", text: it.url })));
+      boxes.push({ id: it.id, group: gi, box, row });
+      return row;
+    })));
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    try {
+      const r = await api("POST", "profiles/" + profile + "/duplicates/remove", { ids: boxes.filter((b) => b.box.checked).map((b) => b.id) });
+      close();
+      toast("Removed " + r.removed + (r.removed === 1 ? " bookmark" : " bookmarks") + ". Restore under Profiles brings them back.");
+      render();
+    } catch (e) {
+      // Most likely the tree changed since the list was made: look again.
+      close(); toast(e.message); render();
+    }
+  });
+  dlg.append(
+    h("h2", { text: groups.length + (groups.length === 1 ? " link is" : " links are") + " saved more than once" }),
+    h("p", { class: "muted", text: "Copies are ticked for removal except one per link. Change the ticks as you like; nothing is removed until you press the button. The tree as it is now is kept for Restore under Profiles, and every browser of the profile follows on its next sync." }),
+    h("div", { class: "bm-dup-list" }, body),
+    summary,
+    h("div", { class: "actions" }, go, h("button", { class: "btn quiet", type: "button", text: "Cancel", onclick: close })));
+  dlg.addEventListener("cancel", () => dlg.remove());
+  document.body.append(dlg);
+  update();
   dlg.showModal();
 }

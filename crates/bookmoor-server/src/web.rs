@@ -98,6 +98,11 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/profiles/{id}/edit", post(edit_profile))
         .route("/ui/api/profiles/{id}/clear", post(clear_profile))
         .route("/ui/api/profiles/{id}/dedupe", post(dedupe_profile))
+        .route("/ui/api/profiles/{id}/duplicates", get(duplicates))
+        .route(
+            "/ui/api/profiles/{id}/duplicates/remove",
+            post(remove_duplicates),
+        )
         .route("/ui/api/profiles/{id}/restore", post(restore_profile))
         .route("/ui/api/profiles/{id}/export", get(export_profile))
         .route("/ui/api/profiles/{id}/import", post(import_profile))
@@ -1458,6 +1463,42 @@ async fn dedupe_profile(
         bookmarks_removed: done.bookmarks_removed,
         folders_merged: done.folders_merged,
     }))
+}
+
+/// Bookmarks saved more than once, grouped, for the review before removal.
+async fn duplicates(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::tidy::DupGroup>>, ApiError> {
+    let st = s.lock().unwrap();
+    if !st.profiles.get(&id).is_some_and(|p| p.user_id == a.user.id) {
+        return Err(ApiError::Forbidden);
+    }
+    st.duplicates(&id)
+        .map(Json)
+        .map_err(ApiError::Unprocessable)
+}
+
+#[derive(Deserialize)]
+struct RemoveDuplicates {
+    ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct Removed {
+    removed: usize,
+}
+
+/// Removes the bookmarks picked in the review; the old tree stays restorable.
+async fn remove_duplicates(
+    State(s): State<Shared>,
+    a: Authed,
+    Path(id): Path<String>,
+    Json(b): Json<RemoveDuplicates>,
+) -> Result<Json<Removed>, ApiError> {
+    let removed = change_tree(&s, &a, &id, |st, id| st.remove_duplicates(id, &b.ids))?;
+    Ok(Json(Removed { removed }))
 }
 
 /// The file a profile is downloaded as and imported from.
@@ -2836,6 +2877,67 @@ mod tests {
             )
             .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn duplicates_are_reviewed_before_they_are_removed() {
+        let u = ui();
+        let anna = u.setup("anna").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let pid = v[0]["id"].as_str().unwrap().to_string();
+        for (parent, title) in [("toolbar", "One"), ("other", "Two")] {
+            let body = serde_json::json!({"type":"add","parent":parent,"kind":"bookmark",
+                "title":title,"url":"https://dup.example/"});
+            let r = u
+                .post(&format!("/ui/api/profiles/{pid}/edit"), Some(&anna), body)
+                .await;
+            assert_eq!(r.0, StatusCode::NO_CONTENT);
+        }
+        let (st, g, _) = u
+            .call(
+                "GET",
+                &format!("/ui/api/profiles/{pid}/duplicates"),
+                Some(&anna),
+                None,
+                false,
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK);
+        let items = g[0]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let keep = g[0]["keep"].as_str().unwrap().to_string();
+        let drop = items
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_string())
+            .find(|i| *i != keep)
+            .unwrap();
+        // Removing every copy is refused.
+        let all = serde_json::json!({"ids":[keep, drop]});
+        let r = u
+            .post(
+                &format!("/ui/api/profiles/{pid}/duplicates/remove"),
+                Some(&anna),
+                all,
+            )
+            .await;
+        assert_eq!(r.0, StatusCode::UNPROCESSABLE_ENTITY);
+        let one = serde_json::json!({"ids":[drop]});
+        let (st, v, _) = u
+            .post(
+                &format!("/ui/api/profiles/{pid}/duplicates/remove"),
+                Some(&anna),
+                one,
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(v["removed"], 1);
+        let (_, p, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        assert_eq!(p[0]["bookmarks"], 1);
+        assert_eq!(p[0]["backup"]["bookmarks"], 2);
     }
 
     #[tokio::test]
