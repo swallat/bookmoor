@@ -249,7 +249,7 @@ function setupView() {
 
 function shell(content) {
   const tabs = me.mfa_setup_needed ? [["account", "Account"]]
-    : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"], ["dynacat", "Dynacat"]] : []), ["account", "Account"]];
+    : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"], ["dynacat", "Dynacat"], ["linkwarden", "Linkwarden"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" + (tab === "bookmarks" ? " wide" : "") },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -920,6 +920,115 @@ async function dynacatView() {
       h("div", { class: "list" }, rows.length ? rows : [h("p", { class: "empty", text: "No outputs yet." })])));
 }
 
+let lwSeq = 0;
+
+/** The form for one Linkwarden connection; `init` (a row) preselects its values when editing. */
+function linkwardenForm(info, init, label, save) {
+  const k = "lw" + (++lwSeq) + "-";
+  const v = init || {};
+  const profile = h("select", { id: k + "profile", name: "profile" },
+    info.profiles.map((p) => h("option", { value: p.id, text: p.label })));
+  const folder = h("select", { id: k + "folder", name: "folder" }, h("option", { value: "", text: "Whole profile" }));
+  if (v.profile_id && info.profiles.some((p) => p.id === v.profile_id)) profile.value = v.profile_id;
+  const load = async (want) => {
+    folder.replaceChildren(h("option", { value: "", text: "Whole profile" }));
+    if (!profile.value) return;
+    try {
+      const paths = await api("GET", "dynacat/folders?profile=" + encodeURIComponent(profile.value));
+      for (const p of paths) folder.append(h("option", { value: p, text: p }));
+      if (want && !paths.includes(want)) folder.append(h("option", { value: want, text: want + " (not found)" }));
+      if (want) folder.value = want;
+    } catch { /* the select keeps its one option */ }
+  };
+  profile.addEventListener("change", () => load(""));
+  load(v.folder || "");
+  const url = field(k + "url", "Linkwarden address", { type: "url", placeholder: "https://links.example.com", required: true, autocapitalize: "off", value: v.url || "" });
+  const token = field(k + "token", "Access token", { type: "password", autocomplete: "off", placeholder: init ? "unchanged" : "", required: !init },
+    "Linkwarden: Settings, Access Tokens. It is stored in the state file as it is.");
+  const collection = field(k + "collection", "Collection", { type: "text", maxlength: "200", required: true, value: v.collection || "Bookmoor" },
+    "Everything lives in this collection (made if it does not exist). Folders become collections inside it.");
+  const mode = h("select", { id: k + "mode", name: "mode" },
+    h("option", { value: "both", text: "Both ways" }),
+    h("option", { value: "push", text: "Bookmoor to Linkwarden only" }),
+    h("option", { value: "pull", text: "Linkwarden to Bookmoor only" }));
+  mode.value = v.mode || "both";
+  const interval = field(k + "interval", "Check Linkwarden every (seconds)", { type: "number", min: "30", max: "86400", value: String(v.interval || 300) },
+    "Changes made in Bookmoor go over within seconds.");
+  return form([
+    h("div", { class: "form-row fields" },
+      h("div", { class: "field" }, h("label", { for: k + "profile", text: "Profile" }), profile),
+      h("div", { class: "field" }, h("label", { for: k + "folder", text: "Folder" }), folder)),
+    h("div", { class: "form-row fields" }, url, token),
+    h("div", { class: "form-row fields" }, collection,
+      h("div", { class: "field" }, h("label", { for: k + "mode", text: "Direction" }), mode), interval),
+  ], label, async (_data, f) => {
+    await save({
+      profile: profile.value,
+      folder: folder.value,
+      url: url.querySelector("input").value,
+      token: token.querySelector("input").value,
+      collection: collection.querySelector("input").value,
+      mode: mode.value,
+      interval: Number(interval.querySelector("input").value),
+    }, f);
+  });
+}
+
+async function linkwardenView() {
+  const info = await api("GET", "linkwarden");
+  const stamp = (secs) => new Date(secs * 1000).toLocaleString();
+  const rows = info.connections.map((c) => {
+    let editor = null;
+    const syncBtn = (force) => h("button", { class: "btn quiet small", type: "button", text: force ? "Sync anyway" : "Sync now", onclick: async (e) => {
+      e.target.disabled = true;
+      try {
+        const r = await api("POST", "linkwarden/" + encodeURIComponent(c.id) + "/sync" + (force ? "?force=true" : ""));
+        toast(r.message);
+      } catch (x) { toast(x.message); }
+      render();
+    } });
+    const row = h("div", { class: "row" },
+      h("div", { class: "main" },
+        h("div", { class: "name", text: c.collection + " at " + c.url }),
+        h("div", { class: "muted small", text: c.profile + " · " + (c.folder ? c.folder : "whole profile") + " · " + ({ both: "both ways", push: "Bookmoor to Linkwarden", pull: "Linkwarden to Bookmoor" }[c.mode]) + " · every " + c.interval + " s · " + c.paired + " items paired" }),
+        c.running && h("div", { class: "muted small", text: "Syncing now…" }),
+        !c.running && c.message && h("div", { class: c.failed ? "error small" : "muted small", role: c.failed ? "alert" : null, text: (c.last_run ? stamp(c.last_run) + ": " : "") + c.message }),
+        !c.running && !c.message && h("div", { class: "muted small", text: "Not run yet." })),
+      h("div", { class: "actions" },
+        syncBtn(false),
+        c.failed && c.message.startsWith("Paused") && syncBtn(true),
+        h("button", { class: "btn quiet small", type: "button", text: "Edit", onclick: () => {
+          if (editor) { editor.remove(); editor = null; return; }
+          editor = linkwardenForm(info, c, "Save connection", async (body) => {
+            await api("PUT", "linkwarden/" + encodeURIComponent(c.id), body);
+            toast("Saved");
+            render();
+          });
+          row.after(editor);
+        } }),
+        confirmButton("Remove", "Yes, remove", async () => {
+          await api("DELETE", "linkwarden/" + encodeURIComponent(c.id));
+          toast("Removed. Bookmarks stay on both sides.");
+          render();
+        })));
+    return row;
+  });
+  return h("div", { class: "stack" },
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Linkwarden" }),
+      h("p", { class: "muted", text: "Keep a profile (or one folder of it) and a Linkwarden collection in step, both ways: bookmarks added, renamed, moved or deleted on either side show up on the other, and on every browser. Folders become collections inside the one you name. Tags, notes and archives in Linkwarden are left alone; the order of bookmarks is not synced." }),
+      h("p", { class: "hint", text: "If both sides changed the same thing, Bookmoor wins; an edit always beats a delete. A run that would delete most of what it knows stops and asks first." }),
+      linkwardenForm(info, null, "Connect Linkwarden", async (body, f) => {
+        await api("POST", "linkwarden", body);
+        toast("Connected. The first sync is running.");
+        f.reset();
+        render();
+      })),
+    h("div", { class: "stack-sm" },
+      h("h2", { text: "Connections" }),
+      h("div", { class: "list" }, rows.length ? rows : [h("p", { class: "empty", text: "No connections yet." })])));
+}
+
 
 let passkeyList = null; // fetched on every visit to the Account tab
 
@@ -1002,10 +1111,10 @@ async function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, sso: ssoAdminView, dynacat: dynacatView, account: accountView };
-  if ((tab === "users" || tab === "sso" || tab === "dynacat") && !me.admin) tab = "devices";
+  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, sso: ssoAdminView, dynacat: dynacatView, linkwarden: linkwardenView, account: accountView };
+  if ((tab === "users" || tab === "sso" || tab === "dynacat" || tab === "linkwarden") && !me.admin) tab = "devices";
   if (me.mfa_setup_needed) tab = "account"; // nothing else works until it is set up
-  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", sso: "Single sign-on", dynacat: "Dynacat", account: "Account" }[tab] + " · bookmoor";
+  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", sso: "Single sign-on", dynacat: "Dynacat", linkwarden: "Linkwarden", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }

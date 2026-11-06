@@ -5,6 +5,7 @@ pub mod adapter;
 pub mod diff;
 pub mod dynacat;
 pub mod identity;
+pub mod linkwarden;
 pub mod merge;
 pub mod model;
 pub mod position;

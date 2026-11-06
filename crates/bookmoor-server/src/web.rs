@@ -6,7 +6,7 @@
 //! `SameSite=Strict` cookie, so a cross-site form post cannot act as a user.
 
 use crate::api::{retry_after, save, ApiError, AppState, Shared};
-use crate::auth::{Scope, TokenRecord};
+use crate::auth::{random_id, Scope, TokenRecord};
 use crate::ratelimit::client_key;
 use crate::users::{check_password, hash_password, verify_password, User};
 use axum::extract::{ConnectInfo, FromRequestParts, Path, Request, State};
@@ -116,6 +116,15 @@ pub fn routes() -> Router<Shared> {
             "/ui/api/dynacat/{id}",
             delete(remove_dynacat).put(change_dynacat),
         )
+        .route(
+            "/ui/api/linkwarden",
+            get(linkwarden_list).post(add_linkwarden),
+        )
+        .route(
+            "/ui/api/linkwarden/{id}",
+            delete(remove_linkwarden).put(change_linkwarden),
+        )
+        .route("/ui/api/linkwarden/{id}/sync", post(sync_linkwarden))
         .route("/ui/api/password", post(change_password))
         .route("/ui/api/users", get(users).post(add_user))
         .route("/ui/api/users/{id}", delete(remove_user))
@@ -1319,6 +1328,267 @@ async fn remove_dynacat(
 }
 
 #[derive(Serialize)]
+struct LinkwardenRow {
+    id: String,
+    profile_id: String,
+    profile: String,
+    folder: String,
+    url: String,
+    collection: String,
+    mode: &'static str,
+    interval: u64,
+    /// Items both sides know about.
+    paired: usize,
+    running: bool,
+    last_run: Option<u64>,
+    last_ok: Option<u64>,
+    message: String,
+    failed: bool,
+}
+
+#[derive(Serialize)]
+struct LinkwardenInfo {
+    profiles: Vec<DynacatProfile>,
+    connections: Vec<LinkwardenRow>,
+}
+
+fn mode_name(m: bookmoor_core::linkwarden::Mode) -> &'static str {
+    use bookmoor_core::linkwarden::Mode;
+    match m {
+        Mode::Both => "both",
+        Mode::Push => "push",
+        Mode::Pull => "pull",
+    }
+}
+
+/// Linkwarden connections; admins only, because the server makes the
+/// requests (to an address the admin gives) with a stored access token.
+async fn linkwarden_list(State(s): State<Shared>, _: Admin) -> Json<LinkwardenInfo> {
+    let st = s.lock().unwrap();
+    let connections = st
+        .linkwarden
+        .iter()
+        .map(|l| {
+            let status = st.linkwarden_status.get(&l.id).cloned().unwrap_or_default();
+            LinkwardenRow {
+                id: l.id.clone(),
+                profile_id: l.profile_id.clone(),
+                profile: profile_label(&st, &l.profile_id),
+                folder: l.folder.join("/"),
+                url: l.url.clone(),
+                collection: l.collection.clone(),
+                mode: mode_name(l.mode),
+                interval: l.interval,
+                paired: l.pairs.len(),
+                running: status.running,
+                last_run: status.last_run,
+                last_ok: status.last_ok,
+                message: status.message,
+                failed: status.failed,
+            }
+        })
+        .collect();
+    let profiles = st
+        .profiles
+        .list()
+        .map(|p| DynacatProfile {
+            id: p.id.clone(),
+            label: profile_label(&st, &p.id),
+            name: p.name.clone(),
+        })
+        .collect();
+    Json(LinkwardenInfo {
+        profiles,
+        connections,
+    })
+}
+
+#[derive(Deserialize)]
+struct LinkwardenBody {
+    profile: String,
+    /// `A/B/C`, empty for the whole profile.
+    #[serde(default)]
+    folder: String,
+    url: String,
+    /// Empty when changing a connection keeps the stored token.
+    #[serde(default)]
+    token: String,
+    collection: String,
+    #[serde(default)]
+    mode: bookmoor_core::linkwarden::Mode,
+    #[serde(default = "crate::linkwarden::default_interval")]
+    interval: u64,
+}
+
+fn split_folder(f: &str) -> Vec<String> {
+    f.split('/')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Whether Linkwarden answers to this token; nothing is changed there.
+async fn linkwarden_reachable(l: &crate::linkwarden::Linkwarden) -> Result<(), ApiError> {
+    let client =
+        crate::linkwarden::Client::new(&l.url, &l.token).map_err(ApiError::Unprocessable)?;
+    client
+        .collections()
+        .await
+        .map(drop)
+        .map_err(|e| ApiError::Unprocessable(e.to_string()))
+}
+
+async fn add_linkwarden(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Json(b): Json<LinkwardenBody>,
+) -> Result<StatusCode, ApiError> {
+    let mut l = crate::linkwarden::Linkwarden {
+        id: random_id("lw_"),
+        profile_id: b.profile,
+        folder: split_folder(&b.folder),
+        url: b.url,
+        token: b.token,
+        collection: b.collection,
+        collection_id: None,
+        mode: b.mode,
+        interval: b.interval,
+        pairs: Vec::new(),
+    };
+    l.check().map_err(ApiError::Unprocessable)?;
+    {
+        let st = s.lock().unwrap();
+        still_admin(&st, &a)?;
+        st.check_linkwarden(&l).map_err(ApiError::Unprocessable)?;
+    }
+    // A wrong address or token is refused here, not found out later.
+    linkwarden_reachable(&l).await?;
+    let id = l.id.clone();
+    {
+        let mut st = s.lock().unwrap();
+        still_admin(&st, &a)?;
+        st.check_linkwarden(&l).map_err(ApiError::Unprocessable)?;
+        st.linkwarden.push(l);
+        save(&mut st)?;
+    }
+    // The first run starts at once; its outcome shows on the row.
+    let state = s.clone();
+    tokio::spawn(async move {
+        let _ = crate::linkwarden::sync_now(&state, &id, false).await;
+    });
+    Ok(StatusCode::CREATED)
+}
+
+async fn change_linkwarden(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Path(id): Path<String>,
+    Json(b): Json<LinkwardenBody>,
+) -> Result<StatusCode, ApiError> {
+    let mut l = {
+        let st = s.lock().unwrap();
+        still_admin(&st, &a)?;
+        st.linkwarden
+            .iter()
+            .find(|l| l.id == id)
+            .cloned()
+            .ok_or_else(|| ApiError::Unprocessable("no such connection".into()))?
+    };
+    let old = l.clone();
+    let new_token = !b.token.trim().is_empty();
+    if new_token {
+        l.token = b.token;
+    }
+    l.profile_id = b.profile;
+    l.folder = split_folder(&b.folder);
+    l.url = b.url;
+    l.collection = b.collection;
+    l.mode = b.mode;
+    l.interval = b.interval;
+    l.check().map_err(ApiError::Unprocessable)?;
+    // The stored token only ever goes to the address it was made for.
+    if old.url != l.url && !new_token {
+        return Err(ApiError::Unprocessable(
+            "access token: enter it again when the address changes".into(),
+        ));
+    }
+    // Another place or collection is a fresh start: what was paired is not
+    // meaningful there (the first run matches by name and address).
+    let moved = old.profile_id != l.profile_id
+        || old.folder != l.folder
+        || old.collection != l.collection
+        || old.url != l.url;
+    if moved {
+        l.pairs.clear();
+        l.collection_id = None;
+    }
+    if moved || old.token != l.token {
+        linkwarden_reachable(&l).await?;
+    }
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    st.check_linkwarden(&l).map_err(ApiError::Unprocessable)?;
+    let Some(slot) = st.linkwarden.iter_mut().find(|x| x.id == id) else {
+        return Err(ApiError::Unprocessable("no such connection".into()));
+    };
+    // Pairs made by a run that finished meanwhile are kept unless it moved.
+    if !moved {
+        l.pairs = slot.pairs.clone();
+        l.collection_id = slot.collection_id;
+    }
+    *slot = l;
+    // A run in progress keeps its flag; it notices the change when it ends.
+    if st.linkwarden_status.get(&id).is_some_and(|s| !s.running) {
+        st.linkwarden_status.remove(&id);
+    }
+    save(&mut st)?;
+    st.linkwarden_wake.notify_one();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_linkwarden(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    let Some(i) = st.linkwarden.iter().position(|l| l.id == id) else {
+        return Err(ApiError::Unprocessable("no such connection".into()));
+    };
+    // What was synced stays on both sides.
+    st.linkwarden.remove(i);
+    st.linkwarden_status.remove(&id);
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, Default)]
+struct SyncQuery {
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Serialize)]
+struct SyncResult {
+    message: String,
+}
+
+async fn sync_linkwarden(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<SyncQuery>,
+) -> Result<Json<SyncResult>, ApiError> {
+    still_admin(&s.lock().unwrap(), &a)?;
+    crate::linkwarden::sync_now(&s, &id, q.force)
+        .await
+        .map(|message| Json(SyncResult { message }))
+        .map_err(ApiError::Unprocessable)
+}
+
+#[derive(Serialize)]
 struct ProfileRow {
     id: String,
     name: String,
@@ -2171,6 +2441,115 @@ mod tests {
             // Remote images (site icons) are allowed on the page only.
             assert_eq!(csp.contains("img-src 'self' data: https:"), path == "/");
         }
+    }
+
+    #[tokio::test]
+    async fn admins_manage_linkwarden_connections() {
+        let u = ui();
+        let anna = u.setup("anna").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let profile = v[0]["id"].as_str().unwrap().to_string();
+        let body = |url: &str, token: &str, coll: &str| serde_json::json!({"profile": profile, "url": url, "token": token, "collection": coll});
+        // Nothing is stored for a wrong address, token, name or unreachable server.
+        for (b, why) in [
+            (body("links.example.com", "t", "Bookmoor"), "address"),
+            (body("https://l.example", "", "Bookmoor"), "token"),
+            (body("https://l.example", "t", " "), "collection"),
+            (body("http://127.0.0.1:1", "t", "Bookmoor"), "cannot reach"),
+        ] {
+            let (st, v, _) = u.post("/ui/api/linkwarden", Some(&anna), b).await;
+            assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "{why}");
+            assert!(v["error"].as_str().unwrap().contains(why), "{v}");
+        }
+        assert!(u.state.lock().unwrap().linkwarden.is_empty());
+        let mut bad = body("https://l.example", "t", "Bookmoor");
+        bad["interval"] = 5.into();
+        assert_eq!(
+            u.post("/ui/api/linkwarden", Some(&anna), bad).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        // A connection in the state shows up without its token.
+        u.state
+            .lock()
+            .unwrap()
+            .linkwarden
+            .push(crate::linkwarden::Linkwarden {
+                id: "lw_1".into(),
+                profile_id: profile.clone(),
+                folder: vec![],
+                url: "https://l.example".into(),
+                token: "secret-token".into(),
+                collection: "Bookmoor".into(),
+                collection_id: Some(3),
+                mode: bookmoor_core::linkwarden::Mode::Both,
+                interval: 300,
+                pairs: vec![],
+            });
+        let (st, v, _) = u
+            .call("GET", "/ui/api/linkwarden", Some(&anna), None, false)
+            .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(v["connections"][0]["collection"], "Bookmoor");
+        assert!(!v.to_string().contains("secret-token"));
+
+        // Changing mode and interval keeps the token and what is paired.
+        let mut change = body("https://l.example", "", "Bookmoor");
+        change["mode"] = "push".into();
+        change["interval"] = 600.into();
+        let (st, _, _) = u
+            .call(
+                "PUT",
+                "/ui/api/linkwarden/lw_1",
+                Some(&anna),
+                Some(change),
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        {
+            let st = u.state.lock().unwrap();
+            let l = &st.linkwarden[0];
+            assert_eq!(
+                (l.token.as_str(), l.interval, l.collection_id),
+                ("secret-token", 600, Some(3))
+            );
+            assert_eq!(l.mode, bookmoor_core::linkwarden::Mode::Push);
+        }
+        // A new address never takes the stored token along.
+        let (st, v, _) = u
+            .call(
+                "PUT",
+                "/ui/api/linkwarden/lw_1",
+                Some(&anna),
+                Some(body("http://127.0.0.1:1", "", "Bookmoor")),
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            v["error"].as_str().unwrap().contains("enter it again"),
+            "{v}"
+        );
+        // Another collection is a fresh start and needs a reachable server.
+        let (st, _, _) = u
+            .call(
+                "PUT",
+                "/ui/api/linkwarden/lw_1",
+                Some(&anna),
+                Some(body("https://l.example", "", "Other")),
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(u.state.lock().unwrap().linkwarden[0].collection, "Bookmoor");
+        let (st, _, _) = u
+            .call("DELETE", "/ui/api/linkwarden/lw_1", Some(&anna), None, true)
+            .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        assert!(u.state.lock().unwrap().linkwarden.is_empty());
     }
 
     #[tokio::test]
