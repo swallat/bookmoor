@@ -247,27 +247,42 @@ pub fn render_styled(nodes: &[WireNode], folder: &[&str], style: &Style) -> Opti
 /// Most columns a Dynacat page can have.
 pub const MAX_PAGE_COLUMNS: usize = 3;
 
-/// Render one Dynacat page that holds `widgets` (each as returned by
-/// [`render_styled`]) inline, spread over `columns` columns (1 to 3, round
-/// robin in the given order).
-///
-/// The page is written as a YAML list item, `- name: ...`: Dynacat's
-/// `$include` replaces the whole `- $include: FILE` line (dash included) with
-/// the file's text, so a page file included from `pages:` must start with the
-/// dash itself. Column sizes follow Dynacat's rules (at least one and at most
-/// two `full` columns): `full`; `full, full`; `small, full, small`.
-pub fn render_page(name: &str, columns: usize, widgets: &[String]) -> String {
-    let columns = columns.clamp(1, MAX_PAGE_COLUMNS);
-    let sizes: &[&str] = match columns {
+/// The `size:` of each column of a page with `columns` columns (Dynacat wants
+/// one or two `full` ones): `full`; `full, full`; `small, full, small`.
+fn column_sizes(columns: usize) -> &'static [&'static str] {
+    match columns.clamp(1, MAX_PAGE_COLUMNS) {
         1 => &["full"],
         2 => &["full", "full"],
         _ => &["small", "full", "small"],
-    };
-    let mut out = String::from(HEADER);
+    }
+}
+
+/// Append one page, `- name: ...`, to `out`. `widgets` are `(weight, YAML)`;
+/// with `balance` each goes to the column with the least weight so far (ties:
+/// the first), otherwise they go round robin. Either way the order within a
+/// column follows the order given.
+fn push_page(
+    out: &mut String,
+    name: &str,
+    columns: usize,
+    widgets: &[(usize, String)],
+    balance: bool,
+) {
+    let sizes = column_sizes(columns);
+    let mut cols: Vec<Vec<&String>> = vec![Vec::new(); sizes.len()];
+    let mut load = vec![0usize; sizes.len()];
+    for (i, (weight, w)) in widgets.iter().enumerate() {
+        let c = if balance {
+            (0..sizes.len()).min_by_key(|&c| (load[c], c)).unwrap_or(0)
+        } else {
+            i % sizes.len()
+        };
+        load[c] += weight + 2;
+        cols[c].push(w);
+    }
     out.push_str(&format!("- name: {}\n  columns:\n", scalar(name)));
-    for (c, size) in sizes.iter().enumerate() {
+    for (size, mine) in sizes.iter().zip(&cols) {
         out.push_str(&format!("    - size: {size}\n      widgets:"));
-        let mine: Vec<&String> = widgets.iter().skip(c).step_by(columns).collect();
         if mine.is_empty() {
             out.push_str(" []\n");
             continue;
@@ -281,6 +296,277 @@ pub fn render_page(name: &str, columns: usize, widgets: &[String]) -> String {
                 out.push('\n');
             }
         }
+    }
+}
+
+/// Render one Dynacat page that holds `widgets` (each as returned by
+/// [`render_styled`]) inline, spread over `columns` columns (1 to 3, round
+/// robin in the given order).
+///
+/// The page is written as a YAML list item, `- name: ...`: Dynacat's
+/// `$include` replaces the whole `- $include: FILE` line (dash included) with
+/// the file's text, so a page file included from `pages:` must start with the
+/// dash itself.
+pub fn render_page(name: &str, columns: usize, widgets: &[String]) -> String {
+    let mut out = String::from(HEADER);
+    let weighted: Vec<(usize, String)> = widgets.iter().map(|w| (0, w.clone())).collect();
+    push_page(&mut out, name, columns, &weighted, false);
+    out
+}
+
+/// Where link icons come from on a profile page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IconSource {
+    /// No icons.
+    None,
+    /// Only well-known services (`di:jira`, ...): nothing is asked of other
+    /// sites, Dynacat loads these from its icon set.
+    #[default]
+    Known,
+    /// Known services, otherwise the favicon from Google
+    /// (`google.com/s2/favicons`): Google learns the site names.
+    Google,
+    /// Known services, otherwise `https://HOST/favicon.ico`: the viewer's
+    /// browser contacts every site.
+    Site,
+}
+
+/// `di:` icon for a few well-known services, by their URL.
+fn known_icon(url: &str) -> Option<&'static str> {
+    let lower = url.to_ascii_lowercase();
+    let host = host_of(&lower)?;
+    // (host or parent domain, or a label of the host, icon)
+    let on = |d: &str| host == d || host.ends_with(&format!(".{d}"));
+    let label = |l: &str| {
+        host.split('.')
+            .any(|p| p == l || p.starts_with(&format!("{l}-")))
+    };
+    if host.ends_with("sharepoint.com") && lower.contains("/onedrive.aspx") {
+        return Some("di:microsoft-onedrive");
+    }
+    let icon = if on("sharepoint.com") {
+        "di:microsoft-sharepoint"
+    } else if label("outlook") {
+        "di:microsoft-outlook"
+    } else if label("confluence") {
+        "di:confluence"
+    } else if label("jira") {
+        "di:jira"
+    } else if label("gitlab") || on("gitlab.com") {
+        "di:gitlab"
+    } else if on("github.com") {
+        "di:github"
+    } else if on("youtube.com") || on("youtu.be") {
+        "di:youtube"
+    } else if label("artifactory") {
+        "di:artifactory"
+    } else if label("checkmk") {
+        "di:checkmk"
+    } else if on("ups.com") {
+        "di:ups"
+    } else {
+        return None;
+    };
+    Some(icon)
+}
+
+/// Host name of a http(s) URL (no port, no credentials).
+fn host_of(url: &str) -> Option<&str> {
+    let (_, rest) = url.split_once("://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    if host.is_empty() || host.contains('@') {
+        return None;
+    }
+    let host = match host.rsplit_once(':') {
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => host,
+    };
+    // Plain DNS names only: the host ends up in a query string.
+    host.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .then_some(host)
+}
+
+fn link_icon(url: &str, source: IconSource) -> Option<String> {
+    if source == IconSource::None {
+        return None;
+    }
+    if let Some(i) = known_icon(url) {
+        return Some(i.to_string());
+    }
+    match source {
+        IconSource::Google => Some(format!(
+            "https://www.google.com/s2/favicons?sz=64&domain={}",
+            host_of(url)?
+        )),
+        IconSource::Site => icon_url(url),
+        _ => None,
+    }
+}
+
+/// A `bookmarks` widget with one group of links, as lines without indent.
+/// The widget's `title-icon` is the `di:` icon most links share (more than
+/// half of them), which gives tabs and headings a recognisable mark.
+fn bookmarks_widget(title: &str, links: &[(String, String)], icons: IconSource) -> String {
+    let icons_of: Vec<Option<String>> = links.iter().map(|(_, u)| link_icon(u, icons)).collect();
+    let mut count: BTreeMap<&str, usize> = BTreeMap::new();
+    for i in icons_of.iter().flatten().filter(|i| i.starts_with("di:")) {
+        *count.entry(i.as_str()).or_default() += 1;
+    }
+    let title_icon = count
+        .into_iter()
+        .max_by_key(|&(name, n)| (n, std::cmp::Reverse(name)))
+        .filter(|&(_, n)| n * 2 > links.len())
+        .map(|(name, _)| name);
+    let mut out = format!("type: bookmarks\ntitle: {}\n", scalar(title));
+    if let Some(i) = title_icon {
+        out.push_str(&format!("title-icon: {}\n", scalar(i)));
+    }
+    out.push_str("groups:\n  - links:\n");
+    for ((t, u), icon) in links.iter().zip(&icons_of) {
+        out.push_str(&format!(
+            "      - title: {}\n        url: {}\n",
+            scalar(t),
+            scalar(u)
+        ));
+        if let Some(i) = icon {
+            out.push_str(&format!("        icon: {}\n", scalar(i)));
+        }
+    }
+    out
+}
+
+/// Render the pages of one profile's tree: a section for every folder directly
+/// under a top-level folder (`toolbar`, `other`, `mobile`), plus one for the
+/// bookmarks lying loose in a top-level folder. `None` without a root.
+///
+/// A folder with subfolders becomes a `group` widget (tabs): its own
+/// bookmarks first, then one `bookmarks` widget per subfolder, titled
+/// `Folder › Sub › Subsub`. A folder without subfolders is a plain `bookmarks`
+/// widget. Sections are spread over the columns by number of links, so tall
+/// ones do not pile up. The result is one list item `- name: ...`.
+fn profile_page(
+    out: &mut String,
+    name: &str,
+    columns: usize,
+    nodes: &[WireNode],
+    icons: IconSource,
+) {
+    let mut kids: BTreeMap<&str, Vec<&WireNode>> = BTreeMap::new();
+    let mut root = None;
+    for n in nodes {
+        match &n.parent {
+            Some(p) => kids.entry(p.as_str()).or_default().push(n),
+            None => root = Some(n),
+        }
+    }
+    for list in kids.values_mut() {
+        list.sort_by(|a, b| (&a.position, &a.id).cmp(&(&b.position, &b.id)));
+    }
+    fn folder_title(c: &WireNode) -> String {
+        match c.title.trim() {
+            "" => "(unnamed)".to_string(),
+            t => t.to_string(),
+        }
+    }
+    /// `(title, links)` of the folder and its subfolders, depth first.
+    fn walk(
+        kids: &BTreeMap<&str, Vec<&WireNode>>,
+        folder: &WireNode,
+        title: &str,
+        depth: usize,
+        out: &mut Vec<(String, Vec<(String, String)>)>,
+    ) {
+        let children = kids
+            .get(folder.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let links = own_links(children);
+        if !links.is_empty() {
+            out.push((title.to_string(), links));
+        }
+        if depth >= MAX_DEPTH {
+            return;
+        }
+        for c in children.iter().filter(|c| c.kind == Kind::Folder) {
+            walk(
+                kids,
+                c,
+                &format!("{title} › {}", folder_title(c)),
+                depth + 1,
+                out,
+            );
+        }
+    }
+    let mut sections: Vec<(usize, String)> = Vec::new();
+    let mut add = |parts: Vec<(String, Vec<(String, String)>)>| {
+        let weight: usize = parts.iter().map(|(_, l)| l.len()).sum();
+        let widgets: Vec<String> = parts
+            .iter()
+            .map(|(t, l)| bookmarks_widget(t, l, icons))
+            .collect();
+        match widgets.len() {
+            0 => {}
+            1 => sections.push((weight, widgets.into_iter().next().unwrap_or_default())),
+            _ => {
+                let mut g = String::from("type: group\nwidgets:\n");
+                for w in &widgets {
+                    for (i, line) in w.lines().enumerate() {
+                        g.push_str(if i == 0 { "  - " } else { "    " });
+                        g.push_str(line);
+                        g.push('\n');
+                    }
+                }
+                sections.push((weight, g));
+            }
+        }
+    };
+    if let Some(root) = root {
+        let tops = kids.get(root.id.as_str()).map(Vec::as_slice).unwrap_or(&[]);
+        let root_links = own_links(tops);
+        if !root_links.is_empty() {
+            add(vec![(folder_title(root), root_links)]);
+        }
+        for top in tops.iter().filter(|c| c.kind == Kind::Folder) {
+            let children = kids.get(top.id.as_str()).map(Vec::as_slice).unwrap_or(&[]);
+            let loose = own_links(children);
+            if !loose.is_empty() {
+                add(vec![(folder_title(top), loose)]);
+            }
+            for f in children.iter().filter(|c| c.kind == Kind::Folder) {
+                let mut parts = Vec::new();
+                walk(&kids, f, &folder_title(f), 1, &mut parts);
+                add(parts);
+            }
+        }
+    }
+    push_page(out, name, columns, &sections, true);
+}
+
+/// Render a file with one page per `(name, tree)` of `profiles`, each laid out
+/// by [`profile_page`]'s rules. Starts with [`HEADER`].
+pub fn render_profile_pages(
+    profiles: &[(String, Vec<WireNode>)],
+    columns: usize,
+    icons: IconSource,
+) -> String {
+    let mut out = String::from(HEADER);
+    if profiles.is_empty() {
+        // Not a valid page list without an entry, so keep it an empty list.
+        out.push_str("[]\n");
+        return out;
+    }
+    // Dynacat derives the URL from the name: keep the names apart.
+    let mut used: Vec<String> = Vec::new();
+    for (name, nodes) in profiles {
+        let mut unique = name.clone();
+        let mut n = 1;
+        while used.contains(&unique.to_lowercase()) {
+            n += 1;
+            unique = format!("{name} ({n})");
+        }
+        used.push(unique.to_lowercase());
+        profile_page(&mut out, &unique, columns, nodes, icons);
     }
     out
 }
@@ -697,5 +983,150 @@ groups:\n\
             .collect::<Vec<_>>()
             .join("\n");
         assert!(merged.contains("\n  - name: \"P\"\n    columns:\n      - size: full\n"));
+    }
+
+    fn profile_tree() -> Vec<WireNode> {
+        let b = |id: &str, parent: &str, pos: &str, t: &str, u: &str| {
+            node(id, Some(parent), pos, Kind::Bookmark, t, Some(u))
+        };
+        let f = |id: &str, parent: &str, pos: &str, t: &str| {
+            node(id, Some(parent), pos, Kind::Folder, t, None)
+        };
+        vec![
+            node("root", None, "", Kind::Folder, "Bookmarks", None),
+            f("bar", "root", "a", "toolbar"),
+            b("l0", "bar", "a", "Loose", "https://loose.example"),
+            f("net", "bar", "b", "Netcetera"),
+            b("n1", "net", "a", "Board", "https://jira.example.com/board"),
+            b("n2", "net", "b", "Wiki", "https://confluence.example.com/x"),
+            f("git", "net", "c", "Gitlab"),
+            b("g1", "git", "a", "Repo", "https://gitlab.example.com/r"),
+            f("deep", "git", "b", "Deep"),
+            b("d1", "deep", "a", "Doc", "https://docs.example.org/d"),
+            f("pqc", "bar", "c", "PQC"),
+            b("p1", "pqc", "a", "NIST", "https://nist.example.gov/"),
+            f("empty", "bar", "d", "Empty"),
+            f("other", "root", "b", "other"),
+        ]
+    }
+
+    fn pages(icons: IconSource, columns: usize) -> String {
+        render_profile_pages(&[("Work".into(), profile_tree())], columns, icons)
+    }
+
+    #[test]
+    fn profile_page_groups_folders_with_subfolders_as_tabs() {
+        let p = pages(IconSource::Known, 2);
+        assert!(p.starts_with(HEADER));
+        assert!(p.contains("- name: \"Work\"\n  columns:\n"));
+        // Folder with subfolders: a group, own bookmarks first, then one
+        // widget per subfolder, titled with the path.
+        assert!(p.contains("- type: group\n          widgets:\n            - type: bookmarks\n              title: \"Netcetera\""), "{p}");
+        let pos = |t: &str| {
+            p.find(&format!("title: \"{t}\""))
+                .unwrap_or_else(|| panic!("{t}: {p}"))
+        };
+        assert!(pos("Netcetera") < pos("Netcetera › Gitlab"));
+        assert!(pos("Netcetera › Gitlab") < pos("Netcetera › Gitlab › Deep"));
+        // A folder without subfolders is a plain widget, not a group, and
+        // loose bookmarks of the top-level folder get a widget of their own.
+        assert!(p.contains("title: \"PQC\""));
+        assert!(p.contains("title: \"toolbar\""));
+        assert_eq!(p.matches("type: group").count(), 1);
+        // Empty folders and empty top-level folders leave nothing behind.
+        assert!(!p.contains("Empty") && !p.contains("title: \"other\""));
+    }
+
+    #[test]
+    fn profile_page_icons_follow_the_source() {
+        let known = pages(IconSource::Known, 2);
+        assert!(known.contains("icon: \"di:jira\"") && known.contains("icon: \"di:gitlab\""));
+        assert!(!known.contains("google.com") && !known.contains("favicon.ico"));
+        // Netcetera has a jira and a confluence link (no majority): no title
+        // icon; Gitlab's only link is gitlab, which gives its tab the icon.
+        assert!(known.contains("title: \"Netcetera › Gitlab\"\n"));
+        assert!(known.contains("title-icon: \"di:gitlab\""));
+        assert_eq!(known.matches("title-icon").count(), 1, "{known}");
+        let google = pages(IconSource::Google, 2);
+        assert!(google.contains(
+            "icon: \"https://www.google.com/s2/favicons?sz=64&domain=docs.example.org\""
+        ));
+        let site = pages(IconSource::Site, 2);
+        assert!(site.contains("icon: \"https://docs.example.org/favicon.ico\""));
+        assert!(!pages(IconSource::None, 2).contains("icon:"));
+    }
+
+    #[test]
+    fn profile_page_balances_columns_by_links_and_is_stable() {
+        let p = pages(IconSource::Known, 2);
+        assert_eq!(p, pages(IconSource::Known, 2));
+        // Sections in order: toolbar loose (1 link), Netcetera (5), PQC (1).
+        // Column 1 gets the loose one, column 2 the big one, the small PQC
+        // goes back to the lighter column 1.
+        let c2 = p.rfind("    - size: full\n      widgets:").unwrap();
+        let (col1, col2) = p.split_at(c2);
+        assert!(
+            col1.contains("\"toolbar\"") && col1.contains("\"PQC\""),
+            "{p}"
+        );
+        assert!(col2.contains("\"Netcetera\""));
+        assert_eq!(pages(IconSource::Known, 1).matches("- size:").count(), 1);
+    }
+
+    #[test]
+    fn no_profiles_make_an_empty_page_list() {
+        let p = render_profile_pages(&[], 2, IconSource::Known);
+        assert_eq!(p, format!("{HEADER}[]\n"));
+        // A profile without bookmarks still gets a (blank) page.
+        let p = render_profile_pages(&[("Empty".into(), Vec::new())], 1, IconSource::Known);
+        assert!(p.contains("- name: \"Empty\"") && p.contains("widgets: []"));
+    }
+
+    #[test]
+    fn profile_pages_get_distinct_names() {
+        let p = render_profile_pages(
+            &[("Work".into(), Vec::new()), ("work".into(), Vec::new())],
+            1,
+            IconSource::Known,
+        );
+        assert!(
+            p.contains("- name: \"Work\"") && p.contains("- name: \"work (2)\""),
+            "{p}"
+        );
+    }
+
+    #[test]
+    fn known_icons_cover_the_usual_services() {
+        for (url, icon) in [
+            (
+                "https://bankverlag-my.sharepoint.com/personal/x/_layouts/15/onedrive.aspx",
+                "di:microsoft-onedrive",
+            ),
+            (
+                "https://bankverlag.sharepoint.com/x",
+                "di:microsoft-sharepoint",
+            ),
+            (
+                "https://outlook.cloud.microsoft.mcas.ms/mail/",
+                "di:microsoft-outlook",
+            ),
+            ("https://jira.example.com:8443/x", "di:jira"),
+            ("https://www.youtube.com/watch?v=1", "di:youtube"),
+            ("https://www.ups.com/de/de/home", "di:ups"),
+        ] {
+            assert_eq!(known_icon(url), Some(icon), "{url}");
+        }
+        assert_eq!(known_icon("https://ups.example.org/"), None);
+        // Look-alike hosts and query strings do not borrow an icon.
+        for url in [
+            "https://evil-github.com/",
+            "https://github.com.evil.org/",
+            "https://jirasoft.io/",
+            "https://example.org/?q=onedrive",
+        ] {
+            assert_eq!(known_icon(url), None, "{url}");
+        }
+        assert_eq!(host_of("https://a.example&x=1/"), None);
+        assert_eq!(known_icon("https://user:pw@jira.example.com/"), None);
     }
 }

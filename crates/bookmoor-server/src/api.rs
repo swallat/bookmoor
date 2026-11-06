@@ -236,9 +236,38 @@ impl AppState {
         if let Some(page) = &self.dynacat_page {
             let own = page.file.display().to_string();
             page_widgets.sort();
-            let widgets: Vec<String> = page_widgets.into_iter().map(|(_, _, w)| w).collect();
-            let yaml = bookmoor_core::dynacat::render_page(&page.name, page.columns, &widgets);
-            match crate::dynacat::write_if_changed(&page.file, &yaml) {
+            let yaml = match page.source {
+                crate::dynacat::PageSource::Outputs => {
+                    let widgets: Vec<String> =
+                        page_widgets.into_iter().map(|(_, _, w)| w).collect();
+                    Ok(bookmoor_core::dynacat::render_page(
+                        &page.name,
+                        page.columns,
+                        &widgets,
+                    ))
+                }
+                crate::dynacat::PageSource::Profiles => {
+                    self.resolve_user(self.dynacat_user.as_deref()).map(|uid| {
+                        let trees: Vec<(String, Vec<bookmoor_core::wire::WireNode>)> = self
+                            .profiles
+                            .for_user(&uid)
+                            .into_iter()
+                            .filter_map(|p| {
+                                Some((p.name.clone(), self.engines.get(&p.id)?.tree().nodes))
+                            })
+                            .collect();
+                        bookmoor_core::dynacat::render_profile_pages(
+                            &trees,
+                            page.columns,
+                            page.icons,
+                        )
+                    })
+                }
+            };
+            let written = yaml
+                .map_err(std::io::Error::other)
+                .and_then(|y| crate::dynacat::write_if_changed(&page.file, &y));
+            match written {
                 Ok(_) => {
                     self.dynacat_errors.remove(&own);
                 }

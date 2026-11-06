@@ -800,11 +800,11 @@ async function dynacatView() {
   const pg = info.page;
   const pageRow = pg && h("div", { class: "stack-sm" },
     h("h2", { text: "Collecting page" }),
-    h("p", { class: "muted", text: "One Dynacat page with a widget for every output below, so a single $include is enough and new outputs show up by themselves. It is set with BOOKMOOR_DYNACAT_PAGE (or --dynacat-page) and rewritten after every sync when its content changes." }),
+    h("p", { class: "muted", text: "One Dynacat file, so a single $include is enough and new outputs or profiles show up by themselves: either one page with a widget for every output below, or one page per profile. It is set with BOOKMOOR_DYNACAT_PAGE (or --dynacat-page) and rewritten after every sync when its content changes." }),
     h("div", { class: "list" }, h("div", { class: "row" },
       h("div", { class: "main" },
         h("div", { class: "name mono", text: pg.file }),
-        h("div", { class: "muted small", text: "Page \"" + pg.name + "\" · " + pg.columns + (pg.columns === 1 ? " column" : " columns") + (pg.written ? " · file last changed " + new Date(pg.written * 1000).toLocaleString() : pg.error ? "" : " · not written yet") }),
+        h("div", { class: "muted small", text: (pg.source === "profiles" ? "One page per profile" : "Page \"" + pg.name + "\"") + " · " + pg.columns + (pg.columns === 1 ? " column" : " columns") + (pg.written ? " · file last changed " + new Date(pg.written * 1000).toLocaleString() : pg.error ? "" : " · not written yet") }),
         pg.error && h("div", { class: "error small", role: "alert", text: pg.error })),
       h("div", { class: "actions" }, h("span", { class: "tag", text: "Command line" })))));
   return h("div", { class: "stack" },
