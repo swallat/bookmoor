@@ -64,6 +64,8 @@ pub struct AppState {
     pub dynacat_dir: Option<std::path::PathBuf>,
     /// Outputs made in the web UI, persisted in the state file.
     pub dynacat_ui: Vec<crate::dynacat::UiOutput>,
+    /// The collecting page with a widget for every output (none = off).
+    pub dynacat_page: Option<crate::dynacat::PageSpec>,
     /// Last write problem per output file name (absent = fine).
     pub dynacat_errors: BTreeMap<String, String>,
     /// Whose tree the Dynacat file shows (id or name); the only user if unset.
@@ -164,16 +166,31 @@ impl AppState {
         }
         // Every output gets its turn; all failures are reported.
         let mut errors = Vec::new();
+        // (file name, path, widget) of every output that renders, for the page.
+        let mut page_widgets: Vec<(String, String, String)> = Vec::new();
         for (file, target, folder, style) in jobs {
             let key = file.display().to_string();
             let res = target.map_err(std::io::Error::other).and_then(|pid| {
+                let engine = self
+                    .engines
+                    .get(&pid)
+                    .ok_or_else(|| std::io::Error::other("the profile no longer exists"))?;
+                let tree = engine.tree();
+                // The page needs titles that tell its widgets apart.
+                let mut titled = style.clone();
+                if titled.title.as_deref().is_none_or(|t| t.trim().is_empty()) {
+                    titled.title = file.file_stem().map(|s| s.to_string_lossy().into_owned());
+                }
+                let widget = crate::dynacat::render(&tree, &folder, &titled)?;
+                let name = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                page_widgets.push((name, key.clone(), widget));
                 if changed.is_some_and(|c| c != pid) {
                     return Ok(None);
                 }
-                match self.engines.get(&pid) {
-                    Some(e) => crate::dynacat::publish(&file, &e.tree(), &folder, &style).map(Some),
-                    None => Err(std::io::Error::other("the profile no longer exists")),
-                }
+                crate::dynacat::publish(&file, &tree, &folder, &style).map(Some)
             });
             match res {
                 Ok(Some(_)) => {
@@ -183,6 +200,25 @@ impl AppState {
                 Err(e) => {
                     self.dynacat_errors.insert(key, e.to_string());
                     errors.push(format!("{}: {e}", file.display()));
+                }
+            }
+        }
+        // The collecting page: every output that renders, in file name order
+        // (stable, so an unchanged page is not rewritten). A broken output
+        // is left out and reported on its own row.
+        if let Some(page) = &self.dynacat_page {
+            let own = page.file.display().to_string();
+            page_widgets.retain(|(_, path, _)| *path != own);
+            page_widgets.sort();
+            let widgets: Vec<String> = page_widgets.into_iter().map(|(_, _, w)| w).collect();
+            let yaml = bookmoor_core::dynacat::render_page(&page.name, page.columns, &widgets);
+            match crate::dynacat::write_if_changed(&page.file, &yaml) {
+                Ok(_) => {
+                    self.dynacat_errors.remove(&own);
+                }
+                Err(e) => {
+                    self.dynacat_errors.insert(own, e.to_string());
+                    errors.push(format!("{}: {e}", page.file.display()));
                 }
             }
         }
@@ -244,6 +280,7 @@ impl AppState {
             .iter()
             .any(|o| o.file.to_lowercase() == file.to_lowercase())
             || self.dynacat_outputs.iter().any(|o| same(&o.file))
+            || self.dynacat_page.as_ref().is_some_and(|p| same(&p.file))
         {
             return Err(format!("{file} is already used by another output"));
         }

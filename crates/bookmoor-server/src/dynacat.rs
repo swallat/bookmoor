@@ -70,6 +70,62 @@ impl Output {
     }
 }
 
+/// The collecting page: one Dynacat page file with a widget for every output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageSpec {
+    pub file: PathBuf,
+    /// Page name shown in Dynacat's navigation.
+    pub name: String,
+    /// 1 to 3 columns the widgets are spread over.
+    pub columns: usize,
+}
+
+impl PageSpec {
+    /// `file=PATH[;name=NAME][;columns=N]`; a bare `PATH` also works.
+    pub fn parse(spec: &str) -> Result<PageSpec, String> {
+        let bad = |part: &str| format!("cannot read \"{part}\" in Dynacat page \"{spec}\"");
+        let mut p = PageSpec {
+            file: PathBuf::new(),
+            name: "Bookmoor".into(),
+            columns: 1,
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, part) in spec.split(';').enumerate() {
+            let part = part.trim();
+            let (key, value) = match part.split_once('=') {
+                Some((k, v)) => (k.trim(), v.trim()),
+                None if i == 0 && !part.is_empty() => ("file", part),
+                None => return Err(bad(part)),
+            };
+            if !seen.insert(key.to_string()) {
+                return Err(format!("\"{key}\" given twice in Dynacat page \"{spec}\""));
+            }
+            match (key, value) {
+                ("file", v) if !v.is_empty() => p.file = v.into(),
+                ("name", v) if !v.is_empty() => p.name = v.into(),
+                ("columns", v) => p.columns = v.parse().map_err(|_| bad(part))?,
+                _ => return Err(bad(part)),
+            }
+        }
+        if p.file.as_os_str().is_empty() {
+            return Err(format!("Dynacat page \"{spec}\" needs a file"));
+        }
+        if p.name.chars().count() > Style::MAX_TITLE {
+            return Err(format!(
+                "Dynacat page \"{spec}\": name: 1 to {} characters",
+                Style::MAX_TITLE
+            ));
+        }
+        if !(1..=bookmoor_core::dynacat::MAX_PAGE_COLUMNS).contains(&p.columns) {
+            return Err(format!(
+                "Dynacat page \"{spec}\": columns: 1 to {}",
+                bookmoor_core::dynacat::MAX_PAGE_COLUMNS
+            ));
+        }
+        Ok(p)
+    }
+}
+
 fn flag(v: &str) -> Option<bool> {
     match v.to_ascii_lowercase().as_str() {
         "yes" | "true" | "on" | "1" => Some(true),
@@ -107,6 +163,14 @@ pub fn check_file_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The widget for `tree` (restricted to `folder`). A missing folder is an
+/// error.
+pub fn render(tree: &TreeResponse, folder: &[String], style: &Style) -> io::Result<String> {
+    let names: Vec<&str> = folder.iter().map(String::as_str).collect();
+    render_styled(&tree.nodes, &names, style)
+        .ok_or_else(|| io::Error::other(format!("folder \"{}\" does not exist", folder.join("/"))))
+}
+
 /// Write the widget for `tree` (restricted to `folder`) to `path`, replacing
 /// the file atomically. Returns `false` without touching the file when it is
 /// already up to date, so Dynacat's reload does not fire for nothing. A
@@ -117,10 +181,12 @@ pub fn publish(
     folder: &[String],
     style: &Style,
 ) -> io::Result<bool> {
-    let names: Vec<&str> = folder.iter().map(String::as_str).collect();
-    let yaml = render_styled(&tree.nodes, &names, style).ok_or_else(|| {
-        io::Error::other(format!("folder \"{}\" does not exist", folder.join("/")))
-    })?;
+    write_if_changed(path, &render(tree, folder, style)?)
+}
+
+/// Replace `path` with `yaml` atomically, unless it already holds exactly
+/// that. Never overwrites a file that does not start with [`HEADER`].
+pub fn write_if_changed(path: &Path, yaml: &str) -> io::Result<bool> {
     match fs::read_to_string(path) {
         Ok(old) if old == yaml => return Ok(false),
         // Never overwrite a file bookmoor did not write (a Dynacat config).
@@ -249,5 +315,39 @@ mod tests {
             Output::parse("folder =Dev;file=a.yml").unwrap().folder,
             ["Dev"]
         );
+    }
+
+    #[test]
+    fn page_specs_parse() {
+        let p = PageSpec::parse("/d/page.yml").unwrap();
+        assert_eq!((p.name.as_str(), p.columns), ("Bookmoor", 1));
+        let p = PageSpec::parse("file=/d/p.yml; name=Links ;columns=2").unwrap();
+        assert_eq!(
+            (p.file, p.name.as_str(), p.columns),
+            (PathBuf::from("/d/p.yml"), "Links", 2)
+        );
+        for bad in [
+            "name=x",
+            "file=a.yml;columns=0",
+            "file=a.yml;columns=4",
+            "file=a.yml;columns=x",
+            "file=a.yml;color=red",
+            "file=a.yml;file=b.yml",
+        ] {
+            assert!(PageSpec::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn page_file_is_rewritten_only_when_it_changes() {
+        let dir = std::env::temp_dir().join(format!("bookmoor-dynacat-p-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("page.yml");
+        let yaml = bookmoor_core::dynacat::render_page("P", 1, &[]);
+        assert!(write_if_changed(&file, &yaml).unwrap());
+        assert!(!write_if_changed(&file, &yaml).unwrap());
+        fs::write(&file, "pages: []\n").unwrap();
+        assert!(write_if_changed(&file, &yaml).is_err());
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
