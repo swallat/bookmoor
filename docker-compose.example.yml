@@ -24,6 +24,8 @@ services:
       # One Dynacat page with a widget for every output, so dynacat.yml needs a
       # single `- $include:` (see docs/adapters/dynacat.md):
       # BOOKMOOR_DYNACAT_PAGE: file=/dynacat/bookmoor-page.yml;name=Bookmoor;columns=2
+      # Or one page per profile, laid out like groups of tabs:
+      # BOOKMOOR_DYNACAT_PAGE: file=/dynacat/profiles.yml;source=profiles;columns=2
       # Single output instead: BOOKMOOR_DYNACAT_FILE, with
       # BOOKMOOR_DYNACAT_USER and BOOKMOOR_DYNACAT_PROFILE.
     volumes:

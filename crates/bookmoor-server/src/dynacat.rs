@@ -70,24 +70,87 @@ impl Output {
     }
 }
 
-/// The collecting page: one Dynacat page file with a widget for every output.
+/// What the collecting page is made of.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PageSource {
+    /// One page with a widget for every output.
+    #[default]
+    Outputs,
+    /// One page per profile of the Dynacat user, laid out from the profile's
+    /// folders (outputs are not used).
+    Profiles,
+}
+
+/// The collecting file: Dynacat page(s) with everything in one place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageSpec {
     pub file: PathBuf,
-    /// Page name shown in Dynacat's navigation.
+    /// Page name shown in Dynacat's navigation (`Outputs` source only: a
+    /// profile page carries the profile's name).
     pub name: String,
     /// 1 to 3 columns the widgets are spread over.
     pub columns: usize,
+    pub source: PageSource,
+    /// Link icons of profile pages.
+    pub icons: bookmoor_core::dynacat::IconSource,
+}
+
+/// The collecting file as set up in the web UI: stored in the state file,
+/// written into the `--dynacat-dir` directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiPage {
+    /// File name inside the directory, e.g. `bookmoor-page.yml`.
+    pub file: String,
+    pub name: String,
+    pub columns: usize,
+    #[serde(default)]
+    pub source: PageSource,
+    #[serde(default)]
+    pub icons: bookmoor_core::dynacat::IconSource,
+}
+
+impl UiPage {
+    /// The page as written into `dir`.
+    pub fn spec(&self, dir: &Path) -> PageSpec {
+        PageSpec {
+            file: dir.join(&self.file),
+            name: self.name.clone(),
+            columns: self.columns,
+            source: self.source,
+            icons: self.icons,
+        }
+    }
+
+    /// Reject names, files and column counts Dynacat would not take.
+    pub fn check(&mut self) -> Result<(), String> {
+        self.file = self.file.trim().to_string();
+        self.name = self.name.trim().to_string();
+        check_file_name(&self.file)?;
+        if self.name.is_empty() || self.name.chars().count() > Style::MAX_TITLE {
+            return Err(format!("page name: 1 to {} characters", Style::MAX_TITLE));
+        }
+        if !(1..=bookmoor_core::dynacat::MAX_PAGE_COLUMNS).contains(&self.columns) {
+            return Err(format!(
+                "columns: 1 to {}",
+                bookmoor_core::dynacat::MAX_PAGE_COLUMNS
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl PageSpec {
-    /// `file=PATH[;name=NAME][;columns=N]`; a bare `PATH` also works.
+    /// `file=PATH[;name=NAME][;columns=N][;source=outputs|profiles][;icons=none|known|google|site]`;
+    /// a bare `PATH` also works.
     pub fn parse(spec: &str) -> Result<PageSpec, String> {
         let bad = |part: &str| format!("cannot read \"{part}\" in Dynacat page \"{spec}\"");
         let mut p = PageSpec {
             file: PathBuf::new(),
             name: "Bookmoor".into(),
             columns: 1,
+            source: PageSource::Outputs,
+            icons: Default::default(),
         };
         let mut seen = std::collections::BTreeSet::new();
         for (i, part) in spec.split(';').enumerate() {
@@ -103,6 +166,12 @@ impl PageSpec {
             match (key, value) {
                 ("file", v) if !v.is_empty() => p.file = v.into(),
                 ("name", v) if !v.is_empty() => p.name = v.into(),
+                ("source", "outputs") => p.source = PageSource::Outputs,
+                ("source", "profiles") => p.source = PageSource::Profiles,
+                ("icons", "none") => p.icons = bookmoor_core::dynacat::IconSource::None,
+                ("icons", "known") => p.icons = bookmoor_core::dynacat::IconSource::Known,
+                ("icons", "google") => p.icons = bookmoor_core::dynacat::IconSource::Google,
+                ("icons", "site") => p.icons = bookmoor_core::dynacat::IconSource::Site,
                 ("columns", v) => {
                     p.columns = v.parse().map_err(|_| {
                         format!(
@@ -189,6 +258,17 @@ pub fn publish(
     style: &Style,
 ) -> io::Result<bool> {
     write_if_changed(path, &render(tree, folder, style)?)
+}
+
+/// Fail if `path` holds something bookmoor did not write (it is never
+/// overwritten); a missing or empty file is fine.
+pub fn check_writable(path: &Path) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(old) if !old.trim().is_empty() && !old.starts_with(HEADER) => Err(io::Error::other(
+            "the file exists and was not written by bookmoor; not overwriting it",
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Replace `path` with `yaml` atomically, unless it already holds exactly
@@ -328,6 +408,15 @@ mod tests {
     fn page_specs_parse() {
         let p = PageSpec::parse("/d/page.yml").unwrap();
         assert_eq!((p.name.as_str(), p.columns), ("Bookmoor", 1));
+        assert_eq!(p.source, PageSource::Outputs);
+        let p = PageSpec::parse("file=a.yml;source=profiles;icons=google;columns=2").unwrap();
+        assert_eq!(
+            (p.source, p.icons),
+            (
+                PageSource::Profiles,
+                bookmoor_core::dynacat::IconSource::Google
+            )
+        );
         let p = PageSpec::parse("file=/d/p.yml; name=Links ;columns=2").unwrap();
         assert_eq!(
             (p.file, p.name.as_str(), p.columns),
@@ -338,6 +427,8 @@ mod tests {
             "file=a.yml;columns=0",
             "file=a.yml;columns=4",
             "file=a.yml;columns=x",
+            "file=a.yml;source=all",
+            "file=a.yml;icons=yes",
             "file=a.yml;color=red",
             "file=a.yml;file=b.yml",
         ] {
