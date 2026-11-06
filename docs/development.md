@@ -74,4 +74,15 @@ Chrome only installs extensions from the Web Store (or by policy), so the Chrome
 2. **OAuth client.** In the [Google Cloud console](https://console.cloud.google.com/) create a project, enable the *Chrome Web Store API*, set up the OAuth consent screen (external, add yourself as test user, then *publish app* so the refresh token does not expire after 7 days) and create an OAuth client ID of type *Desktop app*.
 3. **Refresh token.** Open `https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&redirect_uri=http://localhost&client_id=<CLIENT_ID>&access_type=offline&prompt=consent`, allow access and copy the `code` parameter from the (failing) `localhost` redirect URL. Then run `curl -s https://oauth2.googleapis.com/token -d client_id=<CLIENT_ID> -d client_secret=<CLIENT_SECRET> -d code=<CODE> -d grant_type=authorization_code -d redirect_uri=http://localhost` and use the `refresh_token` from the answer.
 
+#### Verified CRX uploads (optional, recommended)
+
+With *Verified CRX uploads* the store rejects every package that is not signed with a key only you hold, so a hijacked Google account or leaked API token alone cannot push a malicious update. Set it up in this order:
+
+1. Create a key pair (2048-bit RSA) and keep `privatekey.pem` safe, outside the repo:
+   `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out privatekey.pem`
+2. Add the **whole file content** of `privatekey.pem` (including the `BEGIN`/`END` lines) as repository secret `CWS_CRX_PRIVATE_KEY`. From then on the release build signs a CRX3 (`scripts/pack-crx.mjs`) and uploads that instead of the zip. Both files are in the run's artifacts.
+3. Only now, in the developer dashboard under *Package* > *Verified CRX Uploads* choose **Opt In** and paste the public key: `openssl rsa -in privatekey.pem -pubout`.
+
+Afterwards every upload, by hand too, must be a signed CRX. Without the secret CI would send the plain zip and the store would reject it. The key is not the extension ID and does not change it. If you lose the key, you cannot upload until you opt out and in again with a new one. `node scripts/pack-crx.mjs <in.zip> privatekey.pem <out.crx>` signs by hand.
+
 The store upload runs only for a release (a pushed tag `vX.Y.Z`, see *Releases and versions*) and uploads the release number `X.Y.Z`. Pushes to `main` and manual runs only produce the downloadable artifacts. Review usually takes a few hours to days; the previous version stays live meanwhile. The store keeps one pending submission at a time, so a second upload while one is in review fails the upload step (the zip is still an artifact).

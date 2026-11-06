@@ -49,6 +49,10 @@ jobs:
       CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
       CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
       CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+      # Optional. Private RSA key (PEM) for "Verified CRX uploads" in the Web
+      # Store. Once the item is opted in, the store only takes CRX files signed
+      # with it. Set this secret before you opt in.
+      CWS_CRX_PRIVATE_KEY: ${{ secrets.CWS_CRX_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,6 +101,17 @@ jobs:
         run: |
           mkdir -p ../artifacts
           (cd dist && zip -qr "../../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip" .)
+      # Release only: a CRX3 signed with your own key, for the Web Store's
+      # "Verified CRX uploads". Without the secret the plain zip is uploaded.
+      - name: Chrome CRX (signed with your key)
+        if: steps.version.outputs.release == 'true' && env.CWS_CRX_PRIVATE_KEY != ''
+        working-directory: .
+        run: |
+          set -euo pipefail
+          KEY=$(mktemp)
+          trap 'rm -f "$KEY"' EXIT
+          printf '%s\n' "$CWS_CRX_PRIVATE_KEY" > "$KEY"
+          node scripts/pack-crx.mjs "artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip" "$KEY" "artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.crx"
       - name: Firefox zip (unsigned)
         run: |
           npm run package:firefox
@@ -122,18 +137,24 @@ jobs:
         run: |
           set -euo pipefail
           ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip"
+          EXTRA=()
+          if [ -n "$CWS_CRX_PRIVATE_KEY" ]; then
+            # Verified CRX uploads: the signed CRX goes up as a raw upload.
+            ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.crx"
+            EXTRA=(-H "X-Goog-Upload-Protocol: raw" -H "X-Goog-Upload-File-Name: $(basename "$ZIP")")
+          fi
           TOKEN=$(curl -fsS https://oauth2.googleapis.com/token \
             -d client_id="$CWS_CLIENT_ID" -d client_secret="$CWS_CLIENT_SECRET" \
             -d refresh_token="$CWS_REFRESH_TOKEN" -d grant_type=refresh_token | jq -er .access_token)
           echo "::add-mask::$TOKEN"
-          UP=$(curl -fsS -X PUT -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" \
+          UP=$(curl -fsS -X PUT -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" "${EXTRA[@]}" \
             -T "$ZIP" "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CWS_EXTENSION_ID")
           echo "$UP" | jq -c '{uploadState, itemError}'
           if [ "$(echo "$UP" | jq -r .uploadState)" != "SUCCESS" ]; then
             if echo "$UP" | jq -e '.itemError[]? | select(.error_code == "ITEM_NOT_UPDATABLE")' >/dev/null; then
               # The item is still in review (or ready to publish): the store takes
               # no new upload until that is done. Not a build failure.
-              echo "::warning::The Chrome Web Store item cannot be updated now (pending review or ready to publish). Upload bookmoor-chrome-${{ steps.version.outputs.version }}.zip from this run's artifacts once the review is finished."
+              echo "::warning::The Chrome Web Store item cannot be updated now (pending review or ready to publish). Upload the bookmoor-chrome-${{ steps.version.outputs.version }} file (.crx if you use verified uploads, otherwise .zip) from this run's artifacts once the review is finished."
               exit 0
             fi
             echo "::error::Chrome Web Store upload failed"; exit 1
