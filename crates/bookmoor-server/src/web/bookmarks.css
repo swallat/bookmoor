@@ -59,3 +59,15 @@
 .bm-row .actions { flex-wrap: nowrap; }
 @media (max-width: 64rem) { .bm-row .actions { flex-wrap: wrap; } }
 .shell.wide .stack > p.muted { max-width: 60rem; }
+
+/* Duplicate review. */
+.bm-dialog.bm-dups { width: min(48rem, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+.bm-dup-list { display: grid; gap: 12px; margin: 12px 0; }
+.bm-dup { border: 1px solid var(--line); border-radius: 8px; margin: 0; padding: 4px 12px 8px; min-width: 0; }
+.bm-dup legend { padding: 0 6px; overflow-wrap: anywhere; max-width: 100%; }
+.bm-dup-row { display: flex; gap: 10px; align-items: flex-start; padding: 6px 4px; border-radius: 6px; cursor: pointer; }
+.bm-dup-row input { margin-top: 4px; flex: none; }
+.bm-dup-row .main { min-width: 0; overflow-wrap: anywhere; }
+.bm-dup-row .name { font-weight: 600; margin-right: 6px; }
+.bm-dup-row.conflict { background: color-mix(in srgb, #d33 14%, transparent); }
+.bm-dup-url { display: block; word-break: break-all; }

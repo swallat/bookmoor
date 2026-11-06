@@ -575,6 +575,34 @@ impl AppState {
         Ok(done)
     }
 
+    /// Bookmarks saved more than once in a profile, for review.
+    pub fn duplicates(&self, profile: &str) -> Result<Vec<crate::tidy::DupGroup>, String> {
+        let nodes = self
+            .engines
+            .get(profile)
+            .ok_or("no such profile")?
+            .tree()
+            .nodes;
+        Ok(crate::tidy::find_duplicates(&nodes))
+    }
+
+    /// Remove the bookmarks the user picked from the duplicates. The old tree
+    /// becomes the backup (Restore brings it back).
+    pub fn remove_duplicates(&mut self, profile: &str, ids: &[String]) -> Result<usize, String> {
+        let nodes = self
+            .engines
+            .get(profile)
+            .ok_or("no such profile")?
+            .tree()
+            .nodes;
+        let kept = crate::tidy::remove_duplicates(&nodes, ids)?;
+        let n = nodes.len() - kept.len();
+        if n > 0 {
+            self.replace_tree(profile, &kept)?;
+        }
+        Ok(n)
+    }
+
     /// Replace a profile's tree by an imported one (the old one becomes the
     /// backup). Refused, with nothing changed, if the tree is not valid.
     pub fn import_profile(&mut self, profile: &str, nodes: &[WireNode]) -> Result<(), String> {
