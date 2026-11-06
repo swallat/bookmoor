@@ -66,6 +66,9 @@ pub struct AppState {
     pub dynacat_ui: Vec<crate::dynacat::UiOutput>,
     /// The collecting page with a widget for every output (none = off).
     pub dynacat_page: Option<crate::dynacat::PageSpec>,
+    /// The collecting file set up in the web UI, persisted in the state file;
+    /// the command-line page wins when both exist.
+    pub dynacat_page_ui: Option<crate::dynacat::UiPage>,
     /// Last write problem per output file name (absent = fine).
     pub dynacat_errors: BTreeMap<String, String>,
     /// Whose tree the Dynacat file shows (id or name); the only user if unset.
@@ -168,8 +171,8 @@ impl AppState {
         let mut errors = Vec::new();
         // (file name, path, widget) of every output that renders, for the page.
         let mut page_widgets: Vec<(String, String, String)> = Vec::new();
-        let page_path = self
-            .dynacat_page
+        let page = self.effective_page();
+        let page_path = page
             .as_ref()
             .map(|p| p.file.display().to_string().to_lowercase());
         for (file, target, folder, style) in jobs {
@@ -233,7 +236,7 @@ impl AppState {
         // The collecting page: every output that renders, in file name order
         // (stable, so an unchanged page is not rewritten). A broken output
         // is left out and reported on its own row.
-        if let Some(page) = &self.dynacat_page {
+        if let Some(page) = &page {
             let own = page.file.display().to_string();
             page_widgets.sort();
             let yaml = match page.source {
@@ -284,6 +287,18 @@ impl AppState {
         }
     }
 
+    /// The collecting page in force: the command-line one, else the web UI's
+    /// inside `--dynacat-dir`.
+    pub fn effective_page(&self) -> Option<crate::dynacat::PageSpec> {
+        self.dynacat_page.clone().or_else(|| {
+            let dir = self.dynacat_dir.as_ref()?;
+            // A hand-edited state file is not trusted.
+            let mut ui = self.dynacat_page_ui.clone()?;
+            ui.check().ok()?;
+            Some(ui.spec(dir))
+        })
+    }
+
     /// The key of an output file in `dynacat_errors`: its full path.
     pub(crate) fn dynacat_key(&self, ui_file: &str) -> String {
         match &self.dynacat_dir {
@@ -304,6 +319,44 @@ impl AppState {
         }
     }
 
+    /// Check the settings of a web-UI output (`exclude`: the id being edited)
+    /// and return its path in the directory.
+    fn check_ui_output(
+        &self,
+        exclude: Option<&str>,
+        file: &str,
+        profile_id: &str,
+        folder: &[String],
+        style: &bookmoor_core::dynacat::Style,
+    ) -> Result<std::path::PathBuf, String> {
+        style.check()?;
+        let dir = self
+            .dynacat_dir
+            .clone()
+            .ok_or("start the server with --dynacat-dir to create outputs here")?;
+        crate::dynacat::check_file_name(file)?;
+        let path = dir.join(file);
+        let same = |p: &std::path::Path| {
+            p.display().to_string().to_lowercase() == path.display().to_string().to_lowercase()
+        };
+        if self
+            .dynacat_ui
+            .iter()
+            .filter(|o| Some(o.id.as_str()) != exclude)
+            .any(|o| o.file.to_lowercase() == file.to_lowercase())
+            || self.dynacat_outputs.iter().any(|o| same(&o.file))
+            || self.effective_page().is_some_and(|p| same(&p.file))
+        {
+            return Err(format!("{file} is already used by another output"));
+        }
+        let engine = self.engines.get(profile_id).ok_or("no such profile")?;
+        let names: Vec<&str> = folder.iter().map(String::as_str).collect();
+        if bookmoor_core::dynacat::render_styled(&engine.tree().nodes, &names, style).is_none() {
+            return Err("that folder does not exist in the profile".into());
+        }
+        Ok(path)
+    }
+
     /// Add an output made in the web UI. Needs `--dynacat-dir`; checks the
     /// name, the profile and that the folder exists; does not save.
     pub fn add_dynacat_output(
@@ -313,39 +366,17 @@ impl AppState {
         folder: Vec<String>,
         style: bookmoor_core::dynacat::Style,
     ) -> Result<(), String> {
-        style.check()?;
-        let dir = self
-            .dynacat_dir
-            .clone()
-            .ok_or("start the server with --dynacat-dir to create outputs here")?;
         let file = file.trim();
-        crate::dynacat::check_file_name(file)?;
         if self.dynacat_ui.len() >= crate::dynacat::MAX_UI_OUTPUTS {
             return Err(format!(
                 "at most {} outputs",
                 crate::dynacat::MAX_UI_OUTPUTS
             ));
         }
-        let path = dir.join(file);
-        let same = |p: &std::path::Path| {
-            p.display().to_string().to_lowercase() == path.display().to_string().to_lowercase()
-        };
-        if self
-            .dynacat_ui
-            .iter()
-            .any(|o| o.file.to_lowercase() == file.to_lowercase())
-            || self.dynacat_outputs.iter().any(|o| same(&o.file))
-            || self.dynacat_page.as_ref().is_some_and(|p| same(&p.file))
-        {
-            return Err(format!("{file} is already used by another output"));
-        }
-        let engine = self.engines.get(profile_id).ok_or("no such profile")?;
-        let names: Vec<&str> = folder.iter().map(String::as_str).collect();
-        if bookmoor_core::dynacat::render_styled(&engine.tree().nodes, &names, &style).is_none() {
-            return Err("that folder does not exist in the profile".into());
-        }
+        let path = self.check_ui_output(None, file, profile_id, &folder, &style)?;
         // The first write has to work (a foreign file, a read-only directory),
         // so a mistake is refused here instead of stored.
+        let engine = self.engines.get(profile_id).ok_or("no such profile")?;
         crate::dynacat::publish(&path, &engine.tree(), &folder, &style)
             .map_err(|e| format!("{file}: {e}"))?;
         self.dynacat_ui.push(crate::dynacat::UiOutput {
@@ -355,6 +386,71 @@ impl AppState {
             folder,
             style,
         });
+        Ok(())
+    }
+
+    /// Change an output made in the web UI; does not save. A renamed output
+    /// writes the new file and leaves the old one on disk (Dynacat may still
+    /// include it).
+    pub fn update_dynacat_output(
+        &mut self,
+        id: &str,
+        file: &str,
+        profile_id: &str,
+        folder: Vec<String>,
+        style: bookmoor_core::dynacat::Style,
+    ) -> Result<(), String> {
+        let file = file.trim();
+        let i = self
+            .dynacat_ui
+            .iter()
+            .position(|o| o.id == id)
+            .ok_or("no such output")?;
+        let path = self.check_ui_output(Some(id), file, profile_id, &folder, &style)?;
+        let engine = self.engines.get(profile_id).ok_or("no such profile")?;
+        crate::dynacat::publish(&path, &engine.tree(), &folder, &style)
+            .map_err(|e| format!("{file}: {e}"))?;
+        let old = self.dynacat_key(&self.dynacat_ui[i].file);
+        self.dynacat_errors.remove(&old);
+        self.dynacat_errors.remove(&self.dynacat_key(file));
+        let o = &mut self.dynacat_ui[i];
+        o.file = file.to_string();
+        o.profile_id = profile_id.to_string();
+        o.folder = folder;
+        o.style = style;
+        Ok(())
+    }
+
+    /// Set the collecting page made in the web UI; does not save. The file
+    /// must not be an output's.
+    pub fn set_dynacat_page_ui(&mut self, mut page: crate::dynacat::UiPage) -> Result<(), String> {
+        let dir = self
+            .dynacat_dir
+            .clone()
+            .ok_or("start the server with --dynacat-dir to set the page here")?;
+        if self.dynacat_page.is_some() {
+            return Err("the page is set on the command line; change it there".into());
+        }
+        page.check()?;
+        let path = dir.join(&page.file);
+        let same = |p: &std::path::Path| {
+            p.display().to_string().to_lowercase() == path.display().to_string().to_lowercase()
+        };
+        if self
+            .dynacat_ui
+            .iter()
+            .any(|o| o.file.to_lowercase() == page.file.to_lowercase())
+            || self.dynacat_outputs.iter().any(|o| same(&o.file))
+        {
+            return Err(format!("{} is already used by an output", page.file));
+        }
+        // Surface a foreign file now; the page itself is written right after.
+        crate::dynacat::check_writable(&path).map_err(|e| format!("{}: {e}", page.file))?;
+        if let Some(old) = &self.dynacat_page_ui {
+            self.dynacat_errors
+                .remove(&dir.join(&old.file).display().to_string());
+        }
+        self.dynacat_page_ui = Some(page);
         Ok(())
     }
 
