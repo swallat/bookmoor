@@ -180,7 +180,7 @@ The layout follows a hand-made page with groups of bookmarks widgets:
   | `google` | like `known`, otherwise `google.com/s2/favicons`: Google learns the site names |
   | `site` | like `known`, otherwise `https://HOST/favicon.ico`: the viewer's browser contacts every site |
 
-  A widget gets a `title-icon` (tab and heading mark) when at least half of its
+  A widget gets a `title-icon` (tab and heading mark) when more than half of its
   links share one `di:` icon.
 
 ## Mapping

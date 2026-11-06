@@ -335,31 +335,39 @@ pub enum IconSource {
 fn known_icon(url: &str) -> Option<&'static str> {
     let lower = url.to_ascii_lowercase();
     let host = host_of(&lower)?;
-    let table: &[(&str, &str)] = &[
-        ("onedrive", "di:microsoft-onedrive"),
-        ("sharepoint", "di:microsoft-sharepoint"),
-        ("outlook", "di:microsoft-outlook"),
-        ("confluence", "di:confluence"),
-        ("jira", "di:jira"),
-        ("gitlab", "di:gitlab"),
-        ("github.com", "di:github"),
-        ("youtube.com", "di:youtube"),
-        ("youtu.be", "di:youtube"),
-        ("artifactory", "di:artifactory"),
-        ("checkmk", "di:checkmk"),
-    ];
-    for (needle, icon) in table {
-        // OneDrive lives on SharePoint hosts: its path tells.
-        let hit = if *needle == "onedrive" {
-            lower.contains("onedrive")
-        } else {
-            host.contains(needle)
-        };
-        if hit {
-            return Some(icon);
-        }
+    // (host or parent domain, or a label of the host, icon)
+    let on = |d: &str| host == d || host.ends_with(&format!(".{d}"));
+    let label = |l: &str| {
+        host.split('.')
+            .any(|p| p == l || p.starts_with(&format!("{l}-")))
+    };
+    if host.ends_with("sharepoint.com") && lower.contains("/onedrive.aspx") {
+        return Some("di:microsoft-onedrive");
     }
-    (host == "ups.com" || host.ends_with(".ups.com")).then_some("di:ups")
+    let icon = if on("sharepoint.com") {
+        "di:microsoft-sharepoint"
+    } else if label("outlook") {
+        "di:microsoft-outlook"
+    } else if label("confluence") {
+        "di:confluence"
+    } else if label("jira") {
+        "di:jira"
+    } else if label("gitlab") || on("gitlab.com") {
+        "di:gitlab"
+    } else if on("github.com") {
+        "di:github"
+    } else if on("youtube.com") || on("youtu.be") {
+        "di:youtube"
+    } else if label("artifactory") {
+        "di:artifactory"
+    } else if label("checkmk") {
+        "di:checkmk"
+    } else if on("ups.com") {
+        "di:ups"
+    } else {
+        return None;
+    };
+    Some(icon)
 }
 
 /// Host name of a http(s) URL (no port, no credentials).
@@ -373,7 +381,10 @@ fn host_of(url: &str) -> Option<&str> {
         Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
         _ => host,
     };
-    (!host.is_empty() && !host.contains(['[', ']'])).then_some(host)
+    // Plain DNS names only: the host ends up in a query string.
+    host.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .then_some(host)
 }
 
 fn link_icon(url: &str, source: IconSource) -> Option<String> {
@@ -394,7 +405,7 @@ fn link_icon(url: &str, source: IconSource) -> Option<String> {
 }
 
 /// A `bookmarks` widget with one group of links, as lines without indent.
-/// The widget's `title-icon` is the `di:` icon most links share (at least
+/// The widget's `title-icon` is the `di:` icon most links share (more than
 /// half of them), which gives tabs and headings a recognisable mark.
 fn bookmarks_widget(title: &str, links: &[(String, String)], icons: IconSource) -> String {
     let icons_of: Vec<Option<String>> = links.iter().map(|(_, u)| link_icon(u, icons)).collect();
@@ -405,7 +416,7 @@ fn bookmarks_widget(title: &str, links: &[(String, String)], icons: IconSource) 
     let title_icon = count
         .into_iter()
         .max_by_key(|&(name, n)| (n, std::cmp::Reverse(name)))
-        .filter(|&(_, n)| n * 2 >= links.len())
+        .filter(|&(_, n)| n * 2 > links.len())
         .map(|(name, _)| name);
     let mut out = format!("type: bookmarks\ntitle: {}\n", scalar(title));
     if let Some(i) = title_icon {
@@ -512,6 +523,10 @@ fn profile_page(
     };
     if let Some(root) = root {
         let tops = kids.get(root.id.as_str()).map(Vec::as_slice).unwrap_or(&[]);
+        let root_links = own_links(tops);
+        if !root_links.is_empty() {
+            add(vec![(folder_title(root), root_links)]);
+        }
         for top in tops.iter().filter(|c| c.kind == Kind::Folder) {
             let children = kids.get(top.id.as_str()).map(Vec::as_slice).unwrap_or(&[]);
             let loose = own_links(children);
@@ -541,8 +556,17 @@ pub fn render_profile_pages(
         out.push_str("[]\n");
         return out;
     }
+    // Dynacat derives the URL from the name: keep the names apart.
+    let mut used: Vec<String> = Vec::new();
     for (name, nodes) in profiles {
-        profile_page(&mut out, name, columns, nodes, icons);
+        let mut unique = name.clone();
+        let mut n = 1;
+        while used.contains(&unique.to_lowercase()) {
+            n += 1;
+            unique = format!("{name} ({n})");
+        }
+        used.push(unique.to_lowercase());
+        profile_page(&mut out, &unique, columns, nodes, icons);
     }
     out
 }
@@ -1018,10 +1042,11 @@ groups:\n\
         let known = pages(IconSource::Known, 2);
         assert!(known.contains("icon: \"di:jira\"") && known.contains("icon: \"di:gitlab\""));
         assert!(!known.contains("google.com") && !known.contains("favicon.ico"));
-        // Netcetera has a jira and a confluence link: a tie, so no title icon;
-        // Gitlab's only link is gitlab, which gives its tab the icon.
+        // Netcetera has a jira and a confluence link (no majority): no title
+        // icon; Gitlab's only link is gitlab, which gives its tab the icon.
         assert!(known.contains("title: \"Netcetera › Gitlab\"\n"));
         assert!(known.contains("title-icon: \"di:gitlab\""));
+        assert_eq!(known.matches("title-icon").count(), 1, "{known}");
         let google = pages(IconSource::Google, 2);
         assert!(google.contains(
             "icon: \"https://www.google.com/s2/favicons?sz=64&domain=docs.example.org\""
@@ -1058,6 +1083,19 @@ groups:\n\
     }
 
     #[test]
+    fn profile_pages_get_distinct_names() {
+        let p = render_profile_pages(
+            &[("Work".into(), Vec::new()), ("work".into(), Vec::new())],
+            1,
+            IconSource::Known,
+        );
+        assert!(
+            p.contains("- name: \"Work\"") && p.contains("- name: \"work (2)\""),
+            "{p}"
+        );
+    }
+
+    #[test]
     fn known_icons_cover_the_usual_services() {
         for (url, icon) in [
             (
@@ -1079,6 +1117,16 @@ groups:\n\
             assert_eq!(known_icon(url), Some(icon), "{url}");
         }
         assert_eq!(known_icon("https://ups.example.org/"), None);
+        // Look-alike hosts and query strings do not borrow an icon.
+        for url in [
+            "https://evil-github.com/",
+            "https://github.com.evil.org/",
+            "https://jirasoft.io/",
+            "https://example.org/?q=onedrive",
+        ] {
+            assert_eq!(known_icon(url), None, "{url}");
+        }
+        assert_eq!(host_of("https://a.example&x=1/"), None);
         assert_eq!(known_icon("https://user:pw@jira.example.com/"), None);
     }
 }
