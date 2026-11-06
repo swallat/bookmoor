@@ -4,7 +4,7 @@
 
 use crate::api::{AppState, Backup};
 use crate::auth::{Scope, TokenRecord, Tokens};
-use crate::dynacat::UiOutput;
+use crate::dynacat::{UiOutput, UiPage};
 use crate::engine::{Engine, Snapshot};
 use crate::profiles::{default_id_for, Profile, Profiles, DEFAULT_NAME};
 use crate::users::{User, Users};
@@ -23,6 +23,8 @@ struct SaveFile<'a> {
     tokens: &'a [TokenRecord],
     backups: &'a BTreeMap<String, Backup>,
     dynacat: &'a [UiOutput],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dynacat_page: Option<&'a UiPage>,
     /// Single sign-on set up in the web UI (holds the client secret).
     #[serde(skip_serializing_if = "Option::is_none")]
     oidc: Option<&'a crate::oidc::OidcConfig>,
@@ -44,6 +46,8 @@ struct LoadFile {
     backups: BTreeMap<String, Backup>,
     #[serde(default)]
     dynacat: Vec<UiOutput>,
+    #[serde(default)]
+    dynacat_page: Option<UiPage>,
     oidc: Option<crate::oidc::OidcConfig>,
 }
 
@@ -56,6 +60,7 @@ pub struct Loaded {
     pub tokens: Tokens,
     pub backups: BTreeMap<String, Backup>,
     pub dynacat: Vec<UiOutput>,
+    pub dynacat_page: Option<UiPage>,
     pub oidc: Option<crate::oidc::OidcConfig>,
 }
 
@@ -208,6 +213,7 @@ impl Store {
             tokens: Tokens::from_records(tokens),
             backups,
             dynacat,
+            dynacat_page: f.dynacat_page,
             oidc: f.oidc,
         }))
     }
@@ -221,6 +227,7 @@ impl Store {
         tokens: &Tokens,
         backups: &BTreeMap<String, Backup>,
         dynacat: &[UiOutput],
+        dynacat_page: Option<&UiPage>,
         oidc: Option<&crate::oidc::OidcConfig>,
     ) -> io::Result<()> {
         let records = tokens.records();
@@ -236,6 +243,7 @@ impl Store {
             tokens: &records,
             backups,
             dynacat,
+            dynacat_page,
             oidc,
         })
         .map_err(io::Error::other)?;
@@ -290,6 +298,7 @@ impl AppState {
             tokens: l.tokens,
             backups: l.backups,
             dynacat_ui: l.dynacat,
+            dynacat_page_ui: l.dynacat_page,
             oidc_config: l.oidc,
             store: Some(store),
             ..AppState::default()
@@ -306,6 +315,7 @@ impl AppState {
                 &self.tokens,
                 &self.backups,
                 &self.dynacat_ui,
+                self.dynacat_page_ui.as_ref(),
                 self.oidc_config.as_ref(),
             ),
             None => Ok(()),
@@ -330,6 +340,7 @@ impl AppState {
                     self.tokens = l.tokens;
                     self.backups = l.backups;
                     self.dynacat_ui = l.dynacat;
+                    self.dynacat_page_ui = l.dynacat_page;
                     self.apply_oidc(l.oidc);
                 }
                 _ => {
@@ -717,6 +728,7 @@ mod tests {
                 &st.tokens,
                 &st.backups,
                 &st.dynacat_ui,
+                st.dynacat_page_ui.as_ref(),
                 None,
             )
             .unwrap();
@@ -735,10 +747,30 @@ mod tests {
                 &st.tokens,
                 &st.backups,
                 &st.dynacat_ui,
+                st.dynacat_page_ui.as_ref(),
                 None,
             )
             .unwrap();
         assert!(Store::new(&path).load().is_err());
         let _ = pa;
+    }
+
+    #[test]
+    fn the_collecting_page_survives_a_restart() {
+        let path =
+            std::env::temp_dir().join(format!("bookmoor-store-page-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let mut st = AppState::open(Store::new(&path)).unwrap();
+        st.dynacat_page_ui = Some(crate::dynacat::UiPage {
+            file: "p.yml".into(),
+            name: "Links".into(),
+            columns: 2,
+            source: crate::dynacat::PageSource::Profiles,
+            icons: bookmoor_core::dynacat::IconSource::Google,
+        });
+        st.persist().unwrap();
+        let again = AppState::open(Store::new(&path)).unwrap();
+        assert_eq!(again.dynacat_page_ui, st.dynacat_page_ui);
+        let _ = fs::remove_file(&path);
     }
 }

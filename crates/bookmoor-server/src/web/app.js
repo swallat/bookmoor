@@ -703,21 +703,157 @@ function dynStyleText(st) {
   return bits.length ? " · " + bits.join(", ") : "";
 }
 
+let dynSeq = 0;
+
+/** The form for one Dynacat output; `init` (a row) preselects its values when editing. */
+function outputForm(info, init, label, save) {
+  const k = "dyn" + (++dynSeq) + "-";
+  const v = init || {};
+  const st = v.style || {};
+  const folder = h("select", { id: k + "folder", name: "folder" }, h("option", { value: "", text: "Whole tree" }));
+  const profile = h("select", { id: k + "profile", name: "profile" },
+    info.profiles.map((p) => h("option", { value: p.id, text: p.label })));
+  if (v.profile_id) profile.value = v.profile_id;
+  const load = async (want) => {
+    folder.replaceChildren(h("option", { value: "", text: "Whole tree" }));
+    try {
+      const paths = await api("GET", "dynacat/folders?profile=" + encodeURIComponent(profile.value));
+      for (const p of paths) folder.append(h("option", { value: p, text: p }));
+      if (want) folder.value = want;
+    } catch (e) { toast(e.message); }
+  };
+  // The widget title starts as the profile's name until the admin types
+  // something of their own.
+  const titleField = field(k + "title", "Widget title", { type: "text", placeholder: "e.g. Work", maxlength: "80" }, "Shown above the bookmarks. Starts as the profile name so profiles can be told apart; change or clear it.");
+  const titleInput = titleField.querySelector("input");
+  let titleEdited = !!init;
+  titleInput.addEventListener("input", () => { titleEdited = true; });
+  const prefill = () => {
+    if (titleEdited) return;
+    const p = info.profiles.find((x) => x.id === profile.value);
+    titleInput.value = p ? p.name.slice(0, 80) : "";
+  };
+  if (init) titleInput.value = st.title || "";
+  profile.addEventListener("change", () => { load(); prefill(); });
+  load(v.folder);
+  prefill();
+  const fileField = field(k + "file", "File name", { type: "text", placeholder: "dev.yml", required: true, maxlength: "64", autocapitalize: "off" });
+  if (init) fileField.querySelector("input").value = v.file;
+  const names = h("select", { id: k + "names", name: "names" },
+    h("option", { value: "path", text: "Full path (toolbar / Dev)" }),
+    h("option", { value: "name", text: "Folder name only (Dev)" }));
+  names.value = st.names || "path";
+  const depth = field(k + "depth", "Group depth", { type: "number", min: "0", max: "32", placeholder: "no limit" }, "Folders deeper than this are merged into their parent group: fewer, longer groups.");
+  if (st.depth != null) depth.querySelector("input").value = st.depth;
+  const max = field(k + "max", "Shorten titles to", { type: "number", min: "8", max: "500", placeholder: "no limit" }, "Characters; longer link titles end in …");
+  if (st.max_title) max.querySelector("input").value = st.max_title;
+  const icons = h("input", { type: "checkbox", id: k + "icons", "aria-describedby": k + "icons-hint" });
+  const arrow = h("input", { type: "checkbox", id: k + "arrow" });
+  const tab = h("input", { type: "checkbox", id: k + "tab" });
+  icons.checked = !!st.icons; arrow.checked = !!st.hide_arrow; tab.checked = !!st.same_tab;
+  return form([
+    h("div", { class: "form-row fields" },
+      fileField,
+      h("div", { class: "field" }, h("label", { for: k + "profile", text: "Profile" }), profile),
+      h("div", { class: "field" }, h("label", { for: k + "folder", text: "Folder" }), folder)),
+    h("div", { class: "form-row fields" },
+      titleField,
+      h("div", { class: "field" }, h("label", { for: k + "names", text: "Group titles" }), names),
+      depth),
+    h("div", { class: "form-row fields" },
+      max,
+      h("div", { class: "field-check" },
+        h("label", { class: "check" }, icons, h("span", { text: "Site icons" })),
+        h("p", { class: "hint", id: k + "icons-hint", text: "Dynacat's browser asks each site for /favicon.ico, so those sites see the viewer's IP address." })),
+      h("div", { class: "stack-sm" },
+        h("label", { class: "check" }, arrow, h("span", { text: " Hide the arrow" })),
+        h("label", { class: "check" }, tab, h("span", { text: " Open in the same tab" })))),
+  ], label, async (fd, f) => {
+    const num = (el, what) => {
+      const val = el.querySelector("input").value.trim();
+      if (val === "") return null;
+      if (!/^\d+$/.test(val)) throw new Error(what + " must be a whole number");
+      return Number(val);
+    };
+    const style = {
+      title: titleInput.value.trim() || null,
+      names: names.value,
+      depth: num(depth, "Group depth"),
+      max_title: num(max, "Shorten titles to"),
+      icons: icons.checked,
+      hide_arrow: arrow.checked,
+      same_tab: tab.checked,
+    };
+    await save({ file: fileField.querySelector("input").value, profile: profile.value, folder: folder.value, style }, f);
+  });
+}
+
+/** The form for the collecting page (shown when the page is not fixed on the command line). */
+function pageForm(info, onDone) {
+  const pg = info.page && info.page.editable ? info.page : null;
+  const k = "dynpage-";
+  const file = field(k + "file", "File name", { type: "text", placeholder: "bookmoor-page.yml", required: true, maxlength: "64", autocapitalize: "off" }, "Written into " + info.dir + ". Include it once in dynacat.yml.");
+  const name = field(k + "name", "Page name", { type: "text", maxlength: "80", value: pg ? pg.name : "Bookmoor" }, "Shown in Dynacat's navigation (not used for one page per profile).");
+  const columns = h("select", { id: k + "columns", name: "columns" }, [1, 2, 3].map((n) => h("option", { value: String(n), text: String(n) })));
+  const source = h("select", { id: k + "source", name: "source" },
+    h("option", { value: "outputs", text: "One page with a widget per output" }),
+    h("option", { value: "profiles", text: "One page per profile" }));
+  const icons = h("select", { id: k + "icons", name: "icons" },
+    h("option", { value: "known", text: "Well-known services only" }),
+    h("option", { value: "none", text: "None" }),
+    h("option", { value: "google", text: "Also Google favicons (Google sees the sites)" }),
+    h("option", { value: "site", text: "Also /favicon.ico (viewers contact each site)" }));
+  file.querySelector("input").value = pg ? pg.file : "bookmoor-page.yml";
+  columns.value = String(pg ? pg.columns : 2);
+  source.value = pg ? pg.source : "outputs";
+  icons.value = pg ? pg.icons : "known";
+  return form([
+    h("div", { class: "form-row fields" }, file, name,
+      h("div", { class: "field" }, h("label", { for: k + "columns", text: "Columns" }), columns)),
+    h("div", { class: "form-row fields" },
+      h("div", { class: "field" }, h("label", { for: k + "source", text: "Content" }), source),
+      h("div", { class: "field" }, h("label", { for: k + "icons", text: "Link icons (profile pages)" }), icons)),
+  ], pg ? "Save page" : "Set up page", async () => {
+    await api("PUT", "dynacat/page", {
+      file: file.querySelector("input").value,
+      name: name.querySelector("input").value,
+      columns: Number(columns.value),
+      source: source.value,
+      icons: icons.value,
+    });
+    toast("Page saved");
+    onDone();
+  });
+}
+
 async function dynacatView() {
   const info = await api("GET", "dynacat");
-  const rows = info.outputs.map((o) => h("div", { class: "row" },
-    h("div", { class: "main" },
-      h("div", { class: "name mono", text: o.path || o.file }),
-      h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") + dynStyleText(o.style) + (o.written ? " · file last changed " + new Date(o.written * 1000).toLocaleString() : o.error ? "" : " · not written yet") }),
-      o.error && h("div", { class: "error small", role: "alert", text: o.error })),
-    h("div", { class: "actions" },
-      o.id
-        ? confirmButton("Remove", "Yes, remove", async () => {
-            await api("DELETE", "dynacat/" + encodeURIComponent(o.id));
-            toast("Removed " + o.file + ". The file itself stays on disk.");
-            render();
-          })
-        : h("span", { class: "tag", text: "Command line" }))));
+  const rows = info.outputs.map((o) => {
+    let editor = null;
+    const row = h("div", { class: "row" },
+      h("div", { class: "main" },
+        h("div", { class: "name mono", text: o.path || o.file }),
+        h("div", { class: "muted small", text: o.profile + " · " + (o.folder ? o.folder : "whole tree") + dynStyleText(o.style) + (o.written ? " · file last changed " + new Date(o.written * 1000).toLocaleString() : o.error ? "" : " · not written yet") }),
+        o.error && h("div", { class: "error small", role: "alert", text: o.error })),
+      h("div", { class: "actions" },
+        o.id
+          ? [h("button", { class: "btn quiet small", type: "button", text: "Edit", onclick: () => {
+              if (editor) { editor.remove(); editor = null; return; }
+              editor = outputForm(info, o, "Save output", async (body) => {
+                await api("PUT", "dynacat/" + encodeURIComponent(o.id), body);
+                toast("Saved " + body.file + (body.file !== o.file ? ". The old file stays on disk." : ""));
+                render();
+              });
+              row.after(editor);
+            } }),
+            confirmButton("Remove", "Yes, remove", async () => {
+              await api("DELETE", "dynacat/" + encodeURIComponent(o.id));
+              toast("Removed " + o.file + ". The file itself stays on disk.");
+              render();
+            })]
+          : h("span", { class: "tag", text: "Command line" })));
+    return row;
+  });
 
   // Without a directory the form cannot work, so say how to switch it on. A
   // command-line output already shows which directory Dynacat reads.
@@ -731,82 +867,39 @@ async function dynacatView() {
       "), make that directory writable by the server and restart it. ",
       cli ? "Outputs from the command line, like the one below, stay read-only: change them where the server is started." : ""));
   if (info.dir) {
-    const folder = h("select", { id: "dyn-folder", name: "folder" }, h("option", { value: "", text: "Whole tree" }));
-    const profile = h("select", { id: "dyn-profile", name: "profile" },
-      info.profiles.map((p) => h("option", { value: p.id, text: p.label })));
-    const load = async () => {
-      folder.replaceChildren(h("option", { value: "", text: "Whole tree" }));
-      try {
-        const paths = await api("GET", "dynacat/folders?profile=" + encodeURIComponent(profile.value));
-        for (const p of paths) folder.append(h("option", { value: p, text: p }));
-      } catch (e) { toast(e.message); }
-    };
-    // The widget title starts as the profile's name until the admin types
-    // something of their own.
-    const titleField = field("dyn-title", "Widget title", { type: "text", placeholder: "e.g. Work", maxlength: "80" }, "Shown above the bookmarks. Starts as the profile name so profiles can be told apart; change or clear it.");
-    const titleInput = titleField.querySelector("input");
-    let titleEdited = false;
-    titleInput.addEventListener("input", () => { titleEdited = true; });
-    const prefill = () => {
-      if (titleEdited) return;
-      const p = info.profiles.find((x) => x.id === profile.value);
-      titleInput.value = p ? p.name.slice(0, 80) : "";
-    };
-    profile.addEventListener("change", () => { load(); prefill(); });
-    load();
-    prefill();
-    create = form([
-      h("div", { class: "form-row fields" },
-        field("dyn-file", "File name", { type: "text", placeholder: "dev.yml", required: true, maxlength: "64", autocapitalize: "off" }),
-        h("div", { class: "field" }, h("label", { for: "dyn-profile", text: "Profile" }), profile),
-        h("div", { class: "field" }, h("label", { for: "dyn-folder", text: "Folder" }), folder)),
-      h("div", { class: "form-row fields" },
-        titleField,
-        h("div", { class: "field" }, h("label", { for: "dyn-names", text: "Group titles" }),
-          h("select", { id: "dyn-names", name: "names" },
-            h("option", { value: "path", text: "Full path (toolbar / Dev)" }),
-            h("option", { value: "name", text: "Folder name only (Dev)" }))),
-        field("dyn-depth", "Group depth", { type: "number", min: "0", max: "32", placeholder: "no limit" }, "Folders deeper than this are merged into their parent group: fewer, longer groups.")),
-      h("div", { class: "form-row fields" },
-        field("dyn-max", "Shorten titles to", { type: "number", min: "8", max: "500", placeholder: "no limit" }, "Characters; longer link titles end in …"),
-        h("div", { class: "field-check" },
-          h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-icons", "aria-describedby": "dyn-icons-hint" }), h("span", { text: "Site icons" })),
-          h("p", { class: "hint", id: "dyn-icons-hint", text: "Dynacat's browser asks each site for /favicon.ico, so those sites see the viewer's IP address." })),
-        h("div", { class: "stack-sm" },
-          h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-arrow" }), h("span", { text: " Hide the arrow" })),
-          h("label", { class: "check" }, h("input", { type: "checkbox", id: "dyn-tab" }), h("span", { text: " Open in the same tab" })))),
-    ], "Add output", async (fd, f) => {
-      const num = (id, what) => {
-        const v = document.getElementById(id).value.trim();
-        if (v === "") return null;
-        if (!/^\d+$/.test(v)) throw new Error(what + " must be a whole number");
-        return Number(v);
-      };
-      const style = {
-        title: document.getElementById("dyn-title").value.trim() || null,
-        names: document.getElementById("dyn-names").value,
-        depth: num("dyn-depth", "Group depth"),
-        max_title: num("dyn-max", "Shorten titles to"),
-        icons: document.getElementById("dyn-icons").checked,
-        hide_arrow: document.getElementById("dyn-arrow").checked,
-        same_tab: document.getElementById("dyn-tab").checked,
-      };
-      await api("POST", "dynacat", { file: fd.get("dyn-file"), profile: profile.value, folder: folder.value, style });
-      toast("Added " + fd.get("dyn-file"));
+    create = outputForm(info, null, "Add output", async (body, f) => {
+      await api("POST", "dynacat", body);
+      toast("Added " + body.file);
       f.reset();
       render();
     });
   }
   const pg = info.page;
-  const pageRow = pg && h("div", { class: "stack-sm" },
+  const pageText = (p) => (p.source === "profiles" ? "One page per profile" : "Page \"" + p.name + "\"") + " · " + p.columns + (p.columns === 1 ? " column" : " columns") + (p.written ? " · file last changed " + new Date(p.written * 1000).toLocaleString() : p.error ? "" : " · not written yet");
+  let pageEditor = null;
+  const pageRow = (pg || info.dir) && h("div", { class: "stack-sm" },
     h("h2", { text: "Collecting page" }),
-    h("p", { class: "muted", text: "One Dynacat file, so a single $include is enough and new outputs or profiles show up by themselves: either one page with a widget for every output below, or one page per profile. It is set with BOOKMOOR_DYNACAT_PAGE (or --dynacat-page) and rewritten after every sync when its content changes." }),
-    h("div", { class: "list" }, h("div", { class: "row" },
+    h("p", { class: "muted", text: "One Dynacat file, so a single $include is enough and new outputs or profiles show up by themselves: either one page with a widget for every output below, or one page per profile. It is rewritten after every sync when its content changes." }),
+    pg && h("div", { class: "list" }, h("div", { class: "row" },
       h("div", { class: "main" },
-        h("div", { class: "name mono", text: pg.file }),
-        h("div", { class: "muted small", text: (pg.source === "profiles" ? "One page per profile" : "Page \"" + pg.name + "\"") + " · " + pg.columns + (pg.columns === 1 ? " column" : " columns") + (pg.written ? " · file last changed " + new Date(pg.written * 1000).toLocaleString() : pg.error ? "" : " · not written yet") }),
+        h("div", { class: "name mono", text: pg.path }),
+        h("div", { class: "muted small", text: pageText(pg) }),
         pg.error && h("div", { class: "error small", role: "alert", text: pg.error })),
-      h("div", { class: "actions" }, h("span", { class: "tag", text: "Command line" })))));
+      h("div", { class: "actions" }, pg.editable
+        ? [h("button", { class: "btn quiet small", type: "button", text: "Edit", onclick: (e) => {
+            const row = e.target.closest(".row");
+            if (pageEditor) { pageEditor.remove(); pageEditor = null; return; }
+            pageEditor = pageForm(info, render);
+            row.after(pageEditor);
+          } }),
+          confirmButton("Remove", "Yes, remove", async () => {
+            await api("DELETE", "dynacat/page");
+            toast("Page removed. The file itself stays on disk.");
+            render();
+          })]
+        : h("span", { class: "tag", text: "Command line" })))),
+    !pg && info.dir && pageForm(info, render),
+    pg && !pg.editable && h("p", { class: "hint", text: "This page is set with BOOKMOOR_DYNACAT_PAGE (or --dynacat-page); change it where the server is started." }));
   return h("div", { class: "stack" },
     h("div", { class: "stack-sm" },
       h("h2", { text: "Dynacat outputs" }),

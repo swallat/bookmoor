@@ -14,7 +14,7 @@ use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -86,7 +86,14 @@ pub fn routes() -> Router<Shared> {
         .route("/ui/api/profiles/{id}/import", post(import_profile))
         .route("/ui/api/dynacat", get(dynacat).post(add_dynacat))
         .route("/ui/api/dynacat/folders", get(dynacat_folders))
-        .route("/ui/api/dynacat/{id}", delete(remove_dynacat))
+        .route(
+            "/ui/api/dynacat/page",
+            put(set_dynacat_page).delete(remove_dynacat_page),
+        )
+        .route(
+            "/ui/api/dynacat/{id}",
+            delete(remove_dynacat).put(change_dynacat),
+        )
         .route("/ui/api/password", post(change_password))
         .route("/ui/api/users", get(users).post(add_user))
         .route("/ui/api/users/{id}", delete(remove_user))
@@ -984,6 +991,8 @@ async fn sso_test(
 struct DynacatRow {
     /// `None` for outputs from the command line (read only here).
     id: Option<String>,
+    /// Profile id (web UI outputs), to preselect it when editing.
+    profile_id: Option<String>,
     file: String,
     /// Where the file is written: the full path.
     path: String,
@@ -1012,10 +1021,15 @@ struct DynacatProfile {
     name: String,
 }
 
-/// The collecting page (command line only, shown read only).
+/// The collecting page: from the web UI (editable) or the command line.
 #[derive(Serialize)]
 struct DynacatPage {
+    /// Set in the web UI, so it can be changed here.
+    editable: bool,
+    /// Plain file name (web UI page) or the full path.
     file: String,
+    path: String,
+    icons: &'static str,
     name: String,
     columns: usize,
     /// `outputs` or `profiles`.
@@ -1056,6 +1070,7 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
         };
         outputs.push(DynacatRow {
             id: None,
+            profile_id: None,
             error: st.dynacat_errors.get(&file).cloned(),
             path: file.clone(),
             written: file_written(&o.file),
@@ -1069,6 +1084,7 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
         let path = st.dynacat_dir.as_ref().map(|d| d.join(&o.file));
         outputs.push(DynacatRow {
             id: Some(o.id.clone()),
+            profile_id: Some(o.profile_id.clone()),
             file: o.file.clone(),
             path: st.dynacat_key(&o.file),
             written: path.as_deref().and_then(file_written),
@@ -1091,17 +1107,29 @@ async fn dynacat(State(s): State<Shared>, _: Admin) -> Json<DynacatInfo> {
             name: p.name.clone(),
         })
         .collect();
-    let page = st.dynacat_page.as_ref().map(|p| {
-        let file = p.file.display().to_string();
+    let page = st.effective_page().map(|p| {
+        let path = p.file.display().to_string();
+        let editable = st.dynacat_page.is_none();
         DynacatPage {
-            error: st.dynacat_errors.get(&file).cloned(),
+            editable,
+            error: st.dynacat_errors.get(&path).cloned(),
             written: file_written(&p.file),
-            file,
+            file: match (&st.dynacat_page_ui, editable) {
+                (Some(u), true) => u.file.clone(),
+                _ => path.clone(),
+            },
+            path,
             name: p.name.clone(),
             columns: p.columns,
             source: match p.source {
                 crate::dynacat::PageSource::Outputs => "outputs",
                 crate::dynacat::PageSource::Profiles => "profiles",
+            },
+            icons: match p.icons {
+                bookmoor_core::dynacat::IconSource::None => "none",
+                bookmoor_core::dynacat::IconSource::Known => "known",
+                bookmoor_core::dynacat::IconSource::Google => "google",
+                bookmoor_core::dynacat::IconSource::Site => "site",
             },
         }
     });
@@ -1170,6 +1198,60 @@ async fn add_dynacat(
         eprintln!("warning: cannot write the Dynacat file: {e}");
     }
     Ok(StatusCode::CREATED)
+}
+
+async fn change_dynacat(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Path(id): Path<String>,
+    Json(b): Json<NewDynacat>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    let folder = b
+        .folder
+        .split('/')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect();
+    st.update_dynacat_output(&id, &b.file, &b.profile, folder, b.style)
+        .map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    if let Err(e) = st.publish_dynacat(None) {
+        eprintln!("warning: cannot write the Dynacat file: {e}");
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_dynacat_page(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+    Json(b): Json<crate::dynacat::UiPage>,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    st.set_dynacat_page_ui(b).map_err(ApiError::Unprocessable)?;
+    save(&mut st)?;
+    if let Err(e) = st.publish_dynacat(None) {
+        eprintln!("warning: cannot write the Dynacat file: {e}");
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_dynacat_page(
+    State(s): State<Shared>,
+    Admin(a): Admin,
+) -> Result<StatusCode, ApiError> {
+    let mut st = s.lock().unwrap();
+    still_admin(&st, &a)?;
+    if let (Some(p), Some(d)) = (st.dynacat_page_ui.take(), st.dynacat_dir.clone()) {
+        st.dynacat_errors
+            .remove(&d.join(&p.file).display().to_string());
+    }
+    // The file stays: Dynacat may still include it.
+    save(&mut st)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn remove_dynacat(
@@ -2271,6 +2353,146 @@ mod tests {
         u.state.lock().unwrap().publish_dynacat(None).unwrap();
         let text = std::fs::read_to_string(&page).unwrap();
         assert_eq!(text.matches("\n- name: ").count(), 2, "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn admins_edit_outputs_and_the_collecting_page() {
+        let dir = std::env::temp_dir().join(format!("bookmoor-ui-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let u = ui();
+        let anna = u.setup("anna").await;
+        let (_, v, _) = u
+            .call("GET", "/ui/api/profiles", Some(&anna), None, false)
+            .await;
+        let profile = v[0]["id"].as_str().unwrap().to_string();
+        let put = |path: String, body: serde_json::Value| {
+            let (u, anna) = (&u, &anna);
+            async move { u.call("PUT", &path, Some(anna), Some(body), true).await.0 }
+        };
+        let page_body = |file: &str| serde_json::json!({"file": file, "name": "Links", "columns": 2, "source": "outputs", "icons": "known"});
+
+        // Needs the directory.
+        assert_eq!(
+            put("/ui/api/dynacat/page".into(), page_body("p.yml")).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        u.state.lock().unwrap().dynacat_dir = Some(dir.clone());
+        let new = serde_json::json!({"file": "a.yml", "profile": profile, "folder": ""});
+        assert_eq!(
+            u.post("/ui/api/dynacat", Some(&anna), new).await.0,
+            StatusCode::CREATED
+        );
+
+        // Page: not an output's file, bad values refused, then written.
+        assert_eq!(
+            put("/ui/api/dynacat/page".into(), page_body("a.yml")).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        for bad in [
+            serde_json::json!({"file": "p.yml", "name": "", "columns": 1}),
+            serde_json::json!({"file": "p.yml", "name": "x", "columns": 5}),
+            serde_json::json!({"file": "../p.yml", "name": "x", "columns": 1}),
+        ] {
+            assert_eq!(
+                put("/ui/api/dynacat/page".into(), bad).await,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+        assert_eq!(
+            put("/ui/api/dynacat/page".into(), page_body("p.yml")).await,
+            StatusCode::NO_CONTENT
+        );
+        let text = std::fs::read_to_string(dir.join("p.yml")).unwrap();
+        assert!(
+            text.contains("- name: \"Links\"") && text.contains("title: \"a\""),
+            "{text}"
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/dynacat", Some(&anna), None, false)
+            .await;
+        assert_eq!(
+            (v["page"]["editable"].clone(), v["page"]["file"].clone()),
+            (true.into(), "p.yml".into())
+        );
+
+        // The page name cannot be taken by a new output, and a changed page
+        // is rewritten (profiles source: one page per profile).
+        let clash = serde_json::json!({"file": "p.yml", "profile": profile, "folder": ""});
+        assert_eq!(
+            u.post("/ui/api/dynacat", Some(&anna), clash).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let mut body = page_body("p.yml");
+        body["source"] = "profiles".into();
+        assert_eq!(
+            put("/ui/api/dynacat/page".into(), body).await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(std::fs::read_to_string(dir.join("p.yml"))
+            .unwrap()
+            .contains("- name: \"Default\""));
+
+        // Edit the output: a title, then a rename (the old file stays).
+        let id = v["outputs"][0]["id"].as_str().unwrap().to_string();
+        let edit = |file: &str, title: &str| serde_json::json!({"file": file, "profile": profile, "folder": "", "style": {"title": title}});
+        assert_eq!(
+            put(format!("/ui/api/dynacat/{id}"), edit("a.yml", "Mine")).await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(std::fs::read_to_string(dir.join("a.yml"))
+            .unwrap()
+            .contains("title: \"Mine\""));
+        assert_eq!(
+            put(format!("/ui/api/dynacat/{id}"), edit("b.yml", "Mine")).await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(dir.join("a.yml").exists() && dir.join("b.yml").exists());
+        assert_eq!(
+            put(format!("/ui/api/dynacat/{id}"), edit("p.yml", "x")).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            put("/ui/api/dynacat/do_nope".into(), edit("c.yml", "x")).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/dynacat", Some(&anna), None, false)
+            .await;
+        assert_eq!(v["outputs"].as_array().unwrap().len(), 1);
+        assert_eq!(v["outputs"][0]["file"], "b.yml");
+
+        // A page from the command line is read only here.
+        u.state.lock().unwrap().dynacat_page = Some(crate::dynacat::PageSpec {
+            file: dir.join("cli.yml"),
+            name: "Cli".into(),
+            columns: 1,
+            source: crate::dynacat::PageSource::Outputs,
+            icons: Default::default(),
+        });
+        assert_eq!(
+            put("/ui/api/dynacat/page".into(), page_body("q.yml")).await,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/dynacat", Some(&anna), None, false)
+            .await;
+        assert_eq!(v["page"]["editable"], false);
+        u.state.lock().unwrap().dynacat_page = None;
+
+        // Removing the page keeps its file.
+        assert_eq!(
+            u.call("DELETE", "/ui/api/dynacat/page", Some(&anna), None, true)
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+        let (_, v, _) = u
+            .call("GET", "/ui/api/dynacat", Some(&anna), None, false)
+            .await;
+        assert!(v["page"].is_null());
+        assert!(dir.join("p.yml").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

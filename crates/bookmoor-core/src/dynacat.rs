@@ -315,7 +315,8 @@ pub fn render_page(name: &str, columns: usize, widgets: &[String]) -> String {
 }
 
 /// Where link icons come from on a profile page.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum IconSource {
     /// No icons.
     None,

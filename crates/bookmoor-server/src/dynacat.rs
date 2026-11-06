@@ -71,7 +71,8 @@ impl Output {
 }
 
 /// What the collecting page is made of.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PageSource {
     /// One page with a widget for every output.
     #[default]
@@ -93,6 +94,50 @@ pub struct PageSpec {
     pub source: PageSource,
     /// Link icons of profile pages.
     pub icons: bookmoor_core::dynacat::IconSource,
+}
+
+/// The collecting file as set up in the web UI: stored in the state file,
+/// written into the `--dynacat-dir` directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiPage {
+    /// File name inside the directory, e.g. `bookmoor-page.yml`.
+    pub file: String,
+    pub name: String,
+    pub columns: usize,
+    #[serde(default)]
+    pub source: PageSource,
+    #[serde(default)]
+    pub icons: bookmoor_core::dynacat::IconSource,
+}
+
+impl UiPage {
+    /// The page as written into `dir`.
+    pub fn spec(&self, dir: &Path) -> PageSpec {
+        PageSpec {
+            file: dir.join(&self.file),
+            name: self.name.clone(),
+            columns: self.columns,
+            source: self.source,
+            icons: self.icons,
+        }
+    }
+
+    /// Reject names, files and column counts Dynacat would not take.
+    pub fn check(&mut self) -> Result<(), String> {
+        self.file = self.file.trim().to_string();
+        self.name = self.name.trim().to_string();
+        check_file_name(&self.file)?;
+        if self.name.is_empty() || self.name.chars().count() > Style::MAX_TITLE {
+            return Err(format!("page name: 1 to {} characters", Style::MAX_TITLE));
+        }
+        if !(1..=bookmoor_core::dynacat::MAX_PAGE_COLUMNS).contains(&self.columns) {
+            return Err(format!(
+                "columns: 1 to {}",
+                bookmoor_core::dynacat::MAX_PAGE_COLUMNS
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl PageSpec {

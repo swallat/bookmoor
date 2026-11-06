@@ -27,6 +27,13 @@ directory Dynacat reads. Admins then get a **Dynacat** tab: pick a file name
 whole tree). The file is written at once and after every sync of that profile;
 a write problem shows on the row. The outputs are kept in the state file.
 
+- **Edit** on an output changes its profile, folder, file name and looks
+  (the form is the same as for adding). A renamed output writes the new file;
+  the old one stays on disk, because Dynacat may still include it.
+- The **Collecting page** section below the form sets the page (file name,
+  page name, columns, content, icons) the same way, see "One page for all
+  outputs". It is stored in the state file. A page given with
+  `--dynacat-page` / `BOOKMOOR_DYNACAT_PAGE` wins and is shown read only.
 - Only admins can do this, and only inside `DIR`: the name is a plain
   `.yml`/`.yaml` name, no path.
 - bookmoor never overwrites a file it did not write (it checks for its
@@ -104,7 +111,7 @@ file is replaced by rename, which a single-file bind mount does not follow.
 Every new output needs its own `$include`. To avoid editing `dynacat.yml` each
 time, let bookmoor write one more file: a complete Dynacat **page** with a
 widget for every output. Set it like an output, on the command line or in the
-environment (there is no web UI setting yet; the tab shows it read only):
+environment, or in the **Dynacat** tab of the web UI (admins, needs `--dynacat-dir`). A page from the command line wins over the one set in the UI and is read only there:
 
 ```
 --dynacat-page "file=/dynacat/bookmoor-page.yml;name=Bookmoor;columns=2"
