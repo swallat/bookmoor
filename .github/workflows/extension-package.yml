@@ -162,11 +162,16 @@ jobs:
             fi
             echo "::error::Chrome Web Store upload failed"; exit 1
           fi
-          PUB=$(curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" -H "Content-Length: 0" \
-            "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish")
-          echo "$PUB" | jq -c '{status, statusDetail}'
-          echo "$PUB" | jq -e '.status | index("OK") or index("ITEM_PENDING_REVIEW")' >/dev/null \
-            || { echo "::error::Chrome Web Store did not accept the submission"; exit 1; }
+          # The upload is done at this point. If the store refuses to submit it, the
+          # package stays as a draft: say why (the body is in the log) and finish
+          # the submission in the developer dashboard.
+          HTTP=$(curl -sS -o pub.json -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H "x-goog-api-version: 2" -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish") || HTTP=000
+          echo "publish: HTTP $HTTP"; cat pub.json; echo
+          if [ "$HTTP" = "200" ] && jq -e '.status | index("OK") or index("ITEM_PENDING_REVIEW")' pub.json >/dev/null; then
+            exit 0
+          fi
+          echo "::warning::The package is uploaded but the store did not submit it for review (HTTP $HTTP, see the log). Open the item in the developer dashboard, check the tabs for missing fields and press Submit for review."
       - name: Say why nothing went to the Chrome Web Store
         if: steps.version.outputs.release == 'true' && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
         run: echo "::notice::Nothing was uploaded to the Chrome Web Store because one of CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN is not set."
