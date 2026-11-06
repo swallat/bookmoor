@@ -310,8 +310,9 @@ function bmDialog(ix, init) {
 
 /** Review links saved more than once; only the copies the user ticks are removed. */
 async function bmDuplicates() {
+  const profile = bmProfile; // the select can change it while the dialog is open
   let groups;
-  try { groups = await api("GET", "profiles/" + bmProfile + "/duplicates"); }
+  try { groups = await api("GET", "profiles/" + profile + "/duplicates"); }
   catch (e) { toast(e.message); return; }
   if (!groups.length) { toast("No duplicates found"); return; }
   const dlg = h("dialog", { class: "bm-dialog bm-dups", "aria-label": "Duplicate bookmarks" });
@@ -350,11 +351,14 @@ async function bmDuplicates() {
   go.addEventListener("click", async () => {
     go.disabled = true;
     try {
-      const r = await api("POST", "profiles/" + bmProfile + "/duplicates/remove", { ids: boxes.filter((b) => b.box.checked).map((b) => b.id) });
+      const r = await api("POST", "profiles/" + profile + "/duplicates/remove", { ids: boxes.filter((b) => b.box.checked).map((b) => b.id) });
       close();
       toast("Removed " + r.removed + (r.removed === 1 ? " bookmark" : " bookmarks") + ". Restore under Profiles brings them back.");
       render();
-    } catch (e) { toast(e.message); update(); }
+    } catch (e) {
+      // Most likely the tree changed since the list was made: look again.
+      close(); toast(e.message); render();
+    }
   });
   dlg.append(
     h("h2", { text: groups.length + (groups.length === 1 ? " link is" : " links are") + " saved more than once" }),

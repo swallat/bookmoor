@@ -112,7 +112,8 @@ pub struct DupGroup {
 }
 
 /// The URL as far as it names the page: scheme and host in lower case, no
-/// `www.`, no default port, no fragment, no trailing slash. The query stays,
+/// `www.`, no default port, no fragment (unless it is a `#/route`), no
+/// trailing slash. The query stays,
 /// since it usually picks the page. Anything that is not http(s) is compared
 /// as it is.
 pub fn normalize_url(url: &str) -> String {
@@ -125,12 +126,21 @@ pub fn normalize_url(url: &str) -> String {
     } else {
         return u.to_string();
     };
-    let rest = rest.split('#').next().unwrap_or("");
+    // A fragment is dropped, unless it is a route of a single-page app.
+    let rest = match rest.split_once('#') {
+        Some((r, f)) if !(f.starts_with('/') || f.starts_with('!')) => r,
+        _ => rest,
+    };
     let (auth, tail) = match rest.find(['/', '?']) {
         Some(i) => rest.split_at(i),
         None => (rest, ""),
     };
-    let mut host = auth.to_ascii_lowercase();
+    // Credentials in the URL are kept as they are; only the host is folded.
+    let (userinfo, hostport) = match auth.rsplit_once('@') {
+        Some((u, h)) => (format!("{u}@"), h),
+        None => (String::new(), auth),
+    };
+    let mut host = hostport.trim_end_matches('.').to_ascii_lowercase();
     let default = if scheme == "https" { ":443" } else { ":80" };
     if let Some(h) = host.strip_suffix(default) {
         host = h.to_string();
@@ -143,7 +153,7 @@ pub fn normalize_url(url: &str) -> String {
         None => (tail, None),
     };
     let path = path.trim_end_matches('/');
-    let mut out = format!("{scheme}://{host}{path}");
+    let mut out = format!("{scheme}://{userinfo}{host}{path}");
     if let Some(q) = query.filter(|q| !q.is_empty()) {
         out.push('?');
         out.push_str(q);
@@ -372,6 +382,14 @@ mod tests {
             normalize_url("https://example.com")
         );
         assert_eq!(normalize_url("mailto:x@y"), "mailto:x@y");
+        assert_ne!(
+            normalize_url("https://a.example/#/inbox"),
+            normalize_url("https://a.example/#/settings")
+        );
+        assert_ne!(
+            normalize_url("https://Bob:x@h.example"),
+            normalize_url("https://bob:x@h.example")
+        );
     }
 
     #[test]
