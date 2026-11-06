@@ -1496,7 +1496,8 @@ async fn change_linkwarden(
             .ok_or_else(|| ApiError::Unprocessable("no such connection".into()))?
     };
     let old = l.clone();
-    if !b.token.trim().is_empty() {
+    let new_token = !b.token.trim().is_empty();
+    if new_token {
         l.token = b.token;
     }
     l.profile_id = b.profile;
@@ -1506,6 +1507,12 @@ async fn change_linkwarden(
     l.mode = b.mode;
     l.interval = b.interval;
     l.check().map_err(ApiError::Unprocessable)?;
+    // The stored token only ever goes to the address it was made for.
+    if old.url != l.url && !new_token {
+        return Err(ApiError::Unprocessable(
+            "access token: enter it again when the address changes".into(),
+        ));
+    }
     // Another place or collection is a fresh start: what was paired is not
     // meaningful there (the first run matches by name and address).
     let moved = old.profile_id != l.profile_id
@@ -1531,7 +1538,10 @@ async fn change_linkwarden(
         l.collection_id = slot.collection_id;
     }
     *slot = l;
-    st.linkwarden_status.remove(&id);
+    // A run in progress keeps its flag; it notices the change when it ends.
+    if st.linkwarden_status.get(&id).is_some_and(|s| !s.running) {
+        st.linkwarden_status.remove(&id);
+    }
     save(&mut st)?;
     st.linkwarden_wake.notify_one();
     Ok(StatusCode::NO_CONTENT)
@@ -2508,13 +2518,28 @@ mod tests {
             );
             assert_eq!(l.mode, bookmoor_core::linkwarden::Mode::Push);
         }
+        // A new address never takes the stored token along.
+        let (st, v, _) = u
+            .call(
+                "PUT",
+                "/ui/api/linkwarden/lw_1",
+                Some(&anna),
+                Some(body("http://127.0.0.1:1", "", "Bookmoor")),
+                true,
+            )
+            .await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            v["error"].as_str().unwrap().contains("enter it again"),
+            "{v}"
+        );
         // Another collection is a fresh start and needs a reachable server.
         let (st, _, _) = u
             .call(
                 "PUT",
                 "/ui/api/linkwarden/lw_1",
                 Some(&anna),
-                Some(body("http://127.0.0.1:1", "", "Other")),
+                Some(body("https://l.example", "", "Other")),
                 true,
             )
             .await;

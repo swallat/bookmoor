@@ -233,7 +233,10 @@ impl Client {
                         d.get("links")
                             .and_then(Value::as_array)
                             .cloned()
-                            .unwrap_or_default(),
+                            .ok_or_else(|| ApiErr {
+                                status: None,
+                                msg: format!("GET {route}: the answer holds no list of links"),
+                            })?,
                         d.get("nextCursor").and_then(Value::as_i64),
                     )
                 } else if let Some(r) = v.get("response").and_then(Value::as_array) {
@@ -351,6 +354,8 @@ struct Remote {
     raw: BTreeMap<Ref, Value>,
     /// Owner of each collection (a link's target collection must name it).
     owner: BTreeMap<i64, i64>,
+    /// Links whose address cannot be a bookmark's.
+    unlinkable: BTreeSet<i64>,
 }
 
 fn is_linkable(url: &str) -> bool {
@@ -403,6 +408,7 @@ async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<Remote, String> {
         items: BTreeMap::new(),
         raw: BTreeMap::new(),
         owner: BTreeMap::new(),
+        unlinkable: BTreeSet::new(),
     };
     if let Some(r) = cols.iter().find(|c| c["id"].as_i64() == Some(root)) {
         if let Some(o) = r["ownerId"].as_i64() {
@@ -422,6 +428,7 @@ async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<Remote, String> {
                     continue;
                 };
                 if !is_linkable(url) {
+                    out.unlinkable.insert(id);
                     continue;
                 }
                 let title = match l["name"].as_str().map(str::trim) {
@@ -471,6 +478,8 @@ struct Local {
     /// The browser's own top-level folders (toolbar, other, mobile): they
     /// are never renamed, moved or removed by what Linkwarden does.
     protected: BTreeSet<String>,
+    /// Bookmarks of the tree left out for their address.
+    unlinkable: BTreeSet<String>,
 }
 
 fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
@@ -527,6 +536,7 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
     inside.insert(root.clone());
     let mut nodes = BTreeMap::new();
     let mut skipped = 0;
+    let mut unlinkable = BTreeSet::new();
     for n in &tree.nodes {
         let Some(p) = n.parent.as_deref() else {
             continue;
@@ -541,6 +551,7 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
             Kind::Bookmark => {
                 if !n.url.as_deref().is_some_and(is_linkable) {
                     skipped += 1;
+                    unlinkable.insert(n.id.clone());
                     continue;
                 }
             }
@@ -563,6 +574,7 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
         skipped,
         rev: tree.rev,
         protected,
+        unlinkable,
         before: tree.nodes,
     })
 }
@@ -573,6 +585,8 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
 struct Done {
     refs: BTreeMap<String, Ref>,
     failed: BTreeSet<String>,
+    /// Changes put off to the next run because Bookmoor changed meanwhile.
+    deferred: BTreeSet<String>,
     errors: Vec<String>,
 }
 
@@ -710,7 +724,11 @@ async fn run_remote(
                         Some(p) => coll(&done, p).ok_or("its new folder is not in Linkwarden")?,
                         None => item.parent,
                     };
-                    let name = title.clone().unwrap_or(item.title.clone());
+                    let name = title.clone().unwrap_or_else(|| {
+                        raw["name"]
+                            .as_str()
+                            .map_or(item.title.clone(), str::to_string)
+                    });
                     match r {
                         Ref::Collection(id) => {
                             client
@@ -761,12 +779,13 @@ async fn run_remote(
     done
 }
 
-/// The pairs after a run: what was agreed, except where a change failed.
+/// The pairs after a run: what was agreed, except where a change failed or
+/// was put off (`keep`: those pairs stay as they were).
 fn finalize(
     old: &[Pair],
     plan: &Plan,
     refs: &BTreeMap<String, Ref>,
-    failed: &BTreeSet<String>,
+    keep: &BTreeSet<String>,
 ) -> Vec<Pair> {
     let old_by: BTreeMap<&str, &Pair> = old.iter().map(|p| (p.node.as_str(), p)).collect();
     let mut out: BTreeMap<String, Pair> = BTreeMap::new();
@@ -780,10 +799,7 @@ fn finalize(
         },
     ) in &plan.desired
     {
-        if failed.contains(node) {
-            if let Some(p) = old_by.get(node.as_str()) {
-                out.insert(node.clone(), (*p).clone());
-            }
+        if keep.contains(node) {
             continue;
         }
         let Some(r) = remote.or_else(|| refs.get(node).copied()) else {
@@ -800,31 +816,41 @@ fn finalize(
             },
         );
     }
-    // A delete that failed leaves the pair for the next run.
-    for node in failed {
-        if !out.contains_key(node) {
-            if let Some(p) = old_by.get(node.as_str()) {
-                out.insert(node.clone(), (*p).clone());
-            }
+    for node in keep {
+        if let Some(p) = old_by.get(node.as_str()) {
+            out.insert(node.clone(), (*p).clone());
         }
     }
     out.into_values().collect()
 }
 
-/// Apply the local half of the plan. Returns the nodes that failed.
+/// Apply the local half of the plan. Edits made in Bookmoor since the tree
+/// was read are not overwritten: if the tree moved on, only additions are
+/// made and the rest waits for the next run (`deferred`).
 fn apply_local(
     st: &mut AppState,
     profile: &str,
     plan: &Plan,
+    seen_rev: u64,
     before: &[bookmoor_core::wire::WireNode],
 ) -> Done {
     let mut done = Done::default();
-    if plan
+    let Some(engine) = st.engines.get(profile) else {
+        done.errors.push("the profile is gone".into());
+        return done;
+    };
+    let moved_on = engine.rev() != seen_rev;
+    let removed: Vec<&String> = plan
         .local
         .iter()
-        .any(|a| matches!(a, LocalAction::Remove { .. }))
-    {
-        // One undo point for everything this run deletes.
+        .filter_map(|a| match a {
+            LocalAction::Remove { node } => Some(node),
+            _ => None,
+        })
+        .collect();
+    if !moved_on && (removed.len() > 5 || removed.iter().any(|n| engine.has_children(n.as_str()))) {
+        // An undo point, as for a folder removed by hand; not for a single
+        // bookmark, which would wipe an older undo point for little.
         st.backups.insert(
             profile.to_string(),
             Backup {
@@ -834,7 +860,6 @@ fn apply_local(
         );
     }
     let Some(engine) = st.engines.get_mut(profile) else {
-        done.errors.push("the profile is gone".into());
         return done;
     };
     for a in &plan.local {
@@ -863,6 +888,14 @@ fn apply_local(
                     node,
                 ),
             ),
+            LocalAction::Update { node, .. }
+            | LocalAction::Move { node, .. }
+            | LocalAction::Remove { node }
+                if moved_on =>
+            {
+                done.deferred.insert(node.clone());
+                continue;
+            }
             LocalAction::Update { node, title, url } => (
                 node,
                 engine.ui_edit(
@@ -947,8 +980,26 @@ fn summary(plan: &Plan, failed: usize, skipped: usize) -> String {
     s
 }
 
+/// Clears a connection's `running` flag however the run ends, even when the
+/// task is cancelled.
+struct Running {
+    state: Shared,
+    id: String,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Ok(mut st) = self.state.lock() {
+            if let Some(s) = st.linkwarden_status.get_mut(&self.id) {
+                s.running = false;
+            }
+        }
+    }
+}
+
 /// Run a connection once. `force` lets a run delete most of what it knows
-/// (otherwise it stops: that usually means something is wrong).
+/// (otherwise it stops: that usually means something is wrong). The run goes
+/// on in its own task, so a request that gives up does not cut it short.
 pub async fn sync_now(state: &Shared, id: &str, force: bool) -> Result<String, String> {
     {
         let mut st = state.lock().unwrap();
@@ -961,48 +1012,62 @@ pub async fn sync_now(state: &Shared, id: &str, force: bool) -> Result<String, S
         }
         s.running = true;
     }
-    let result = run(state, id, force).await;
-    let mut st = state.lock().unwrap();
-    let s = st.linkwarden_status.entry(id.to_string()).or_default();
-    let t = now();
-    s.running = false;
-    s.last_run = Some(t);
-    match &result {
-        Ok((msg, rev, failed)) => {
-            s.message = msg.clone();
-            s.failed = *failed;
-            if !failed {
-                s.last_ok = Some(t);
-                s.rev = *rev;
+    let (state, id) = (state.clone(), id.to_string());
+    tokio::spawn(async move {
+        let _running = Running {
+            state: state.clone(),
+            id: id.clone(),
+        };
+        let result = run(&state, &id, force).await;
+        let t = now();
+        let mut st = state.lock().unwrap();
+        let interval = st
+            .linkwarden
+            .iter()
+            .find(|l| l.id == id)
+            .map_or(DEFAULT_INTERVAL, |l| l.interval);
+        let s = st.linkwarden_status.entry(id.clone()).or_default();
+        s.last_run = Some(t);
+        match &result {
+            Ok(r) => {
+                s.message = r.message.clone();
+                s.failed = r.failed;
+                if !r.failed {
+                    s.last_ok = Some(t);
+                    s.rev = r.rev;
+                }
+            }
+            Err(e) => {
+                s.message = e.clone();
+                s.failed = true;
             }
         }
-        Err(e) => {
-            s.message = e.clone();
-            s.failed = true;
-        }
-    }
-    drop(st);
-    // Retry soon after a problem, otherwise after the interval.
-    let interval = state
-        .lock()
-        .unwrap()
-        .linkwarden
-        .iter()
-        .find(|l| l.id == id)
-        .map_or(DEFAULT_INTERVAL, |l| l.interval);
-    let mut st = state.lock().unwrap();
-    if let Some(s) = st.linkwarden_status.get_mut(id) {
-        let failed = s.failed;
-        s.next_at = t + if failed {
+        // Soon again after a problem, otherwise after the interval.
+        s.next_at = t + if s.failed {
             interval.min(RETRY_SECS)
         } else {
             interval
         };
-    }
-    result.map(|(m, _, _)| m)
+        result.map(|r| r.message)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("the run stopped unexpectedly: {e}")))
 }
 
-async fn run(state: &Shared, id: &str, force: bool) -> Result<(String, Option<u64>, bool), String> {
+struct Outcome {
+    message: String,
+    rev: Option<u64>,
+    failed: bool,
+}
+
+/// A run that would remove most of what is known, or everything of a
+/// non-trivial set, is probably not what was meant.
+fn needs_confirmation(plan: &Plan, known: usize, local_empty: bool, remote_empty: bool) -> bool {
+    let wiped = (local_empty || remote_empty) && known >= 3 && plan.deletions() > 0;
+    wiped || (known >= 10 && plan.deletions() * 2 > known)
+}
+
+async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
     let local = {
         let st = state.lock().unwrap();
         read_local(&st, id)?
@@ -1028,36 +1093,76 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<(String, Option<u6
         | LocalAction::Remove { node } => !local.protected.contains(node),
         LocalAction::Add { .. } => true,
     });
+    // Bookmarks whose address one side cannot hold are on neither list, but
+    // the other side's copy is not to be deleted or rewritten for that.
+    let mut held: BTreeSet<String> = local.unlinkable.clone();
+    for p in &cfg.pairs {
+        if let Ref::Link(l) = p.remote {
+            if remote.unlinkable.contains(&l) {
+                held.insert(p.node.clone());
+            }
+        }
+    }
+    let touches = |node: &String| held.contains(node);
+    plan.remote.retain(|a| match a {
+        RemoteAction::Update { node, .. } | RemoteAction::Delete { node } => !touches(node),
+        RemoteAction::Create { .. } => true,
+    });
+    plan.local.retain(|a| match a {
+        LocalAction::Update { node, .. }
+        | LocalAction::Move { node, .. }
+        | LocalAction::Remove { node } => !touches(node),
+        LocalAction::Add { .. } => true,
+    });
     let known = cfg.pairs.len();
-    if !force && known >= 10 && plan.deletions() * 2 > known {
+    if !force
+        && needs_confirmation(
+            &plan,
+            known,
+            local.nodes.is_empty(),
+            remote.items.is_empty(),
+        )
+    {
         return Err(format!(
-            "Paused: this run would delete {} of {} bookmarks and folders it knows. If that is what you want, use \"Sync anyway\"; otherwise check the collection and the profile",
+            "Paused: this run would delete {} of the {} bookmarks and folders it knows (an empty or half-read list on one side looks the same). If that is what you want, use \"Sync anyway\"; otherwise check the collection and the profile",
             plan.deletions(),
             known
         ));
     }
     let mut done = run_remote(&client, &plan, &cfg.pairs, &mut remote, &local.root).await;
-    let ldone = {
-        let mut st = state.lock().unwrap();
-        // A change made in Bookmoor meanwhile is picked up by the next run;
-        // an edit that no longer fits just fails and is tried again.
-        apply_local(&mut st, &cfg.profile_id, &plan, &local.before)
-    };
+    let ldone =
+        {
+            let mut st = state.lock().unwrap();
+            // The connection may have been changed or removed while this ran.
+            match st.linkwarden.iter().find(|l| l.id == id) {
+                Some(now) if same_place(now, &cfg) => {}
+                _ => return Err(
+                    "the connection was changed or removed during the run; nothing more was done"
+                        .into(),
+                ),
+            }
+            apply_local(&mut st, &cfg.profile_id, &plan, local.rev, &local.before)
+        };
     done.failed.extend(ldone.failed);
+    done.deferred.extend(ldone.deferred);
     for e in ldone.errors {
         if done.errors.len() < 5 {
             done.errors.push(e);
         }
     }
-    let pairs = finalize(&cfg.pairs, &plan, &done.refs, &done.failed);
+    let mut keep: BTreeSet<String> = done.failed.union(&done.deferred).cloned().collect();
+    keep.extend(held.iter().cloned());
+    let pairs = finalize(&cfg.pairs, &plan, &done.refs, &keep);
     {
         let mut st = state.lock().unwrap();
-        if let Some(l) = st.linkwarden.iter_mut().find(|l| l.id == id) {
-            l.pairs = pairs;
-            l.collection_id = Some(remote.root);
-        } else {
-            // Removed while the run was going.
-            return Err("this connection was removed during the run".into());
+        match st.linkwarden.iter_mut().find(|l| l.id == id) {
+            Some(l) if same_place(l, &cfg) => {
+                l.pairs = pairs;
+                l.collection_id = Some(remote.root);
+            }
+            // Changed or removed while the run was going: the new settings
+            // start from scratch.
+            _ => return Err("the connection was changed or removed during the run".into()),
         }
         if let Err(e) = st.persist_or_revert() {
             return Err(format!("cannot save the state: {e}"));
@@ -1070,14 +1175,30 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<(String, Option<u6
     }
     let failed = !done.failed.is_empty();
     let mut msg = summary(&plan, done.failed.len(), local.skipped);
+    if !done.deferred.is_empty() {
+        msg.push_str("; Bookmoor changed meanwhile, the rest follows in the next run");
+    }
     if !done.errors.is_empty() {
         msg.push_str(". ");
         msg.push_str(&done.errors.join("; "));
     }
-    // After changes taken over from Linkwarden the tree is not the one that
-    // was compared: one more (cheap) run then settles it.
-    let rev = plan.local.is_empty().then_some(local.rev);
-    Ok((msg, rev, failed))
+    // After changes taken over from Linkwarden, or put off, the tree is not
+    // the one that was compared: one more (cheap) run then settles it.
+    let rev = (plan.local.is_empty() && done.deferred.is_empty()).then_some(local.rev);
+    Ok(Outcome {
+        message: msg,
+        rev,
+        failed,
+    })
+}
+
+/// Same Linkwarden and same place in the tree (not the pace or direction).
+fn same_place(a: &Linkwarden, b: &Linkwarden) -> bool {
+    a.profile_id == b.profile_id
+        && a.folder == b.folder
+        && a.url == b.url
+        && a.collection == b.collection
+        && a.token == b.token
 }
 
 /// Runs the connections that are due: after changes in Bookmoor (shortly

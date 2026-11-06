@@ -370,11 +370,31 @@ pub fn plan(
         .map(String::as_str)
         .collect();
     unpaired_local.sort_by_key(|n| (depth_local(local, root, n), &local[*n].position, *n));
-    let mut unpaired_remote: BTreeSet<Ref> = remote
-        .keys()
-        .filter(|k| !ctx.node_of.contains_key(*k))
-        .copied()
-        .collect();
+    let key_of = |folder: bool, title: &str, url: Option<&str>| -> String {
+        if folder {
+            norm(title)
+        } else {
+            url.unwrap_or("").trim().to_string()
+        }
+    };
+    // Unpaired Linkwarden items by place and name (folders) or address
+    // (links), so each local node finds its match without a scan.
+    let mut index: BTreeMap<(i64, bool, String), BTreeSet<Ref>> = BTreeMap::new();
+    let mut unpaired_remote: BTreeSet<Ref> = BTreeSet::new();
+    for (k, r) in remote {
+        if ctx.node_of.contains_key(k) {
+            continue;
+        }
+        unpaired_remote.insert(*k);
+        index
+            .entry((
+                r.parent,
+                k.is_folder(),
+                key_of(k.is_folder(), &r.title, r.url.as_deref()),
+            ))
+            .or_default()
+            .insert(*k);
+    }
     for n in &unpaired_local {
         let l = &local[*n];
         // Parent must already be on both sides.
@@ -387,16 +407,8 @@ pub fn plan(
             })
         };
         let Some(pc) = parent_coll else { continue };
-        let hit = unpaired_remote.iter().copied().find(|k| {
-            let r = &remote[k];
-            k.is_folder() == l.folder
-                && r.parent == pc
-                && if l.folder {
-                    norm(&r.title) == norm(&l.title)
-                } else {
-                    r.url.as_deref().map(str::trim) == l.url.as_deref().map(str::trim)
-                }
-        });
+        let slot = (pc, l.folder, key_of(l.folder, &l.title, l.url.as_deref()));
+        let hit = index.get_mut(&slot).and_then(|set| set.pop_first());
         if let Some(k) = hit {
             unpaired_remote.remove(&k);
             // Linkwarden's spelling is the starting point, so a difference in

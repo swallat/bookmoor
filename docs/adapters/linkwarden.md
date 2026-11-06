@@ -72,8 +72,15 @@ Bookmoor removes because of Linkwarden are saved as the profile's backup
 ## Safety
 
 - A run stops with "Paused" when it would delete more than half of the (at
-  least 10) items it knows, on either side. That usually means the wrong
-  collection or an emptied profile. **Sync anyway** goes ahead.
+  least 10) items it knows, or when one side has become empty while at least 3
+  items are known (an emptied profile, a collection or listing that came back
+  empty). **Sync anyway** goes ahead.
+- Bookmarks whose address one side cannot hold are left out, and the copy on the
+  other side is neither deleted nor rewritten for that.
+- Edits made in Bookmoor while a run is going are never overwritten: the run
+  then only adds, and the rest follows in the next one.
+- The stored token is only sent to the address it was saved with; changing the
+  address asks for the token again.
 - If the collection is gone from Linkwarden (or the token cannot see it),
   nothing is changed and the connection reports it.
 - A change that fails (network, a refusal from Linkwarden) stays pending and

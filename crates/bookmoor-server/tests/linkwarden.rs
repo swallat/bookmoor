@@ -561,3 +561,55 @@ async fn bookmarks_with_odd_addresses_are_left_out() {
     // chrome:// is a valid URL for Linkwarden's zod check: it goes; the odd one is left out
     assert!(msg.contains("1 bookmark left out"), "{msg}");
 }
+
+#[tokio::test]
+async fn a_bookmark_edited_to_an_unusable_address_keeps_its_link() {
+    let s = setup(Mode::Both).await;
+    sync_now(&s.state, &s.id, false).await.unwrap();
+    {
+        let mut st = s.state.lock().unwrap();
+        let id = st.engines[&s.profile]
+            .tree()
+            .nodes
+            .iter()
+            .find(|n| n.title == "Rust")
+            .unwrap()
+            .id
+            .clone();
+        st.edit_profile(
+            &s.profile,
+            UiEdit::Update {
+                id,
+                title: None,
+                url: Some("javascript:alert(1) x".into()),
+            },
+        )
+        .unwrap();
+    }
+    sync_now(&s.state, &s.id, false).await.unwrap();
+    assert!(s
+        .fake
+        .lock()
+        .unwrap()
+        .links
+        .iter()
+        .any(|l| l.url == "https://rust-lang.org"));
+    assert!(titles(&s).contains(&"Rust".to_string()));
+    assert_eq!(count(&s, "DELETE /links"), 0);
+}
+
+#[tokio::test]
+async fn an_emptied_linkwarden_listing_pauses_even_a_small_set() {
+    let s = setup(Mode::Both).await;
+    sync_now(&s.state, &s.id, false).await.unwrap();
+    {
+        let mut f = s.fake.lock().unwrap();
+        let root = f.colls.iter().find(|c| c.name == "Bookmoor").unwrap().id;
+        f.colls.retain(|c| c.id == root);
+        f.links.clear();
+    }
+    let n = titles(&s).len();
+    let err = sync_now(&s.state, &s.id, false).await.unwrap_err();
+    assert!(err.starts_with("Paused"), "{err}");
+    assert_eq!(titles(&s).len(), n);
+}
