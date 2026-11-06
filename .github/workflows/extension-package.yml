@@ -1,11 +1,12 @@
 name: Extension package
 
 # Builds the installable extension when its code changes on main (or by hand):
-# a Chrome zip, an unsigned Firefox zip and, if Mozilla credentials are set as
-# repository secrets, a signed Firefox .xpi. Download them from the run's
-# "Artifacts" section. The Chrome zip goes to the Chrome Web Store for review
-# only for a release (a pushed tag vX.Y.Z) or when the run is started by hand with the
-# "chrome_store" box ticked, and only if the store secrets are set (see docs/development.md). Pull requests do not run this: they have no secrets and
+# a Chrome zip and an unsigned Firefox zip. A release run (a pushed tag vX.Y.Z)
+# also signs a Firefox .xpi if Mozilla credentials are set as repository
+# secrets. Download them from the run's "Artifacts" section. Nothing is signed at Mozilla or sent to the Chrome Web
+# Store except for a release (a pushed tag vX.Y.Z), and only if the secrets are
+# set (see docs/development.md). Builds from main and manual runs only produce
+# unsigned artifacts. Pull requests do not run this: they have no secrets and
 # every signing uses up a version number at Mozilla.
 
 on:
@@ -19,11 +20,6 @@ on:
   # A pushed tag vX.Y.Z is a release build: exact version, signed, and sent to
   # the Chrome Web Store. Releases made in the GitHub UI create such a tag too.
   workflow_dispatch:
-    inputs:
-      chrome_store:
-        description: "Also upload the Chrome build to the Web Store and submit it for review"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -37,7 +33,7 @@ concurrency:
 
 jobs:
   package:
-    name: Package (Chrome zip, Firefox xpi)
+    name: Package (Chrome zip, Firefox zip/xpi)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -70,9 +66,7 @@ jobs:
       # scripts/sync-version.mjs). A release must come from the matching tag
       # vX.Y.Z and is built with exactly that version. Other runs (main, manual)
       # are dev builds X.Y.Z.<run number> (browsers accept four-part versions).
-      # They sort after X.Y.Z, so they are only signed while X.Y.Z is already
-      # released (tag exists); after a version bump and before the release tag
-      # they are built but not signed, so the release can still use X.Y.Z.
+      # They are never signed or uploaded to a store: only a release is.
       - name: Set the version
         id: version
         working-directory: .
@@ -90,12 +84,6 @@ jobs:
             VERSION="$BASE.${{ github.run_number }}"
           fi
           node scripts/sync-version.mjs --check
-          SIGN=true
-          if [ "$RELEASE" != "true" ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$BASE" >/dev/null; then
-            SIGN=false
-            echo "::notice::v$BASE is not released yet, so this dev build is not signed or uploaded (it would outrank the release)."
-          fi
-          echo "sign=$SIGN" >> "$GITHUB_OUTPUT"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
           node -e '
             const fs = require("node:fs");
@@ -114,12 +102,12 @@ jobs:
           npm run package:firefox
           cp web-ext-artifacts/*.zip ../artifacts/
       - name: Sign the Firefox add-on
-        if: steps.version.outputs.sign == 'true' && env.WEB_EXT_API_KEY != '' && env.WEB_EXT_API_SECRET != ''
+        if: steps.version.outputs.release == 'true' && env.WEB_EXT_API_KEY != '' && env.WEB_EXT_API_SECRET != ''
         run: |
           npm run sign:firefox
           cp web-ext-artifacts/*.xpi ../artifacts/
       - name: Say why there is no signed file
-        if: steps.version.outputs.sign == 'true' && (env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == '')
+        if: steps.version.outputs.release == 'true' && (env.WEB_EXT_API_KEY == '' || env.WEB_EXT_API_SECRET == '')
         run: echo "::notice::No Firefox .xpi was signed because the secrets WEB_EXT_API_KEY and WEB_EXT_API_SECRET are not set."
       # Keep the files before the store upload, so a store problem never loses a
       # signed build (a version can be signed only once at Mozilla).
@@ -130,7 +118,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Upload to the Chrome Web Store
-        if: steps.version.outputs.sign == 'true' && (steps.version.outputs.release == 'true' || inputs.chrome_store) && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
+        if: steps.version.outputs.release == 'true' && env.CWS_EXTENSION_ID != '' && env.CWS_CLIENT_ID != '' && env.CWS_CLIENT_SECRET != '' && env.CWS_REFRESH_TOKEN != ''
         run: |
           set -euo pipefail
           ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip"
@@ -156,5 +144,5 @@ jobs:
           echo "$PUB" | jq -e '.status | index("OK") or index("ITEM_PENDING_REVIEW")' >/dev/null \
             || { echo "::error::Chrome Web Store did not accept the submission"; exit 1; }
       - name: Say why nothing went to the Chrome Web Store
-        if: (steps.version.outputs.release == 'true' || inputs.chrome_store) && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
+        if: steps.version.outputs.release == 'true' && (env.CWS_EXTENSION_ID == '' || env.CWS_CLIENT_ID == '' || env.CWS_CLIENT_SECRET == '' || env.CWS_REFRESH_TOKEN == '')
         run: echo "::notice::Nothing was uploaded to the Chrome Web Store because one of CWS_EXTENSION_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN is not set."
