@@ -23,9 +23,9 @@ then pick `extension/dist-firefox/manifest.json` (gone after a restart).
 
 Every change to the extension on `main` runs the "Extension package" workflow
 (Actions tab > latest run > Artifacts): a Chrome zip (unzip it and load the
-folder unpacked), an unsigned Firefox zip and, once the repository secrets
-`WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET` are set, a signed Firefox `.xpi`
-that stays installed across restarts. The version is `0.<run>.<attempt>`.
+folder unpacked) and an unsigned Firefox zip. Only a release tag (`vX.Y.Z`)
+also signs the Firefox `.xpi` (once `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET`
+are set) and uploads to the Chrome Web Store.
 
 ### Firefox: keep the extension after a restart
 
@@ -58,11 +58,11 @@ is `[workspace.package] version` in `Cargo.toml`; `extension/package.json`,
 
 The script refuses any version not above `0.10.0`: CI signed Firefox builds up to `0.9.1`, and the dev build `0.10.0.13` already sits in the Chrome Web Store, which compares versions numerically (`0.10.0` < `0.10.0.13`) and never accepts a lower one. The first release is therefore `0.11.0` (already set in `Cargo.toml`). Do not upload dev builds of an unreleased version to the store by hand; if you do, raise the floor in `scripts/sync-version.mjs`.
 
-Builds from `main` and manual runs are dev builds numbered `X.Y.Z.<run>` (browsers allow at most four parts); they sort after `X.Y.Z`, so they are signed only while the tag `vX.Y.Z` exists. Between a version bump and its release tag they are built but not signed. Only plain `X.Y.Z` tags are supported (no `-rc` suffixes, browsers reject them).
+Builds from `main` and manual runs are dev builds numbered `X.Y.Z.<run>` (browsers allow at most four parts). They are never signed at Mozilla and never uploaded to a store; only the release tag does that. Only plain `X.Y.Z` tags are supported (no `-rc` suffixes, browsers reject them).
 
 ### Chrome Web Store (unlisted, uploaded by CI)
 
-Chrome only installs extensions from the Web Store (or by policy), so the Chrome equivalent of a signed `.xpi` is an **unlisted** store item: nobody finds it by search, you install it with its link and it updates itself. The `Extension package` workflow uploads every build and submits it for review once these four repository secrets are set (Settings > Secrets and variables > Actions):
+Chrome only installs extensions from the Web Store (or by policy), so the Chrome equivalent of a signed `.xpi` is an **unlisted** store item: nobody finds it by search, you install it with its link and it updates itself. The `Extension package` workflow uploads the release build and submits it for review once these four repository secrets are set (Settings > Secrets and variables > Actions):
 
 | Secret | Where it comes from |
 | --- | --- |
@@ -74,4 +74,4 @@ Chrome only installs extensions from the Web Store (or by policy), so the Chrome
 2. **OAuth client.** In the [Google Cloud console](https://console.cloud.google.com/) create a project, enable the *Chrome Web Store API*, set up the OAuth consent screen (external, add yourself as test user, then *publish app* so the refresh token does not expire after 7 days) and create an OAuth client ID of type *Desktop app*.
 3. **Refresh token.** Open `https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&redirect_uri=http://localhost&client_id=<CLIENT_ID>&access_type=offline&prompt=consent`, allow access and copy the `code` parameter from the (failing) `localhost` redirect URL. Then run `curl -s https://oauth2.googleapis.com/token -d client_id=<CLIENT_ID> -d client_secret=<CLIENT_SECRET> -d code=<CODE> -d grant_type=authorization_code -d redirect_uri=http://localhost` and use the `refresh_token` from the answer.
 
-The store upload is not part of every build: it runs for a release (see *Releases and versions*), or when you start the `Extension package` workflow by hand with *Also upload the Chrome build to the Web Store* ticked. Either way it uploads the build's version (the release number `X.Y.Z` for a release) and submits it. A manual run only uploads once the tag `vX.Y.Z` of the current version exists; before that, dev builds are not signed or uploaded. Ordinary pushes to `main` only produce the downloadable artifacts. Review usually takes a few hours to days; the previous version stays live meanwhile. The store keeps one pending submission at a time, so a second upload while one is in review fails the upload step (the zip is still an artifact).
+The store upload runs only for a release (a pushed tag `vX.Y.Z`, see *Releases and versions*) and uploads the release number `X.Y.Z`. Pushes to `main` and manual runs only produce the downloadable artifacts. Review usually takes a few hours to days; the previous version stays live meanwhile. The store keeps one pending submission at a time, so a second upload while one is in review fails the upload step (the zip is still an artifact).
