@@ -49,10 +49,6 @@ jobs:
       CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
       CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
       CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
-      # Optional. Private RSA key (PEM) for "Verified CRX uploads" in the Web
-      # Store. Once the item is opted in, the store only takes CRX files signed
-      # with it. Set this secret before you opt in.
-      CWS_CRX_PRIVATE_KEY: ${{ secrets.CWS_CRX_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,13 +100,19 @@ jobs:
       # Release only: a CRX3 signed with your own key, for the Web Store's
       # "Verified CRX uploads". Without the secret the plain zip is uploaded.
       - name: Chrome CRX (signed with your key)
-        if: steps.version.outputs.release == 'true' && env.CWS_CRX_PRIVATE_KEY != ''
+        if: steps.version.outputs.release == 'true'
         working-directory: .
+        # Optional private RSA key (PEM) for "Verified CRX uploads". Only this
+        # step sees it, never npm or the build.
+        env:
+          CWS_CRX_PRIVATE_KEY: ${{ secrets.CWS_CRX_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          [ -n "$CWS_CRX_PRIVATE_KEY" ] || { echo "::notice::No CRX signed: CWS_CRX_PRIVATE_KEY is not set (the plain zip is uploaded)."; exit 0; }
           KEY=$(mktemp)
           trap 'rm -f "$KEY"' EXIT
-          printf '%s\n' "$CWS_CRX_PRIVATE_KEY" > "$KEY"
+          # Tolerate CRLF and a key pasted with literal \n sequences.
+          printf '%s\n' "$CWS_CRX_PRIVATE_KEY" | tr -d '\r' | sed 's/\\n/\n/g' > "$KEY"
           node scripts/pack-crx.mjs "artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip" "$KEY" "artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.crx"
       - name: Firefox zip (unsigned)
         run: |
@@ -138,9 +140,10 @@ jobs:
           set -euo pipefail
           ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.zip"
           EXTRA=()
-          if [ -n "$CWS_CRX_PRIVATE_KEY" ]; then
+          CRX="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.crx"
+          if [ -f "$CRX" ]; then
             # Verified CRX uploads: the signed CRX goes up as a raw upload.
-            ZIP="../artifacts/bookmoor-chrome-${{ steps.version.outputs.version }}.crx"
+            ZIP="$CRX"
             EXTRA=(-H "X-Goog-Upload-Protocol: raw" -H "X-Goog-Upload-File-Name: $(basename "$ZIP")")
           fi
           TOKEN=$(curl -fsS https://oauth2.googleapis.com/token \

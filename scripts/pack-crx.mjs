@@ -34,8 +34,21 @@ const u32 = (n) => {
 };
 
 const zip = readFileSync(zipPath);
-const privateKey = createPrivateKey(readFileSync(keyPath));
-if (privateKey.asymmetricKeyType !== "rsa") throw new Error("the key must be an RSA key");
+if (zip.length < 4 || zip.readUInt32LE(0) !== 0x04034b50) {
+  console.error(`${zipPath} is not a zip file`);
+  process.exit(1);
+}
+let privateKey;
+try {
+  privateKey = createPrivateKey(readFileSync(keyPath));
+} catch (e) {
+  console.error(`cannot read the private key (an unencrypted PEM is needed): ${e.message}`);
+  process.exit(1);
+}
+if (privateKey.asymmetricKeyType !== "rsa" || (privateKey.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) {
+  console.error("the key must be an RSA key of at least 2048 bits");
+  process.exit(1);
+}
 const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "der" });
 
 const crxId = createHash("sha256").update(publicKey).digest().subarray(0, 16);
@@ -52,5 +65,6 @@ const keyProof = Buffer.concat([field(1, publicKey), field(2, signature)]);
 // CrxFileHeader { sha256_with_rsa = 2, signed_header_data = 10000 }
 const header = Buffer.concat([field(2, keyProof), field(10000, signedHeaderData)]);
 
-writeFileSync(outPath, Buffer.concat([Buffer.from("Cr24"), u32(3), u32(header.length), header, zip]));
-console.log(`wrote ${outPath} (${header.length + zip.length + 12} bytes, key id ${crxId.toString("hex")})`);
+const crx = Buffer.concat([Buffer.from("Cr24"), u32(3), u32(header.length), header, zip]);
+writeFileSync(outPath, crx);
+console.log(`wrote ${outPath} (${crx.length} bytes, key id ${crxId.toString("hex")})`);
