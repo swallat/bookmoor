@@ -797,12 +797,23 @@ async function dynacatView() {
       render();
     });
   }
+  const pg = info.page;
+  const pageRow = pg && h("div", { class: "stack-sm" },
+    h("h2", { text: "Collecting page" }),
+    h("p", { class: "muted", text: "One Dynacat page with a widget for every output below, so a single $include is enough and new outputs show up by themselves. It is set with BOOKMOOR_DYNACAT_PAGE (or --dynacat-page) and rewritten after every sync when its content changes." }),
+    h("div", { class: "list" }, h("div", { class: "row" },
+      h("div", { class: "main" },
+        h("div", { class: "name mono", text: pg.file }),
+        h("div", { class: "muted small", text: "Page \"" + pg.name + "\" · " + pg.columns + (pg.columns === 1 ? " column" : " columns") + (pg.written ? " · file last changed " + new Date(pg.written * 1000).toLocaleString() : pg.error ? "" : " · not written yet") }),
+        pg.error && h("div", { class: "error small", role: "alert", text: pg.error })),
+      h("div", { class: "actions" }, h("span", { class: "tag", text: "Command line" })))));
   return h("div", { class: "stack" },
     h("div", { class: "stack-sm" },
       h("h2", { text: "Dynacat outputs" }),
       h("p", { class: "muted", text: "Each output is a file with a Dynacat bookmarks widget, kept up to date after every sync. Include it in a Dynacat page with $include. Choose a profile and, if you like, one folder of it. Several outputs of the same profile (each with its own folder) make several pages; give each a widget title." }),
       info.dir && h("p", { class: "hint", text: "Each output is written into " + info.dir + " when you add it and checked after every sync of its profile; it is only rewritten when its content changes." }),
       create),
+    pageRow,
     h("div", { class: "stack-sm" },
       h("h2", { text: "Outputs" }),
       h("div", { class: "list" }, rows.length ? rows : [h("p", { class: "empty", text: "No outputs yet." })])));
