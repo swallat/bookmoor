@@ -1,7 +1,9 @@
 //! Two-way sync of one profile (or one folder of it) with a Linkwarden
-//! collection. The comparison lives in `bookmoor_core::linkwarden`; this
-//! module talks to Linkwarden, applies the plan to both sides and keeps the
-//! pairing between them. See `docs/adapters/linkwarden.md`.
+//! collection or a Karakeep list. The comparison lives in
+//! `bookmoor_core::linkwarden` (used for both services); this module talks to
+//! Linkwarden, applies the plan to both sides and keeps the pairing between
+//! them, `crate::karakeep` talks to Karakeep. See
+//! `docs/adapters/linkwarden.md` and `docs/adapters/karakeep.md`.
 
 use crate::api::{AppState, Backup, Shared};
 use crate::auth::random_id;
@@ -28,11 +30,67 @@ pub fn default_interval() -> u64 {
     DEFAULT_INTERVAL
 }
 
+/// Which link manager a connection talks to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Service {
+    #[default]
+    Linkwarden,
+    Karakeep,
+}
+
+impl Service {
+    /// The name shown to people.
+    pub fn name(self) -> &'static str {
+        match self {
+            Service::Linkwarden => "Linkwarden",
+            Service::Karakeep => "Karakeep",
+        }
+    }
+
+    /// What it calls the thing a folder becomes.
+    pub fn container(self) -> &'static str {
+        match self {
+            Service::Linkwarden => "collection",
+            Service::Karakeep => "list",
+        }
+    }
+
+    /// Prefix of the ids of its connections.
+    pub fn id_prefix(self) -> &'static str {
+        match self {
+            Service::Linkwarden => "lw_",
+            Service::Karakeep => "kk_",
+        }
+    }
+
+    /// Whether a bookmark's address can be a link there.
+    pub fn can_hold(self, url: &str) -> bool {
+        let u = url.trim();
+        match self {
+            Service::Linkwarden => is_linkable(u),
+            // Karakeep crawls what it is given: only web addresses.
+            Service::Karakeep => {
+                let l = u.to_ascii_lowercase();
+                (l.starts_with("http://") || l.starts_with("https://")) && is_linkable(u)
+            }
+        }
+    }
+}
+
+fn is_linkwarden(s: &Service) -> bool {
+    *s == Service::Linkwarden
+}
+
 /// One connection, kept in the state file. It holds the access token, which
 /// is stored as it is (the state file is readable by the server user only).
+/// The type keeps the name of the first service it served; `service` says
+/// which one a connection is for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Linkwarden {
     pub id: String,
+    #[serde(default, skip_serializing_if = "is_linkwarden")]
+    pub service: Service,
     pub profile_id: String,
     /// Folder titles from the profile's root (empty = the whole profile).
     #[serde(default)]
@@ -55,6 +113,10 @@ pub struct Linkwarden {
     pub interval: u64,
     #[serde(default)]
     pub pairs: Vec<Pair>,
+    /// Karakeep only: its ids are text, the comparison works with numbers.
+    /// This is the table between them, kept so that a pair keeps its number.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ids: BTreeMap<String, i64>,
 }
 
 impl Linkwarden {
@@ -63,19 +125,31 @@ impl Linkwarden {
         self.url = self.url.trim().trim_end_matches('/').to_string();
         self.token = self.token.trim().to_string();
         self.collection = self.collection.trim().to_string();
+        let name = self.service.name();
         let rest = self
             .url
             .strip_prefix("https://")
             .or_else(|| self.url.strip_prefix("http://"));
         if !rest.is_some_and(|r| !r.is_empty() && !r.contains(char::is_whitespace)) {
-            return Err("Linkwarden address: must start with https:// or http://".into());
+            return Err(format!(
+                "{name} address: must start with https:// or http://"
+            ));
         }
         if self.token.is_empty() {
             return Err("access token: required".into());
         }
         let n = self.collection.chars().count();
-        if n == 0 || n > 200 {
-            return Err("collection: 1 to 200 characters".into());
+        // Karakeep lists have names of up to 100 characters.
+        let max = if self.service == Service::Karakeep {
+            100
+        } else {
+            200
+        };
+        if n == 0 || n > max {
+            return Err(format!(
+                "{}: 1 to {max} characters",
+                self.service.container()
+            ));
         }
         if !(MIN_INTERVAL..=MAX_INTERVAL).contains(&self.interval) {
             return Err(format!(
@@ -335,7 +409,7 @@ fn id_of(v: &Value, what: &str) -> Result<i64, ApiErr> {
 }
 
 /// Deleting what is already gone is fine.
-fn ok_if_gone(r: Result<Value, ApiErr>) -> Result<(), ApiErr> {
+pub(crate) fn ok_if_gone(r: Result<Value, ApiErr>) -> Result<(), ApiErr> {
     match r {
         Ok(_) => Ok(()),
         Err(ApiErr {
@@ -348,7 +422,7 @@ fn ok_if_gone(r: Result<Value, ApiErr>) -> Result<(), ApiErr> {
 // ---- reading both sides ------------------------------------------------------
 
 /// What Linkwarden holds below the bound collection.
-struct Remote {
+struct LwRemote {
     root: i64,
     items: BTreeMap<Ref, RItem>,
     raw: BTreeMap<Ref, Value>,
@@ -358,12 +432,12 @@ struct Remote {
     unlinkable: BTreeSet<i64>,
 }
 
-fn is_linkable(url: &str) -> bool {
+pub(crate) fn is_linkable(url: &str) -> bool {
     let u = url.trim();
     u.len() > 3 && u.contains(':') && !u.contains(char::is_whitespace)
 }
 
-async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<Remote, String> {
+async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<LwRemote, String> {
     let cols = client.collections().await.map_err(|e| e.to_string())?;
     let name = |c: &Value| c["name"].as_str().unwrap_or("").to_string();
     let parent = |c: &Value| c["parentId"].as_i64();
@@ -403,7 +477,7 @@ async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<Remote, String> {
             kids.entry(p).or_default().push(c);
         }
     }
-    let mut out = Remote {
+    let mut out = LwRemote {
         root,
         items: BTreeMap::new(),
         raw: BTreeMap::new(),
@@ -466,8 +540,79 @@ async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<Remote, String> {
     Ok(out)
 }
 
+/// A connection's other side as read for one run.
+enum Backend {
+    Linkwarden(Client, LwRemote),
+    Karakeep(crate::karakeep::Client, crate::karakeep::KRemote),
+}
+
+impl Backend {
+    async fn open(cfg: &Linkwarden) -> Result<Backend, String> {
+        match cfg.service {
+            Service::Linkwarden => {
+                let client = Client::new(&cfg.url, &cfg.token)?;
+                let remote = fetch(&client, cfg).await?;
+                Ok(Backend::Linkwarden(client, remote))
+            }
+            Service::Karakeep => {
+                let client = crate::karakeep::Client::new(&cfg.url, &cfg.token)?;
+                let remote = crate::karakeep::fetch(&client, cfg).await?;
+                Ok(Backend::Karakeep(client, remote))
+            }
+        }
+    }
+
+    fn root(&self) -> i64 {
+        match self {
+            Backend::Linkwarden(_, r) => r.root,
+            Backend::Karakeep(_, r) => r.root,
+        }
+    }
+
+    fn items(&self) -> &BTreeMap<Ref, RItem> {
+        match self {
+            Backend::Linkwarden(_, r) => &r.items,
+            Backend::Karakeep(_, r) => &r.items,
+        }
+    }
+
+    /// Whether this link's address cannot be a bookmark's.
+    fn unlinkable(&self, link: i64) -> bool {
+        match self {
+            Backend::Linkwarden(_, r) => r.unlinkable.contains(&link),
+            Backend::Karakeep(_, r) => r.unlinkable.contains(&link),
+        }
+    }
+
+    async fn run(&mut self, plan: &Plan, pairs: &[Pair], root_node: &str) -> Done {
+        match self {
+            Backend::Linkwarden(c, r) => run_remote(c, plan, pairs, r, root_node).await,
+            Backend::Karakeep(c, r) => {
+                crate::karakeep::run_remote(c, plan, pairs, r, root_node).await
+            }
+        }
+    }
+
+    /// Karakeep: the id table for what is paired after the run and the root.
+    fn ids_to_keep(&self, pairs: &[Pair]) -> BTreeMap<String, i64> {
+        match self {
+            Backend::Linkwarden(..) => BTreeMap::new(),
+            Backend::Karakeep(_, r) => {
+                let mut used: BTreeSet<i64> = pairs
+                    .iter()
+                    .map(|p| match p.remote {
+                        Ref::Collection(i) | Ref::Link(i) => i,
+                    })
+                    .collect();
+                used.insert(r.root);
+                r.ids.table(&used)
+            }
+        }
+    }
+}
+
 /// Everything read from the tree for one run.
-struct Local {
+pub(crate) struct Local {
     cfg: Linkwarden,
     root: String,
     nodes: BTreeMap<String, LNode>,
@@ -537,6 +682,8 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
     let mut nodes = BTreeMap::new();
     let mut skipped = 0;
     let mut unlinkable = BTreeSet::new();
+    // Karakeep keeps one bookmark per address: later copies stay out.
+    let mut seen_urls: BTreeSet<String> = BTreeSet::new();
     for n in &tree.nodes {
         let Some(p) = n.parent.as_deref() else {
             continue;
@@ -549,7 +696,11 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
                 inside.insert(n.id.clone());
             }
             Kind::Bookmark => {
-                if !n.url.as_deref().is_some_and(is_linkable) {
+                let held = n.url.as_deref().is_some_and(|u| cfg.service.can_hold(u));
+                let twin = held
+                    && cfg.service == Service::Karakeep
+                    && !seen_urls.insert(n.url.as_deref().unwrap_or("").trim().to_string());
+                if !held || twin {
                     skipped += 1;
                     unlinkable.insert(n.id.clone());
                     continue;
@@ -582,12 +733,12 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
 // ---- doing the changes -------------------------------------------------------
 
 #[derive(Default)]
-struct Done {
-    refs: BTreeMap<String, Ref>,
-    failed: BTreeSet<String>,
+pub(crate) struct Done {
+    pub refs: BTreeMap<String, Ref>,
+    pub failed: BTreeSet<String>,
     /// Changes put off to the next run because Bookmoor changed meanwhile.
-    deferred: BTreeSet<String>,
-    errors: Vec<String>,
+    pub deferred: BTreeSet<String>,
+    pub errors: Vec<String>,
 }
 
 fn collection_body(raw: &Value, id: i64, name: &str, parent: i64) -> Value {
@@ -654,7 +805,7 @@ async fn run_remote(
     client: &Client,
     plan: &Plan,
     pairs: &[Pair],
-    remote: &mut Remote,
+    remote: &mut LwRemote,
     root_node: &str,
 ) -> Done {
     let mut done = Done::default();
@@ -934,7 +1085,7 @@ fn apply_local(
 }
 
 /// What a run did, for the status line.
-fn summary(plan: &Plan, failed: usize, skipped: usize) -> String {
+fn summary(service: Service, plan: &Plan, failed: usize, skipped: usize) -> String {
     let count = |f: fn(&RemoteAction) -> bool| plan.remote.iter().filter(|a| f(a)).count();
     let created = count(|a| matches!(a, RemoteAction::Create { .. }));
     let changed = count(|a| matches!(a, RemoteAction::Update { .. }));
@@ -953,14 +1104,16 @@ fn summary(plan: &Plan, failed: usize, skipped: usize) -> String {
     let mut bits = Vec::new();
     if created + changed + removed > 0 {
         bits.push(format!(
-            "to Linkwarden: {created} new, {changed} changed, {removed} removed"
+            "to {}: {created} new, {changed} changed, {removed} removed",
+            service.name()
         ));
     }
     if plan.local.is_empty() {
         // nothing
     } else {
         bits.push(format!(
-            "from Linkwarden: {taken} new, {lchanged} changed, {lremoved} removed"
+            "from {}: {taken} new, {lchanged} changed, {lremoved} removed",
+            service.name()
         ));
     }
     let mut s = if bits.is_empty() {
@@ -970,8 +1123,9 @@ fn summary(plan: &Plan, failed: usize, skipped: usize) -> String {
     };
     if skipped > 0 {
         s.push_str(&format!(
-            "; {skipped} bookmark{} left out (address Linkwarden cannot hold)",
-            if skipped == 1 { "" } else { "s" }
+            "; {skipped} bookmark{} left out (address {} cannot hold, or a copy of one already there)",
+            if skipped == 1 { "" } else { "s" },
+            service.name()
         ));
     }
     if failed > 0 {
@@ -1073,14 +1227,13 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
         read_local(&st, id)?
     };
     let cfg = local.cfg.clone();
-    let client = Client::new(&cfg.url, &cfg.token)?;
-    let mut remote = fetch(&client, &cfg).await?;
+    let mut remote = Backend::open(&cfg).await?;
     let mut mint = || random_id("bk_");
     let mut plan = plan(
         &local.root,
-        remote.root,
+        remote.root(),
         &local.nodes,
-        &remote.items,
+        remote.items(),
         &cfg.pairs,
         cfg.mode,
         &mut mint,
@@ -1098,7 +1251,7 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
     let mut held: BTreeSet<String> = local.unlinkable.clone();
     for p in &cfg.pairs {
         if let Ref::Link(l) = p.remote {
-            if remote.unlinkable.contains(&l) {
+            if remote.unlinkable(l) {
                 held.insert(p.node.clone());
             }
         }
@@ -1120,7 +1273,7 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
             &plan,
             known,
             local.nodes.is_empty(),
-            remote.items.is_empty(),
+            remote.items().is_empty(),
         )
     {
         return Err(format!(
@@ -1129,7 +1282,7 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
             known
         ));
     }
-    let mut done = run_remote(&client, &plan, &cfg.pairs, &mut remote, &local.root).await;
+    let mut done = remote.run(&plan, &cfg.pairs, &local.root).await;
     let ldone =
         {
             let mut st = state.lock().unwrap();
@@ -1157,8 +1310,9 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
         let mut st = state.lock().unwrap();
         match st.linkwarden.iter_mut().find(|l| l.id == id) {
             Some(l) if same_place(l, &cfg) => {
+                l.ids = remote.ids_to_keep(&pairs);
                 l.pairs = pairs;
-                l.collection_id = Some(remote.root);
+                l.collection_id = Some(remote.root());
             }
             // Changed or removed while the run was going: the new settings
             // start from scratch.
@@ -1174,7 +1328,7 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
         }
     }
     let failed = !done.failed.is_empty();
-    let mut msg = summary(&plan, done.failed.len(), local.skipped);
+    let mut msg = summary(cfg.service, &plan, done.failed.len(), local.skipped);
     if !done.deferred.is_empty() {
         msg.push_str("; Bookmoor changed meanwhile, the rest follows in the next run");
     }
@@ -1194,7 +1348,8 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
 
 /// Same Linkwarden and same place in the tree (not the pace or direction).
 fn same_place(a: &Linkwarden, b: &Linkwarden) -> bool {
-    a.profile_id == b.profile_id
+    a.service == b.service
+        && a.profile_id == b.profile_id
         && a.folder == b.folder
         && a.url == b.url
         && a.collection == b.collection

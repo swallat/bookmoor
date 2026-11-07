@@ -1330,6 +1330,8 @@ async fn remove_dynacat(
 #[derive(Serialize)]
 struct LinkwardenRow {
     id: String,
+    /// `linkwarden` or `karakeep`.
+    service: &'static str,
     profile_id: String,
     profile: String,
     folder: String,
@@ -1361,7 +1363,14 @@ fn mode_name(m: bookmoor_core::linkwarden::Mode) -> &'static str {
     }
 }
 
-/// Linkwarden connections; admins only, because the server makes the
+fn service_key(s: crate::linkwarden::Service) -> &'static str {
+    match s {
+        crate::linkwarden::Service::Linkwarden => "linkwarden",
+        crate::linkwarden::Service::Karakeep => "karakeep",
+    }
+}
+
+/// Linkwarden and Karakeep connections; admins only, because the server makes the
 /// requests (to an address the admin gives) with a stored access token.
 async fn linkwarden_list(State(s): State<Shared>, _: Admin) -> Json<LinkwardenInfo> {
     let st = s.lock().unwrap();
@@ -1372,6 +1381,7 @@ async fn linkwarden_list(State(s): State<Shared>, _: Admin) -> Json<LinkwardenIn
             let status = st.linkwarden_status.get(&l.id).cloned().unwrap_or_default();
             LinkwardenRow {
                 id: l.id.clone(),
+                service: service_key(l.service),
                 profile_id: l.profile_id.clone(),
                 profile: profile_label(&st, &l.profile_id),
                 folder: l.folder.join("/"),
@@ -1405,6 +1415,8 @@ async fn linkwarden_list(State(s): State<Shared>, _: Admin) -> Json<LinkwardenIn
 
 #[derive(Deserialize)]
 struct LinkwardenBody {
+    #[serde(default)]
+    service: crate::linkwarden::Service,
     profile: String,
     /// `A/B/C`, empty for the whole profile.
     #[serde(default)]
@@ -1428,15 +1440,21 @@ fn split_folder(f: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether Linkwarden answers to this token; nothing is changed there.
+/// Whether the service answers to this token; nothing is changed there.
 async fn linkwarden_reachable(l: &crate::linkwarden::Linkwarden) -> Result<(), ApiError> {
-    let client =
-        crate::linkwarden::Client::new(&l.url, &l.token).map_err(ApiError::Unprocessable)?;
-    client
-        .collections()
-        .await
-        .map(drop)
-        .map_err(|e| ApiError::Unprocessable(e.to_string()))
+    let res = match l.service {
+        crate::linkwarden::Service::Linkwarden => {
+            let client = crate::linkwarden::Client::new(&l.url, &l.token)
+                .map_err(ApiError::Unprocessable)?;
+            client.collections().await.map(drop)
+        }
+        crate::linkwarden::Service::Karakeep => {
+            let client =
+                crate::karakeep::Client::new(&l.url, &l.token).map_err(ApiError::Unprocessable)?;
+            client.lists().await.map(drop)
+        }
+    };
+    res.map_err(|e| ApiError::Unprocessable(e.to_string()))
 }
 
 async fn add_linkwarden(
@@ -1445,7 +1463,8 @@ async fn add_linkwarden(
     Json(b): Json<LinkwardenBody>,
 ) -> Result<StatusCode, ApiError> {
     let mut l = crate::linkwarden::Linkwarden {
-        id: random_id("lw_"),
+        id: random_id(b.service.id_prefix()),
+        service: b.service,
         profile_id: b.profile,
         folder: split_folder(&b.folder),
         url: b.url,
@@ -1455,6 +1474,7 @@ async fn add_linkwarden(
         mode: b.mode,
         interval: b.interval,
         pairs: Vec::new(),
+        ids: Default::default(),
     };
     l.check().map_err(ApiError::Unprocessable)?;
     {
@@ -1495,6 +1515,11 @@ async fn change_linkwarden(
             .cloned()
             .ok_or_else(|| ApiError::Unprocessable("no such connection".into()))?
     };
+    if b.service != l.service {
+        return Err(ApiError::Unprocessable(
+            "the service of a connection cannot be changed; make a new one".into(),
+        ));
+    }
     let old = l.clone();
     let new_token = !b.token.trim().is_empty();
     if new_token {
@@ -1521,6 +1546,7 @@ async fn change_linkwarden(
         || old.url != l.url;
     if moved {
         l.pairs.clear();
+        l.ids.clear();
         l.collection_id = None;
     }
     if moved || old.token != l.token {
@@ -1535,6 +1561,7 @@ async fn change_linkwarden(
     // Pairs made by a run that finished meanwhile are kept unless it moved.
     if !moved {
         l.pairs = slot.pairs.clone();
+        l.ids = slot.ids.clone();
         l.collection_id = slot.collection_id;
     }
     *slot = l;
@@ -2487,6 +2514,8 @@ mod tests {
                 mode: bookmoor_core::linkwarden::Mode::Both,
                 interval: 300,
                 pairs: vec![],
+                ids: Default::default(),
+                service: Default::default(),
             });
         let (st, v, _) = u
             .call("GET", "/ui/api/linkwarden", Some(&anna), None, false)

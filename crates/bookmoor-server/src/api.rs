@@ -346,13 +346,11 @@ impl AppState {
                 .map(|n| n.id.clone())
                 .ok_or_else(|| format!("the folder \"{}\" does not exist", l.folder.join("/")))?;
         }
-        // Two connections on the same collection of the same Linkwarden would
-        // fight over it.
-        if self
-            .linkwarden
-            .iter()
-            .any(|x| x.id != l.id && x.url == l.url && x.collection == l.collection)
-        {
+        // Two connections on the same collection (list) of the same service
+        // would fight over it.
+        if self.linkwarden.iter().any(|x| {
+            x.id != l.id && x.service == l.service && x.url == l.url && x.collection == l.collection
+        }) {
             return Err("another connection already uses this collection".into());
         }
         Ok(())
