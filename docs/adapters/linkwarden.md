@@ -6,6 +6,8 @@ calls follow Linkwarden's source (`/api/v1/collections`, `/api/v1/search` with
 `/api/v1/links` as fallback, `/api/v1/links/{id}`); the tests use a fake
 Linkwarden over real HTTP. **Not yet tried against a real instance.**
 
+The same machinery serves [Karakeep](karakeep.md).
+
 ## Set up
 
 Web UI, **Linkwarden** tab (admins only, because the server makes the

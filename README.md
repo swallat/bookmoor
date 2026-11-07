@@ -60,6 +60,11 @@ SyncMarks, also on that list, is the closest in purpose (browser bookmark sync).
   browser. Linkwarden's tags, notes and archives are left alone. Set up in the
   web UI. See [docs/adapters/linkwarden.md](docs/adapters/linkwarden.md).
   Not yet tested against a live Linkwarden.
+- **Two-way sync with Karakeep.** The same for a Karakeep list: folders become
+  nested lists, bookmarks become link bookmarks in them. Karakeep's tags,
+  notes and archives are left alone. See
+  [docs/adapters/karakeep.md](docs/adapters/karakeep.md). Not yet tested
+  against a live Karakeep.
 - **Native, two-way browser sync.** A Chrome and a Firefox extension (MV3)
   sync the real bookmark tree. Firefox' bookmarks menu appears as a folder.
 - **Several profiles per user.** Separate bookmark trees, for example Work and

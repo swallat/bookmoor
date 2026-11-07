@@ -249,7 +249,7 @@ function setupView() {
 
 function shell(content) {
   const tabs = me.mfa_setup_needed ? [["account", "Account"]]
-    : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"], ["dynacat", "Dynacat"], ["linkwarden", "Linkwarden"]] : []), ["account", "Account"]];
+    : [["devices", "Devices"], ["profiles", "Profiles"], ["bookmarks", "Bookmarks"], ...(me.admin ? [["users", "Users"], ["sso", "Single sign-on"], ["dynacat", "Dynacat"], ["linkwarden", "Linkwarden"], ["karakeep", "Karakeep"]] : []), ["account", "Account"]];
   app.replaceChildren(h("div", { class: "shell" + (tab === "bookmarks" ? " wide" : "") },
     h("header", { class: "bar" },
       h("img", { src: "ui/logo.svg", alt: "" }),
@@ -922,8 +922,31 @@ async function dynacatView() {
 
 let lwSeq = 0;
 
-/** The form for one Linkwarden connection; `init` (a row) preselects its values when editing. */
-function linkwardenForm(info, init, label, save) {
+/** What differs between the link managers a connection can talk to. */
+const SERVICES = {
+  linkwarden: {
+    name: "Linkwarden",
+    container: "collection",
+    Container: "Collection",
+    address: "https://links.example.com",
+    tokenLabel: "Access token",
+    tokenHelp: "Linkwarden: Settings, Access Tokens. It is stored in the state file as it is.",
+    intro: "Keep a profile (or one folder of it) and a Linkwarden collection in step, both ways: bookmarks added, renamed, moved or deleted on either side show up on the other, and on every browser. Folders become collections inside the one you name. Tags, notes and archives in Linkwarden are left alone; the order of bookmarks is not synced.",
+  },
+  karakeep: {
+    name: "Karakeep",
+    container: "list",
+    Container: "List",
+    address: "https://karakeep.example.com",
+    tokenLabel: "API key",
+    tokenHelp: "Karakeep: Settings, API Keys. It is stored in the state file as it is.",
+    intro: "Keep a profile (or one folder of it) and a Karakeep list in step, both ways: bookmarks added, renamed, moved or deleted on either side show up on the other, and on every browser. Folders become lists inside the one you name. Tags, notes and archives in Karakeep are left alone; the order of bookmarks is not synced. Karakeep keeps one bookmark per address, so a second copy of an address stays out, and a bookmark deleted here only leaves the lists.",
+  },
+};
+
+/** The form for one link-manager connection; `init` (a row) preselects its values when editing. */
+function linkwardenForm(svc, info, init, label, save) {
+  const S = SERVICES[svc];
   const k = "lw" + (++lwSeq) + "-";
   const v = init || {};
   const profile = h("select", { id: k + "profile", name: "profile" },
@@ -942,17 +965,17 @@ function linkwardenForm(info, init, label, save) {
   };
   profile.addEventListener("change", () => load(""));
   load(v.folder || "");
-  const url = field(k + "url", "Linkwarden address", { type: "url", placeholder: "https://links.example.com", required: true, autocapitalize: "off", value: v.url || "" });
-  const token = field(k + "token", "Access token", { type: "password", autocomplete: "off", placeholder: init ? "unchanged" : "", required: !init },
-    "Linkwarden: Settings, Access Tokens. It is stored in the state file as it is.");
-  const collection = field(k + "collection", "Collection", { type: "text", maxlength: "200", required: true, value: v.collection || "Bookmoor" },
-    "Everything lives in this collection (made if it does not exist). Folders become collections inside it.");
+  const url = field(k + "url", S.name + " address", { type: "url", placeholder: S.address, required: true, autocapitalize: "off", value: v.url || "" });
+  const token = field(k + "token", S.tokenLabel, { type: "password", autocomplete: "off", placeholder: init ? "unchanged" : "", required: !init },
+    S.tokenHelp);
+  const collection = field(k + "collection", S.Container, { type: "text", maxlength: svc === "karakeep" ? "100" : "200", required: true, value: v.collection || "Bookmoor" },
+    "Everything lives in this " + S.container + " (made if it does not exist). Folders become " + S.container + "s inside it.");
   const mode = h("select", { id: k + "mode", name: "mode" },
     h("option", { value: "both", text: "Both ways" }),
-    h("option", { value: "push", text: "Bookmoor to Linkwarden only" }),
-    h("option", { value: "pull", text: "Linkwarden to Bookmoor only" }));
+    h("option", { value: "push", text: "Bookmoor to " + S.name + " only" }),
+    h("option", { value: "pull", text: S.name + " to Bookmoor only" }));
   mode.value = v.mode || "both";
-  const interval = field(k + "interval", "Check Linkwarden every (seconds)", { type: "number", min: "30", max: "86400", value: String(v.interval || 300) },
+  const interval = field(k + "interval", "Check " + S.name + " every (seconds)", { type: "number", min: "30", max: "86400", value: String(v.interval || 300) },
     "Changes made in Bookmoor go over within seconds.");
   return form([
     h("div", { class: "form-row fields" },
@@ -963,6 +986,7 @@ function linkwardenForm(info, init, label, save) {
       h("div", { class: "field" }, h("label", { for: k + "mode", text: "Direction" }), mode), interval),
   ], label, async (_data, f) => {
     await save({
+      service: svc,
       profile: profile.value,
       folder: folder.value,
       url: url.querySelector("input").value,
@@ -974,8 +998,13 @@ function linkwardenForm(info, init, label, save) {
   });
 }
 
-async function linkwardenView() {
+function linkwardenView() { return linkManagerView("linkwarden"); }
+function karakeepView() { return linkManagerView("karakeep"); }
+
+async function linkManagerView(svc) {
+  const S = SERVICES[svc];
   const info = await api("GET", "linkwarden");
+  info.connections = info.connections.filter((c) => c.service === svc);
   const stamp = (secs) => new Date(secs * 1000).toLocaleString();
   const rows = info.connections.map((c) => {
     let editor = null;
@@ -990,7 +1019,7 @@ async function linkwardenView() {
     const row = h("div", { class: "row" },
       h("div", { class: "main" },
         h("div", { class: "name", text: c.collection + " at " + c.url }),
-        h("div", { class: "muted small", text: c.profile + " · " + (c.folder ? c.folder : "whole profile") + " · " + ({ both: "both ways", push: "Bookmoor to Linkwarden", pull: "Linkwarden to Bookmoor" }[c.mode]) + " · every " + c.interval + " s · " + c.paired + " items paired" }),
+        h("div", { class: "muted small", text: c.profile + " · " + (c.folder ? c.folder : "whole profile") + " · " + ({ both: "both ways", push: "Bookmoor to " + S.name, pull: S.name + " to Bookmoor" }[c.mode]) + " · every " + c.interval + " s · " + c.paired + " items paired" }),
         c.running && h("div", { class: "muted small", text: "Syncing now…" }),
         !c.running && c.message && h("div", { class: c.failed ? "error small" : "muted small", role: c.failed ? "alert" : null, text: (c.last_run ? stamp(c.last_run) + ": " : "") + c.message }),
         !c.running && !c.message && h("div", { class: "muted small", text: "Not run yet." })),
@@ -999,7 +1028,7 @@ async function linkwardenView() {
         c.failed && c.message.startsWith("Paused") && syncBtn(true),
         h("button", { class: "btn quiet small", type: "button", text: "Edit", onclick: () => {
           if (editor) { editor.remove(); editor = null; return; }
-          editor = linkwardenForm(info, c, "Save connection", async (body) => {
+          editor = linkwardenForm(svc, info, c, "Save connection", async (body) => {
             await api("PUT", "linkwarden/" + encodeURIComponent(c.id), body);
             toast("Saved");
             render();
@@ -1015,10 +1044,10 @@ async function linkwardenView() {
   });
   return h("div", { class: "stack" },
     h("div", { class: "stack-sm" },
-      h("h2", { text: "Linkwarden" }),
-      h("p", { class: "muted", text: "Keep a profile (or one folder of it) and a Linkwarden collection in step, both ways: bookmarks added, renamed, moved or deleted on either side show up on the other, and on every browser. Folders become collections inside the one you name. Tags, notes and archives in Linkwarden are left alone; the order of bookmarks is not synced." }),
+      h("h2", { text: S.name }),
+      h("p", { class: "muted", text: S.intro }),
       h("p", { class: "hint", text: "If both sides changed the same thing, Bookmoor wins; an edit always beats a delete. A run that would delete most of what it knows stops and asks first." }),
-      linkwardenForm(info, null, "Connect Linkwarden", async (body, f) => {
+      linkwardenForm(svc, info, null, "Connect " + S.name, async (body, f) => {
         await api("POST", "linkwarden", body);
         toast("Connected. The first sync is running.");
         f.reset();
@@ -1111,10 +1140,10 @@ async function accountView() {
 }
 
 async function render() {
-  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, sso: ssoAdminView, dynacat: dynacatView, linkwarden: linkwardenView, account: accountView };
-  if ((tab === "users" || tab === "sso" || tab === "dynacat" || tab === "linkwarden") && !me.admin) tab = "devices";
+  const views = { devices: devicesView, profiles: profilesView, bookmarks: bookmarksView, users: usersView, sso: ssoAdminView, dynacat: dynacatView, linkwarden: linkwardenView, karakeep: karakeepView, account: accountView };
+  if ((tab === "users" || tab === "sso" || tab === "dynacat" || tab === "linkwarden" || tab === "karakeep") && !me.admin) tab = "devices";
   if (me.mfa_setup_needed) tab = "account"; // nothing else works until it is set up
-  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", sso: "Single sign-on", dynacat: "Dynacat", linkwarden: "Linkwarden", account: "Account" }[tab] + " · bookmoor";
+  document.title = { devices: "Devices", profiles: "Profiles", bookmarks: "Bookmarks", users: "Users", sso: "Single sign-on", dynacat: "Dynacat", linkwarden: "Linkwarden", karakeep: "Karakeep", account: "Account" }[tab] + " · bookmoor";
   let content;
   try { content = await views[tab](); }
   catch (e) { content = h("p", { class: "error", role: "alert", text: e.message }); }

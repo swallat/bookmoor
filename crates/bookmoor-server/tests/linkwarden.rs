@@ -270,6 +270,8 @@ async fn setup(mode: Mode) -> Setup {
         mode,
         interval: 60,
         pairs: vec![],
+        ids: Default::default(),
+        service: Default::default(),
     });
     Setup {
         state: Arc::new(Mutex::new(st)),
