@@ -598,3 +598,29 @@ async fn odd_and_repeated_addresses_are_left_out() {
         "{msg}"
     );
 }
+
+#[tokio::test]
+async fn an_address_karakeep_has_elsewhere_is_left_out_without_failing() {
+    let s = setup(Mode::Both).await;
+    sync_now(&s.state, &s.id, false).await.unwrap();
+    // A copy of a synced address in another folder, added here.
+    {
+        let mut st = s.state.lock().unwrap();
+        let other = folder(&st, &s.profile, "other");
+        add_mark(&mut st, &s.profile, &other, "AAA copy", "https://lwn.net");
+    }
+    let msg = sync_now(&s.state, &s.id, false).await.unwrap();
+    assert!(msg.contains("1 bookmark left out"), "{msg}");
+    assert!(!msg.contains("failed"), "{msg}");
+    let st = s.state.lock().unwrap();
+    assert!(!st.linkwarden_status[&s.id].failed);
+    // The paired copy still is the one in Karakeep.
+    let f = s.fake.lock().unwrap();
+    assert_eq!(
+        f.marks
+            .iter()
+            .filter(|m| m.url == "https://lwn.net")
+            .count(),
+        1
+    );
+}

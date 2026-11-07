@@ -682,8 +682,23 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
     let mut nodes = BTreeMap::new();
     let mut skipped = 0;
     let mut unlinkable = BTreeSet::new();
-    // Karakeep keeps one bookmark per address: later copies stay out.
-    let mut seen_urls: BTreeSet<String> = BTreeSet::new();
+    // Karakeep keeps one bookmark per address: of several copies the one that
+    // is paired already stays, otherwise the first; the others stay out.
+    let paired_nodes: BTreeSet<&str> = cfg.pairs.iter().map(|p| p.node.as_str()).collect();
+    let mut keeper_of: BTreeMap<String, String> = BTreeMap::new();
+    if cfg.service == Service::Karakeep {
+        for n in &tree.nodes {
+            if let (Kind::Bookmark, true, Some(u)) = (
+                n.kind,
+                paired_nodes.contains(n.id.as_str()),
+                n.url.as_deref(),
+            ) {
+                keeper_of
+                    .entry(u.trim().to_string())
+                    .or_insert_with(|| n.id.clone());
+            }
+        }
+    }
     for n in &tree.nodes {
         let Some(p) = n.parent.as_deref() else {
             continue;
@@ -699,7 +714,10 @@ fn read_local(st: &AppState, id: &str) -> Result<Local, String> {
                 let held = n.url.as_deref().is_some_and(|u| cfg.service.can_hold(u));
                 let twin = held
                     && cfg.service == Service::Karakeep
-                    && !seen_urls.insert(n.url.as_deref().unwrap_or("").trim().to_string());
+                    && *keeper_of
+                        .entry(n.url.as_deref().unwrap_or("").trim().to_string())
+                        .or_insert_with(|| n.id.clone())
+                        != n.id;
                 if !held || twin {
                     skipped += 1;
                     unlinkable.insert(n.id.clone());
@@ -739,6 +757,8 @@ pub(crate) struct Done {
     /// Changes put off to the next run because Bookmoor changed meanwhile.
     pub deferred: BTreeSet<String>,
     pub errors: Vec<String>,
+    /// Bookmarks not created because the other side cannot have them.
+    pub left_out: usize,
 }
 
 fn collection_body(raw: &Value, id: i64, name: &str, parent: i64) -> Value {
@@ -1328,7 +1348,12 @@ async fn run(state: &Shared, id: &str, force: bool) -> Result<Outcome, String> {
         }
     }
     let failed = !done.failed.is_empty();
-    let mut msg = summary(cfg.service, &plan, done.failed.len(), local.skipped);
+    let mut msg = summary(
+        cfg.service,
+        &plan,
+        done.failed.len(),
+        local.skipped + done.left_out,
+    );
     if !done.deferred.is_empty() {
         msg.push_str("; Bookmoor changed meanwhile, the rest follows in the next run");
     }

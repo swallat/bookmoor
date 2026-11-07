@@ -43,8 +43,8 @@ and the safety rules are the same as for Linkwarden.
 - **One bookmark per address.** Karakeep does not keep two bookmarks with the
   same address. A second bookmark in Bookmoor with an address that is already
   synced stays out (counted on the status line). If an address is already a
-  bookmark in Karakeep in a list that is not the one being synced, it is put
-  in the new list as well.
+  bookmark in Karakeep outside the synced lists, it is put in the new list as
+  well; if it is already in another synced list, the second copy stays out.
 - **A bookmark can be in several lists.** Bookmoor's tree puts it in one place.
   Among the synced lists, the one it was last synced in counts (otherwise the
   first one). Moving it in Bookmoor takes it out of its other synced lists.

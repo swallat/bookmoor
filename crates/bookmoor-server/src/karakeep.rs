@@ -138,27 +138,14 @@ impl Client {
         Ok(all)
     }
 
-    async fn create_list(&self, name: &str, parent: &str) -> Result<String, ApiErr> {
+    /// A list; top-level without a parent.
+    async fn create_list(&self, name: &str, parent: Option<&str>) -> Result<String, ApiErr> {
+        let mut body = json!({ "name": name, "icon": LIST_ICON, "type": "manual" });
+        if let Some(p) = parent {
+            body["parentId"] = json!(p);
+        }
         let v = self
-            .send(
-                reqwest::Method::POST,
-                "/lists",
-                &[],
-                Some(json!({ "name": name, "icon": LIST_ICON, "type": "manual", "parentId": parent })),
-            )
-            .await?;
-        id_of(&v, "list")
-    }
-
-    /// A top-level list (the one that holds everything).
-    pub(crate) async fn create_root_list(&self, name: &str) -> Result<String, ApiErr> {
-        let v = self
-            .send(
-                reqwest::Method::POST,
-                "/lists",
-                &[],
-                Some(json!({ "name": name, "icon": LIST_ICON, "type": "manual" })),
-            )
+            .send(reqwest::Method::POST, "/lists", &[], Some(body))
             .await?;
         id_of(&v, "list")
     }
@@ -310,7 +297,18 @@ pub async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<KRemote, String>
         Some(n) => {
             let text = ids.text(n).map(String::from);
             match text {
-                Some(t) if lists.iter().any(|l| l["id"].as_str() == Some(t.as_str()) && is_manual(l)) => t,
+                Some(t) if lists.iter().any(|l| l["id"].as_str() == Some(t.as_str()) && is_manual(l)) => {
+                    let viewer = lists.iter().any(|l| {
+                        l["id"].as_str() == Some(t.as_str()) && l["userRole"].as_str() == Some("viewer")
+                    });
+                    if viewer {
+                        return Err(format!(
+                            "the Karakeep list \"{}\" can only be viewed with this key; nothing was changed",
+                            cfg.collection
+                        ));
+                    }
+                    t
+                }
                 _ => {
                     return Err(format!(
                         "the Karakeep list \"{}\" is gone (deleted, or this key cannot see it). Nothing was changed; remove this connection and add it again to start over",
@@ -331,7 +329,7 @@ pub async fn fetch(client: &Client, cfg: &Linkwarden) -> Result<KRemote, String>
                 None => {
                     created_root = true;
                     client
-                        .create_root_list(&cfg.collection)
+                        .create_list(&cfg.collection, None)
                         .await
                         .map_err(|e| e.to_string())?
                 }
@@ -494,7 +492,7 @@ pub(crate) async fn run_remote(
                         list_of(&done, remote, parent).ok_or("its folder could not be created")?;
                     if *folder {
                         let id = client
-                            .create_list(title, &pl)
+                            .create_list(title, Some(&pl))
                             .await
                             .map_err(|e| e.to_string())?;
                         let n = remote.ids.num(&id);
@@ -507,12 +505,12 @@ pub(crate) async fn run_remote(
                             .await
                             .map_err(|e| e.to_string())?;
                         let n = remote.ids.num(&id);
-                        // Karakeep has one bookmark per address: when it is
-                        // taken by another node, this one cannot have it.
+                        // Karakeep has one bookmark per address: when another
+                        // node has it, this one stays out (not an error, it
+                        // would only repeat).
                         if !claimed.insert(Ref::Link(n)) {
-                            return Err(format!(
-                                "{url} is already a bookmark in Karakeep, in another list (it keeps one per address)"
-                            ));
+                            done.left_out += 1;
+                            return Ok(None);
                         }
                         if existed && own.as_deref() != Some(title.as_str()) {
                             client
@@ -533,8 +531,7 @@ pub(crate) async fn run_remote(
                     let r = *done.refs.get(&node).ok_or("not paired")?;
                     let new_list = match parent {
                         Some(p) => Some(
-                            list_of(&done, remote, p)
-                                .ok_or("its new folder is not in Karakeep")?,
+                            list_of(&done, remote, p).ok_or("its new folder is not in Karakeep")?,
                         ),
                         None => None,
                     };
