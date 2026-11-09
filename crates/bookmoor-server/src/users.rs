@@ -322,6 +322,19 @@ mod tests {
     }
 
     #[test]
+    fn hashes_written_by_argon2_0_5_still_verify() {
+        // Produced by argon2 0.5 with the production parameters, so stored
+        // user passwords keep working across the 0.6 upgrade.
+        let legacy = "$argon2id$v=19$m=19456,t=2,p=1$BwcHBwcHBwcHBwcHBwcHBw$WLRGUa13/B3MXznFse33FId4O++DaYL6ulYUMEhpRqE";
+        assert!(verify_password(Some(legacy), "correct horse battery"));
+        assert!(!verify_password(Some(legacy), "wrong horse battery"));
+        assert!(!verify_password(
+            Some("not a phc string"),
+            "correct horse battery"
+        ));
+    }
+
+    #[test]
     fn names_are_unique_ignoring_case_and_validated() {
         let mut u = Users::new();
         u.create("Alice", false, None).unwrap();
