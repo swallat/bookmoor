@@ -3,7 +3,7 @@
 //! web UI. Passwords are stored as Argon2id hashes in PHC string format.
 
 use crate::auth::random_id;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::{Algorithm, Argon2, Params, Version};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -101,10 +101,9 @@ pub fn check_password(pw: &str) -> Result<(), String> {
 pub fn hash_password(pw: &str) -> Result<String, String> {
     let mut salt = [0u8; 16];
     getrandom::fill(&mut salt).expect("system randomness");
-    let salt = SaltString::encode_b64(&salt).map_err(|e| e.to_string())?;
     argon2()
-        .hash_password(pw.as_bytes(), &salt)
-        .map(|h| h.to_string())
+        .hash_password_with_salt(pw.as_bytes(), &salt)
+        .map(|h: PasswordHash| h.to_string())
         .map_err(|e| e.to_string())
 }
 
@@ -114,10 +113,9 @@ pub fn verify_password(stored: Option<&str>, pw: &str) -> bool {
     static DUMMY: OnceLock<String> = OnceLock::new();
     let dummy = DUMMY.get_or_init(|| hash_password("bookmoor dummy").expect("hash"));
     let real = stored.is_some();
-    let Ok(parsed) = PasswordHash::new(stored.unwrap_or(dummy)) else {
-        return false;
-    };
-    let ok = argon2().verify_password(pw.as_bytes(), &parsed).is_ok();
+    let ok = argon2()
+        .verify_password(pw.as_bytes(), stored.unwrap_or(dummy.as_str()))
+        .is_ok();
     ok && real
 }
 

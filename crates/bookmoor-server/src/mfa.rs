@@ -6,7 +6,7 @@
 //! state file next to the token hashes (protect that file like the tokens).
 //! Recovery codes are stored as SHA-256 hashes, like tokens.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
