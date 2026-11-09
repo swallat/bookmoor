@@ -11,7 +11,7 @@ use base64::Engine;
 use bookmoor_server::api::{router, AppState, Shared};
 use bookmoor_server::auth::Scope;
 use bookmoor_server::oidc::{Oidc, OidcConfig};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use http_body_util::BodyExt;
 use serde_json::json;
 use sha2::Sha256;
