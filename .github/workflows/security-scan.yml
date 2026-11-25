@@ -61,12 +61,12 @@ jobs:
               echo "exists: $title"
             else
               printf '%b' "$body" > body.md
-              gh issue create --title "$title" --body-file body.md --label security --label security-scan
+              gh issue create --title "$title" --body-file body.md --label security --label security-scan </dev/null
             fi
           done < findings.tsv
           # Close issues whose advisory is gone.
           jq -r '.[] | [.number, .title] | @tsv' open.json | while IFS=$'\t' read -r num title; do
             if ! cut -f1 findings.tsv | grep -qxF "$title"; then
-              gh issue close "$num" --reason completed --comment "This advisory no longer shows up in the weekly security scan."
+              gh issue close "$num" --reason completed --comment "This advisory no longer shows up in the weekly security scan." </dev/null
             fi
           done

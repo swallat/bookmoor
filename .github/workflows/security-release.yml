@@ -108,7 +108,8 @@ jobs:
           node scripts/sync-version.mjs --check
           git add -A
           git commit -m "Security release v$NEW"
-          git push origin release/security-patch
+          # A leftover branch from a closed bump PR is replaced.
+          git push --force origin release/security-patch
           gh label create release --color 0E8A16 2>/dev/null || true
           gh pr create --base main --head release/security-patch \
             --title "Security release v$NEW" \
