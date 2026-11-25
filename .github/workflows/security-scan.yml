@@ -1,0 +1,74 @@
+name: Security scan
+
+# Weekly vulnerability scan of the locked dependencies. Findings become issues
+# (one per advisory, label "security"); an issue is closed again when its
+# advisory no longer shows up. This is not a required check and never blocks a
+# pull request.
+
+on:
+  schedule:
+    # Sunday night, UTC.
+    - cron: "23 1 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: security-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Audit Cargo.lock and package-lock.json
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Audit
+        run: |
+          # cargo audit exits non-zero when it finds something; the JSON is what counts.
+          cargo audit --json > cargo-audit.json || true
+          # A failed audit (no advisory database, no network) must fail the job,
+          # never look like "no findings" that would close every open issue.
+          jq -e '.vulnerabilities.list' cargo-audit.json >/dev/null
+          (cd extension && npm audit --package-lock-only --json > ../npm-audit.json || true)
+          jq -e '(.error | not) and (.vulnerabilities != null)' npm-audit.json >/dev/null
+          # One line per finding: "<title>\t<body>"
+          jq -r '.vulnerabilities.list[]? |
+            ["Security advisory: \(.advisory.id) (\(.package.name))",
+             "\(.advisory.title)\n\nPackage: \(.package.name) \(.package.version)\nAdvisory: https://rustsec.org/advisories/\(.advisory.id)\nPatched versions: \((.versions.patched // []) | join(", "))\n\nFound by the weekly security scan."] | @tsv' cargo-audit.json > findings.tsv
+          jq -r '.vulnerabilities // {} | to_entries[] | select(.value.severity != "info") |
+            ["npm advisory: \(.key) (\(.value.severity))",
+             "Severity: \(.value.severity)\nPackage: \(.key)\nDirect dependency: \(.value.isDirect)\nFix available: \(.value.fixAvailable | tojson)\n\nThe extension only uses npm packages as build and test tools. Found by the weekly security scan."] | @tsv' npm-audit.json >> findings.tsv
+          cat findings.tsv
+      - name: Update issues
+        run: |
+          gh label create security --color B60205 --description "Security advisory or fix" 2>/dev/null || true
+          gh label create security-scan --color 5319E7 --description "Opened by the weekly security scan" 2>/dev/null || true
+          gh issue list --label security-scan --state open --limit 200 --json number,title > open.json
+          # Open an issue for every finding that has none.
+          while IFS=$'\t' read -r title body; do
+            [ -n "$title" ] || continue
+            if jq -e --arg t "$title" 'any(.[]; .title == $t)' open.json >/dev/null; then
+              echo "exists: $title"
+            else
+              printf '%b' "$body" > body.md
+              gh issue create --title "$title" --body-file body.md --label security --label security-scan </dev/null
+            fi
+          done < findings.tsv
+          # Close issues whose advisory is gone.
+          jq -r '.[] | [.number, .title] | @tsv' open.json | while IFS=$'\t' read -r num title; do
+            if ! cut -f1 findings.tsv | grep -qxF "$title"; then
+              gh issue close "$num" --reason completed --comment "This advisory no longer shows up in the weekly security scan." </dev/null
+            fi
+          done

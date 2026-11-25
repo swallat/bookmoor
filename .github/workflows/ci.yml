@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets maintainers (and automation) start CI on a branch by hand.
+  workflow_dispatch:
 
 permissions:
   contents: read
