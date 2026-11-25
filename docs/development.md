@@ -86,3 +86,31 @@ With *Verified CRX uploads* the store rejects every package that is not signed w
 Afterwards every upload, by hand too, must be a signed CRX. Without the secret CI would send the plain zip and the store would reject it. The key is not the extension ID and does not change it. If you lose the key, you cannot upload until you opt out and in again with a new one. `node scripts/pack-crx.mjs <in.zip> privatekey.pem <out.crx>` signs by hand.
 
 The store upload runs only for a release (a pushed tag `vX.Y.Z`, see *Releases and versions*) and uploads the release number `X.Y.Z`. Pushes to `main` and manual runs only produce the downloadable artifacts. Review usually takes a few hours to days; the previous version stays live meanwhile. The store keeps one pending submission at a time, so a second upload while one is in review fails the upload step (the zip is still an artifact).
+
+## Automatic maintenance
+
+Dependencies and security fixes are kept up to date without manual work:
+
+- **Renovate** (`renovate.json`, runs on weekday nights, Europe/Berlin) opens
+  grouped update pull requests, at most 5 at a time. Security updates come at
+  any time. Patch and minor updates, GitHub Actions pins and dev tools merge by
+  themselves (GitHub auto-merge) once the required checks pass. Major updates,
+  0.x minor steps, language runtimes, base images and the core libraries (auth
+  and crypto crates, axum, tokio, schemars, TypeScript, esbuild, web-ext, and
+  the actions that handle registry credentials) are labelled `needs-review`
+  and left for a person (or the weekly Claude maintenance run).
+- **Security scan** (`security-scan.yml`, Sunday night): `cargo audit` and
+  `npm audit`. Each finding becomes an issue with the label `security`; the
+  issue is closed when the advisory is gone. It is not a required check.
+- **Security patch release** (`security-release.yml`, Monday morning): when a
+  merged pull request labelled `security` that touches shipped code is not in
+  the last release yet, it opens a "Security release vX.Y.Z" pull request that
+  raises the patch version, with auto-merge. After CI is green on main it starts
+  the Release workflow, which creates the tag and the builds. It needs the
+  repository secret `RELEASE_BOT_TOKEN` (fine-grained token for this
+  repository: Contents, Pull requests, Actions read and write), because pull
+  requests opened with the default token do not start CI. If it fails, it opens
+  an issue.
+
+Required repository settings: "Allow auto-merge" on, Dependabot alerts on, and
+the E2E checks next to Rust and Extension in the ruleset for `main`.
