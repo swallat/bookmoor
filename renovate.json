@@ -1,0 +1,106 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": ["after 10pm every weekday", "before 5am every weekday"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "minimumReleaseAge": "3 days",
+  "rebaseWhen": "behind-base-branch",
+  "platformAutomerge": true,
+  "semanticCommits": "disabled",
+  "labels": ["dependencies"],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "labels": ["dependencies", "security"],
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null,
+    "prConcurrentLimit": 0,
+    "automerge": true
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5am on monday"],
+    "automerge": true
+  },
+  "packageRules": [
+    {
+      "description": "Default: merge non-major updates by themselves once all required checks pass",
+      "matchUpdateTypes": ["patch", "minor", "digest", "pin", "pinDigest"],
+      "automerge": true
+    },
+    {
+      "description": "Group routine updates so there are few PRs",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "Rust crates (non-major)"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "npm dev tools (non-major)"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor", "digest", "pin", "pinDigest"],
+      "groupName": "GitHub Actions (non-major)"
+    },
+    {
+      "description": "Major updates: never merged automatically",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "0.x versions treat a minor step as breaking",
+      "matchCurrentVersion": "/^0\\./",
+      "matchUpdateTypes": ["minor"],
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "Core libraries (auth, crypto, server, schema) and the extension build chain: patches only",
+      "matchPackageNames": [
+        "argon2",
+        "openidconnect",
+        "p256",
+        "sha2",
+        "sha1",
+        "hmac",
+        "subtle",
+        "getrandom",
+        "ciborium",
+        "axum",
+        "tokio",
+        "schemars",
+        "typescript",
+        "esbuild",
+        "web-ext"
+      ],
+      "matchUpdateTypes": ["minor"],
+      "groupName": "Core libraries and build chain",
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "Language runtimes, toolchains and base images: reviewed by a person",
+      "matchDepNames": ["node", "rust", "rustc", "debian"],
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "matchManagers": ["dockerfile", "docker-compose", "mise"],
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    },
+    {
+      "description": "These actions handle registry credentials: reviewed by a person",
+      "matchPackageNames": ["docker/login-action", "docker/build-push-action"],
+      "automerge": false,
+      "addLabels": ["needs-review"]
+    }
+  ]
+}
