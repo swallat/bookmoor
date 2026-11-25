@@ -38,9 +38,11 @@ jobs:
         run: |
           # cargo audit exits non-zero when it finds something; the JSON is what counts.
           cargo audit --json > cargo-audit.json || true
-          jq empty cargo-audit.json
+          # A failed audit (no advisory database, no network) must fail the job,
+          # never look like "no findings" that would close every open issue.
+          jq -e '.vulnerabilities.list' cargo-audit.json >/dev/null
           (cd extension && npm audit --package-lock-only --json > ../npm-audit.json || true)
-          jq empty npm-audit.json
+          jq -e '(.error | not) and (.vulnerabilities != null)' npm-audit.json >/dev/null
           # One line per finding: "<title>\t<body>"
           jq -r '.vulnerabilities.list[]? |
             ["Security advisory: \(.advisory.id) (\(.package.name))",

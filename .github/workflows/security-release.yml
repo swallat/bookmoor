@@ -63,13 +63,15 @@ jobs:
           # has no tag yet and the commit that set it is ours. Release that.
           VERSION=$(node scripts/sync-version.mjs --print)
           if ! git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null \
-             && git log -1 --format=%s origin/main -- Cargo.toml | grep -q '^Security release v'; then
+             && git log -20 --format=%s origin/main -- Cargo.toml | grep -q '^Security release v'; then
             echo "A merged security bump v$VERSION has no release yet."
             echo "action=release" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if gh pr list --state open --head release/security-patch --json number --jq 'length' | grep -qv '^0$'; then
-            echo "A security release pull request is already open."
+            echo "A security release pull request is already open; keeping it up to date."
+            # The ruleset needs an up-to-date branch, or auto-merge would wait forever.
+            gh pr update-branch release/security-patch || true
             echo "action=none" >> "$GITHUB_OUTPUT"
             exit 0
           fi

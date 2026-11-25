@@ -18,8 +18,7 @@
     "labels": ["dependencies", "security"],
     "schedule": ["at any time"],
     "minimumReleaseAge": null,
-    "prConcurrentLimit": 0,
-    "automerge": true
+    "prConcurrentLimit": 0
   },
   "lockFileMaintenance": {
     "enabled": true,
@@ -58,6 +57,7 @@
       "description": "0.x versions treat a minor step as breaking",
       "matchCurrentVersion": "/^0\\./",
       "matchUpdateTypes": ["minor"],
+      "groupName": null,
       "automerge": false,
       "addLabels": ["needs-review"]
     },
