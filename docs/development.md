@@ -90,6 +90,6 @@ The store upload runs only for a release (a pushed tag `vX.Y.Z`, see *Releases a
 ## Automatic maintenance
 
 Dependencies and security fixes are kept up to date without manual work:
-Renovate with automerge, a weekly vulnerability scan, a weekly Claude
+Renovate with automerge, a weekly vulnerability scan, a daily Claude
 maintenance task and security releases. The rules are in
 [maintenance.md](maintenance.md).

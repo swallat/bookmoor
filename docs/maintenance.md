@@ -36,15 +36,18 @@ Configuration: [`renovate.json`](../renovate.json).
 issue labelled `vulnerability` lists the findings; a clean run closes it. It
 is not a required check.
 
-## Weekly Claude task
+## Daily Claude task
 
-Every Monday morning a scheduled Claude task in the cloud
-(`Softwarepflege bookmoor`):
+Every weekday around 06:00 (Europe/Berlin) a scheduled Claude task in the
+cloud (`Softwarepflege bookmoor`) runs. It starts with a cheap triage and
+ends at once when there is nothing to do. Otherwise a stronger model does the
+work, and an independent review precedes every merge.
 
-1. Looks at open PRs by `renovate[bot]`, at open issues labelled
-   `vulnerability` or `security-release`, and at security fixes that are
-   merged but not released. If there is nothing, it ends at once.
-2. Repairs red checks on those PRs.
+1. Triage (small model, read-only): looks at open PRs by `renovate[bot]`, red
+   checks, open issues labelled `vulnerability` or `security-release`, and at
+   security fixes that are merged but not released. If there is nothing, it
+   ends at once.
+2. Repairs red checks on those PRs (stronger model).
 3. Merges non-major updates after an independent review and green CI.
 4. Prepares major updates, but does not merge them, and lists them in its
    report.
@@ -56,7 +59,7 @@ be started by hand with the `workflow_dispatch` trigger of `ci.yml`.
 ## Security releases
 
 When pull requests labelled `security` were merged after the latest release,
-the weekly task decides whether to publish them:
+the daily task decides whether to publish them:
 
 - It releases only when the fix touches shipped code (the Cargo files, the
   `Dockerfile`, the extension sources; not build, test or CI tools), and when
