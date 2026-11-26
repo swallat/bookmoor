@@ -1,68 +1,69 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Maintenance policy: docs/maintenance.md. Later package rules win over earlier ones.",
   "extends": [
     "config:recommended",
-    "helpers:pinGitHubActionDigests"
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests",
+    "customManagers:githubActionsVersions"
   ],
   "timezone": "Europe/Berlin",
-  "schedule": ["after 10pm every weekday", "before 5am every weekday"],
+  "schedule": ["* 0-5 * * 1-5"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "minimumReleaseAge": "3 days",
-  "rebaseWhen": "behind-base-branch",
-  "platformAutomerge": true,
-  "semanticCommits": "disabled",
   "labels": ["dependencies"],
+  "platformAutomerge": false,
+  "automergeType": "pr",
+  "rebaseWhen": "behind-base-branch",
+  "semanticCommits": "disabled",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
-    "labels": ["dependencies", "security"],
+    "enabled": true,
     "schedule": ["at any time"],
     "minimumReleaseAge": null,
-    "prConcurrentLimit": 0
+    "addLabels": ["security"]
   },
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": ["before 5am on monday"],
-    "automerge": true
+    "schedule": ["* 0-5 * * 1"],
+    "automerge": true,
+    "minimumReleaseAge": null
   },
   "packageRules": [
     {
-      "description": "Default: merge non-major updates by themselves once all required checks pass",
-      "matchUpdateTypes": ["patch", "minor", "digest", "pin", "pinDigest"],
+      "description": "Merge non-major updates once every check on the PR is green.",
+      "matchUpdateTypes": ["patch", "minor", "pin", "pinDigest", "digest"],
       "automerge": true
     },
     {
-      "description": "Group routine updates so there are few PRs",
+      "description": "Group GitHub Actions updates.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor", "pin", "pinDigest", "digest"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Group the Rust crates.",
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["patch", "minor"],
-      "groupName": "Rust crates (non-major)"
+      "groupName": "rust dependencies"
     },
     {
+      "description": "Group the npm dev tools of the extension.",
       "matchManagers": ["npm"],
       "matchUpdateTypes": ["patch", "minor"],
-      "groupName": "npm dev tools (non-major)"
+      "groupName": "npm dependencies"
     },
     {
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["patch", "minor", "digest", "pin", "pinDigest"],
-      "groupName": "GitHub Actions (non-major)"
-    },
-    {
-      "description": "Major updates: never merged automatically",
-      "matchUpdateTypes": ["major"],
-      "automerge": false,
-      "addLabels": ["needs-review"]
-    },
-    {
-      "description": "0.x versions treat a minor step as breaking",
-      "matchCurrentVersion": "/^0\\./",
+      "description": "0.x versions: a minor step may break the API, treat it like a major.",
+      "matchCurrentVersion": "/^(==|~=|>=|\\^|~|v)?0\\./",
       "matchUpdateTypes": ["minor"],
       "groupName": null,
       "automerge": false,
       "addLabels": ["needs-review"]
     },
     {
-      "description": "Core libraries (auth, crypto, server, schema) and the extension build chain: patches only",
+      "description": "Core libraries (auth, crypto, server, schema) and the extension build chain: patches merge, minor updates wait.",
       "matchPackageNames": [
         "argon2",
         "openidconnect",
@@ -81,26 +82,35 @@
         "web-ext"
       ],
       "matchUpdateTypes": ["minor"],
-      "groupName": "Core libraries and build chain",
+      "groupName": "core libraries",
       "automerge": false,
       "addLabels": ["needs-review"]
     },
     {
-      "description": "Language runtimes, toolchains and base images: reviewed by a person",
+      "description": "Language runtimes, toolchains and base images: never merged on their own.",
       "matchDepNames": ["node", "rust", "rustc", "debian"],
+      "groupName": null,
       "automerge": false,
       "addLabels": ["needs-review"]
     },
     {
+      "description": "Container images and tool versions: never merged on their own.",
       "matchManagers": ["dockerfile", "docker-compose", "mise"],
       "automerge": false,
       "addLabels": ["needs-review"]
     },
     {
-      "description": "These actions handle registry credentials: reviewed by a person",
+      "description": "Actions that handle registry credentials: never merged on their own.",
       "matchPackageNames": ["docker/login-action", "docker/build-push-action"],
+      "groupName": "release chain actions",
       "automerge": false,
       "addLabels": ["needs-review"]
+    },
+    {
+      "description": "Major updates are only prepared, never merged on their own.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "addLabels": ["needs-review", "major"]
     }
   ]
 }
